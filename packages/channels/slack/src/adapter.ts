@@ -68,9 +68,7 @@ export class SlackAdapter implements ChannelAdapter {
     this.botUserId = (authResult.user_id as string) || null;
 
     // Register the internal message listener
-    this.app.message(async ({ message }) => {
-      if (!this.messageHandler) return;
-
+    this.app.message(async ({ message, say }) => {
       // Only handle standard user messages (not bot messages, edits, etc.)
       const msg = message as SlackMessageEvent;
       if (msg.subtype) return;
@@ -101,6 +99,37 @@ export class SlackAdapter implements ChannelAdapter {
         text: cleanText,
         threadId: msg.thread_ts,
         timestamp: new Date(parseFloat(msg.ts) * 1000),
+      };
+
+      if (this.messageHandler) {
+        await this.messageHandler(normalized);
+      } else {
+        // Fallback: respond directly if handler not yet wired
+        await say(`[codespar] Agent initializing. Try again in a moment.`);
+      }
+    });
+
+    // Also listen for app_mention events explicitly
+    this.app.event("app_mention", async ({ event, say }) => {
+      if (!this.messageHandler) {
+        await say(`[codespar] Agent initializing. Try again in a moment.`);
+        return;
+      }
+
+      const cleanText = this.botUserId
+        ? event.text.replace(new RegExp(`<@${this.botUserId}>`, "g"), "").trim()
+        : event.text;
+
+      const normalized: NormalizedMessage = {
+        id: randomUUID(),
+        channelType: "slack",
+        channelId: event.channel,
+        channelUserId: event.user ?? "unknown",
+        isDM: false,
+        isMentioningBot: true,
+        text: cleanText,
+        threadId: event.thread_ts,
+        timestamp: new Date(parseFloat(event.ts) * 1000),
       };
 
       await this.messageHandler(normalized);
