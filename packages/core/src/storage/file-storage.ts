@@ -115,15 +115,22 @@ export class FileStorage implements StorageProvider {
       ...full,
       timestamp: full.timestamp.toISOString(),
     });
-    await this.writeFile(this.auditPath, data);
+    try {
+      await this.writeFile(this.auditPath, data);
+      console.log(`[storage] Audit entry saved: ${full.action} by ${full.actorId} (${data.entries.length} total)`);
+    } catch (err) {
+      console.error(`[storage] Failed to write audit:`, err);
+    }
 
     return full;
   }
 
   async queryAudit(agentId: string, limit: number = 20): Promise<AuditEntry[]> {
     const data = await this.readAuditFile();
-    return data.entries
-      .filter((e) => e.actorId === agentId)
+    const filtered = agentId
+      ? data.entries.filter((e) => e.actorId === agentId || e.metadata?.agentId === agentId)
+      : data.entries;
+    return filtered
       .slice(-limit)
       .map((e) => ({ ...e, timestamp: new Date(e.timestamp) }));
   }
