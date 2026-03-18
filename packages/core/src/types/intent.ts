@@ -1,0 +1,51 @@
+/**
+ * Intent types for the message parser.
+ * MVP uses regex. v1 will use Claude Haiku NLU.
+ */
+
+export type IntentType =
+  | "status"
+  | "help"
+  | "instruct"
+  | "fix"
+  | "deploy"
+  | "rollback"
+  | "approve"
+  | "autonomy"
+  | "logs"
+  | "kill"
+  | "unknown";
+
+export type RiskLevel = "low" | "medium" | "high" | "critical";
+
+export interface ParsedIntent {
+  /** Classified intent */
+  type: IntentType;
+
+  /** Risk level of this action */
+  risk: RiskLevel;
+
+  /** Extracted parameters */
+  params: Record<string, string>;
+
+  /** Original raw text */
+  rawText: string;
+
+  /** Confidence score (0-1). Regex parser always returns 1.0 */
+  confidence: number;
+}
+
+/** Map intent types to their risk levels */
+export const INTENT_RISK: Record<IntentType, RiskLevel> = {
+  status: "low",
+  help: "low",
+  logs: "low",
+  instruct: "medium",
+  fix: "medium",
+  autonomy: "medium",
+  approve: "medium",
+  deploy: "high",
+  rollback: "critical",
+  kill: "critical",
+  unknown: "low",
+};

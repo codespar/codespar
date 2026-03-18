@@ -1,0 +1,21 @@
+{
+  "name": "codespar",
+  "private": true,
+  "packageManager": "npm@11.8.0",
+  "workspaces": [
+    "packages/*",
+    "packages/agents/*",
+    "packages/channels/*"
+  ],
+  "scripts": {
+    "build": "turbo run build",
+    "dev": "turbo run dev",
+    "lint": "turbo run lint",
+    "test": "turbo run test",
+    "start": "node packages/channels/cli/dist/index.js"
+  },
+  "devDependencies": {
+    "turbo": "^2.5.0",
+    "typescript": "^5.8.0"
+  }
+}

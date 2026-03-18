@@ -1,0 +1,24 @@
+{
+  "name": "@codespar/channel-cli",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "./dist/index.js",
+  "bin": {
+    "codespar": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "start": "node dist/index.js",
+    "lint": "echo 'lint ok'"
+  },
+  "dependencies": {
+    "@codespar/core": "*",
+    "@codespar/agent-supervisor": "*",
+    "@codespar/agent-project": "*"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.0",
+    "typescript": "^5.8.0"
+  }
+}
