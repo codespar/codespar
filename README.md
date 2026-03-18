@@ -62,6 +62,59 @@ Then, in your WhatsApp group:
    142/142 tests | 87.5% coverage | 3m12s
 ```
 
+## Configuration
+
+### Required
+
+| Variable | Description | Example |
+|----------|-------------|---------|
+| `ANTHROPIC_API_KEY` | Anthropic API key for Claude Code execution | `sk-ant-...` |
+
+### Channel Configuration
+
+Enable channels by setting their env vars. All channels are optional — enable only what you need.
+
+**WhatsApp (via Evolution API):**
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `ENABLE_WHATSAPP` | Enable WhatsApp adapter | `false` |
+| `EVOLUTION_API_URL` | Evolution API base URL | `http://localhost:8084` |
+| `EVOLUTION_API_KEY` | Evolution API auth key | — |
+| `EVOLUTION_INSTANCE` | Instance name | `codespar` |
+| `WHATSAPP_WEBHOOK_PORT` | Webhook receiver port | `3001` |
+| `WHATSAPP_BOT_MENTION` | Mention trigger | `@codespar` |
+
+**Slack:**
+| Variable | Description |
+|----------|-------------|
+| `ENABLE_SLACK` | Enable Slack adapter (`true`/`false`) |
+| `SLACK_BOT_TOKEN` | Bot User OAuth Token (`xoxb-...`) |
+| `SLACK_SIGNING_SECRET` | App signing secret |
+| `SLACK_APP_TOKEN` | App-level token for Socket Mode (`xapp-...`) |
+
+**Telegram:**
+| Variable | Description |
+|----------|-------------|
+| `ENABLE_TELEGRAM` | Enable Telegram adapter (`true`/`false`) |
+| `TELEGRAM_BOT_TOKEN` | BotFather token |
+
+**Discord:**
+| Variable | Description |
+|----------|-------------|
+| `ENABLE_DISCORD` | Enable Discord adapter (`true`/`false`) |
+| `DISCORD_BOT_TOKEN` | Bot token from Discord Developer Portal |
+
+### Infrastructure (auto-configured in Docker)
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `PORT` | HTTP server port | `3000` |
+| `DATABASE_URL` | PostgreSQL connection string | `postgres://...` |
+| `REDIS_URL` | Redis connection string | `redis://localhost:6379` |
+| `GITHUB_TOKEN` | GitHub API token for webhooks/PRs | — |
+| `CODESPAR_WORK_DIR` | Working directory for Claude Code | `process.cwd()` |
+| `PROJECT_NAME` | Default project name | `default` |
+
 ## What It Does
 
 | You type | Agent does |

@@ -19,6 +19,8 @@ npm run build
 npm start
 ```
 
+> **Note:** The CLI works without any API keys. Claude Code bridge falls back to simulation mode when `ANTHROPIC_API_KEY` is not set. To test with real Claude Code execution, copy `.env.example` to `.env` and add your Anthropic API key.
+
 3. Test commands:
 
 ```
