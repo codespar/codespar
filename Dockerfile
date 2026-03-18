@@ -13,4 +13,5 @@ COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/packages ./packages
 COPY --from=builder /app/package.json ./
 EXPOSE 3000
-CMD ["node", "packages/channels/cli/dist/index.js"]
+COPY server/ server/
+CMD ["node", "server/start.mjs"]
