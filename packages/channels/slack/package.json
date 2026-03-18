@@ -10,7 +10,8 @@
   },
   "dependencies": {
     "@codespar/core": "*",
-    "@slack/bolt": "^4.1.0"
+    "@slack/bolt": "^4.1.0",
+    "@slack/socket-mode": "^2.0.0"
   },
   "devDependencies": {
     "@types/node": "^22.15.0",
