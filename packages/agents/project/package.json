@@ -10,7 +10,8 @@
     "lint": "echo 'lint ok'"
   },
   "dependencies": {
-    "@codespar/core": "*"
+    "@codespar/core": "*",
+    "@codespar/agent-task": "*"
   },
   "devDependencies": {
     "typescript": "^5.8.0"

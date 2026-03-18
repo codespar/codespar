@@ -13,7 +13,7 @@
  *   node packages/channels/cli/dist/index.js
  */
 
-import { MessageRouter } from "@codespar/core";
+import { MessageRouter, FileStorage } from "@codespar/core";
 import { AgentSupervisor } from "@codespar/agent-supervisor";
 import { ProjectAgent } from "@codespar/agent-project";
 import { CLIAdapter } from "./adapter.js";
@@ -36,13 +36,16 @@ async function main() {
   const cli = new CLIAdapter();
   supervisor.addAdapter(cli);
 
-  // 4. Spawn a Project Agent (L1 Notify)
+  // 4. Create file-based storage for agent memory and audit
+  const storage = new FileStorage();
+
+  // 5. Spawn a Project Agent (L1 Notify) with storage
   const agent = new ProjectAgent({
     id: "agent-local",
     type: "project",
     projectId: "local-dev",
     autonomyLevel: 1,
-  });
+  }, storage);
   await supervisor.spawnAgent("local-dev", agent);
 
   // 5. Start the supervisor (connects adapters, wires routing)

@@ -15,7 +15,8 @@
   "dependencies": {
     "@codespar/core": "*",
     "@codespar/agent-supervisor": "*",
-    "@codespar/agent-project": "*"
+    "@codespar/agent-project": "*",
+    "@codespar/agent-task": "*"
   },
   "devDependencies": {
     "@types/node": "^22.15.0",
