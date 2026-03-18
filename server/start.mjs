@@ -10,12 +10,15 @@
  *   PORT              — HTTP port (default 3000)
  *   ENABLE_WHATSAPP   — "true" to enable WhatsApp
  *   ENABLE_SLACK      — "true" to enable Slack
+ *   ENABLE_TELEGRAM   — "true" to enable Telegram
+ *   ENABLE_DISCORD    — "true" to enable Discord
  *   PROJECT_NAME      — Project identifier (default "default")
  */
 
 import { MessageRouter, WebhookServer, FileStorage, ApprovalManager } from "@codespar/core";
 import { AgentSupervisor } from "@codespar/agent-supervisor";
 import { ProjectAgent } from "@codespar/agent-project";
+import { CoordinatorAgent } from "@codespar/agent-coordinator";
 
 const port = parseInt(process.env.PORT || "3000", 10);
 const projectId = process.env.PROJECT_NAME || "default";
@@ -53,7 +56,27 @@ if (process.env.ENABLE_SLACK === "true") {
   }
 }
 
-// 3. Spawn Project Agent
+if (process.env.ENABLE_TELEGRAM === "true") {
+  try {
+    const { TelegramAdapter } = await import("@codespar/channel-telegram");
+    supervisor.addAdapter(new TelegramAdapter());
+    console.log("[server] \u2713 Telegram adapter enabled");
+  } catch (err) {
+    console.error("[server] \u2717 Telegram adapter failed:", err.message);
+  }
+}
+
+if (process.env.ENABLE_DISCORD === "true") {
+  try {
+    const { DiscordAdapter } = await import("@codespar/channel-discord");
+    supervisor.addAdapter(new DiscordAdapter());
+    console.log("[server] \u2713 Discord adapter enabled");
+  } catch (err) {
+    console.error("[server] \u2717 Discord adapter failed:", err.message);
+  }
+}
+
+// 3. Spawn Project Agent (registered first so the router defaults to it)
 const agent = new ProjectAgent(
   { id: agentId, type: "project", projectId, autonomyLevel: 1 },
   storage,
@@ -61,10 +84,20 @@ const agent = new ProjectAgent(
 );
 await supervisor.spawnAgent(projectId, agent);
 
-// 4. Start supervisor
+// 4. Spawn Coordinator Agent (per-org, cross-project orchestration)
+const coordinator = new CoordinatorAgent({
+  id: "coordinator",
+  type: "coordinator",
+  autonomyLevel: 0,
+});
+coordinator.registerProject("default", projectId, agentId);
+coordinator.setProjectAgent("default", agent);
+await supervisor.spawnAgent("_coordinator", coordinator);
+
+// 5. Start supervisor
 await supervisor.start();
 
-// 5. Start webhook server
+// 6. Start webhook server
 const webhookServer = new WebhookServer({ port });
 
 webhookServer.onCIEvent(async (event) => {
@@ -72,7 +105,7 @@ webhookServer.onCIEvent(async (event) => {
   console.log(`[server] CI event: ${event.type} \u2014 ${event.status}`);
 });
 
-webhookServer.setAgentCount(1);
+webhookServer.setAgentCount(2);
 webhookServer.setAgentSupervisor(supervisor);
 webhookServer.setStorageProvider(storage);
 await webhookServer.start();
@@ -80,7 +113,7 @@ await webhookServer.start();
 console.log(`[server] Webhook server on port ${port}`);
 console.log("[server] Ready.\n");
 
-// 6. Graceful shutdown
+// 7. Graceful shutdown
 const shutdown = async () => {
   console.log("\n[server] Shutting down...");
   await webhookServer.stop();

@@ -1,0 +1,18 @@
+{
+  "name": "@codespar/agent-review",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "./dist/review-agent.js",
+  "types": "./dist/review-agent.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "lint": "echo 'lint ok'"
+  },
+  "dependencies": {
+    "@codespar/core": "*"
+  },
+  "devDependencies": {
+    "typescript": "^5.8.0"
+  }
+}

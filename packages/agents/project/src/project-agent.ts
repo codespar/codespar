@@ -26,6 +26,7 @@ import type {
 import { ApprovalManager } from "@codespar/core";
 import { TaskAgent } from "@codespar/agent-task";
 import { DeployAgent } from "@codespar/agent-deploy";
+import { ReviewAgent } from "@codespar/agent-review";
 
 const COMMANDS_HELP = `Available commands:
   status [build|agent|all]  — Query current status
@@ -37,6 +38,7 @@ const COMMANDS_HELP = `Available commands:
 Coming soon:
   instruct [task]           — Instruct agent to execute
   fix [issue]               — Investigate and propose fix
+  review PR #<number>       — Review a pull request
   deploy [env]              — Trigger deployment
   rollback [env]            — Rollback last deploy
   approve [token]           — Approve pending action
@@ -48,6 +50,7 @@ export class ProjectAgent implements Agent {
   private startedAt: Date = new Date();
   private tasksHandled: number = 0;
   private taskAgentCounter: number = 0;
+  private reviewAgentCounter: number = 0;
   private storage: StorageProvider | null;
   private approvalManager: ApprovalManager;
   private deployAgent: DeployAgent;
@@ -143,6 +146,10 @@ export class ProjectAgent implements Agent {
         response = await this.handleLogs(intent);
         break;
 
+      case "review":
+        response = await this.delegateToReviewAgent(message, intent);
+        break;
+
       case "instruct":
       case "fix":
         response = await this.delegateToTaskAgent(message, intent);
@@ -213,6 +220,63 @@ export class ProjectAgent implements Agent {
     await taskAgent.initialize();
     const result = await taskAgent.handleMessage(message, intent);
     await taskAgent.shutdown();
+
+    return result;
+  }
+
+  /**
+   * Spawns an ephemeral Review Agent to handle PR review commands.
+   */
+  private async delegateToReviewAgent(
+    message: NormalizedMessage,
+    intent: ParsedIntent
+  ): Promise<ChannelResponse> {
+    this.reviewAgentCounter++;
+    const reviewAgentId = `${this.config.id}-review-${this.reviewAgentCounter}`;
+
+    const reviewAgent = new ReviewAgent({
+      id: reviewAgentId,
+      type: "review",
+      projectId: this.config.projectId,
+      autonomyLevel: this.config.autonomyLevel,
+    });
+
+    await reviewAgent.initialize();
+    const result = await reviewAgent.handleMessage(message, intent);
+    await reviewAgent.shutdown();
+
+    return result;
+  }
+
+  /**
+   * Spawns an ephemeral Review Agent for a CI pull_request event.
+   * Extracts PR metadata from the CIEvent and runs review logic.
+   */
+  private async reviewPRFromCIEvent(event: CIEvent): Promise<ChannelResponse> {
+    this.reviewAgentCounter++;
+    const reviewAgentId = `${this.config.id}-review-${this.reviewAgentCounter}`;
+
+    const reviewAgent = new ReviewAgent({
+      id: reviewAgentId,
+      type: "review",
+      projectId: this.config.projectId,
+      autonomyLevel: this.config.autonomyLevel,
+    });
+
+    await reviewAgent.initialize();
+
+    const result = reviewAgent.reviewPR({
+      prNumber: event.details.prNumber ?? 0,
+      title: event.details.title ?? "untitled",
+      author: "unknown",
+      branch: event.branch,
+      filesChanged: 0,
+      additions: 0,
+      deletions: 0,
+      changedFiles: [],
+    });
+
+    await reviewAgent.shutdown();
 
     return result;
   }
@@ -443,6 +507,10 @@ export class ProjectAgent implements Agent {
           text = `\u2713 [${this.config.id}] PR #${prNum} merged: ${prTitle} \u2014 ${event.repo}`;
         } else if (event.status === "in_progress") {
           text = `[${this.config.id}] PR #${prNum} opened: ${prTitle} \u2014 ${event.repo} (${event.branch})`;
+
+          // Spawn Review Agent for newly opened PRs
+          const reviewResult = await this.reviewPRFromCIEvent(event);
+          text += `\n\n${reviewResult.text}`;
         } else {
           text = `[${this.config.id}] PR #${prNum} ${conclusion ?? "closed"}: ${prTitle} \u2014 ${event.repo}`;
         }

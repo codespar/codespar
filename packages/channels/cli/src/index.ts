@@ -16,6 +16,7 @@
 import { MessageRouter, FileStorage, ApprovalManager } from "@codespar/core";
 import { AgentSupervisor } from "@codespar/agent-supervisor";
 import { ProjectAgent } from "@codespar/agent-project";
+import { CoordinatorAgent } from "@codespar/agent-coordinator";
 import { CLIAdapter } from "./adapter.js";
 
 async function main() {
@@ -51,10 +52,22 @@ async function main() {
   }, storage, approvalManager);
   await supervisor.spawnAgent("local-dev", agent);
 
-  // 5. Start the supervisor (connects adapters, wires routing)
+  // 6. Spawn Coordinator Agent (per-org, cross-project orchestration)
+  //    Registered after the project agent so the router defaults to the
+  //    project agent for single-project commands.
+  const coordinator = new CoordinatorAgent({
+    id: "coordinator",
+    type: "coordinator",
+    autonomyLevel: 0,
+  });
+  coordinator.registerProject("default", "local-dev", "agent-local");
+  coordinator.setProjectAgent("default", agent);
+  await supervisor.spawnAgent("_coordinator", coordinator);
+
+  // 7. Start the supervisor (connects adapters, wires routing)
   await supervisor.start();
 
-  // 6. Start the CLI REPL
+  // 8. Start the CLI REPL
   console.log('  Type "help" for commands, "exit" to quit.\n');
   await cli.startREPL();
 

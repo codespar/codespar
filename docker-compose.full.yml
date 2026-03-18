@@ -60,6 +60,10 @@ services:
       SLACK_BOT_TOKEN: ${SLACK_BOT_TOKEN}
       SLACK_SIGNING_SECRET: ${SLACK_SIGNING_SECRET}
       SLACK_APP_TOKEN: ${SLACK_APP_TOKEN}
+      ENABLE_TELEGRAM: ${ENABLE_TELEGRAM:-false}
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
+      ENABLE_DISCORD: ${ENABLE_DISCORD:-false}
+      DISCORD_BOT_TOKEN: ${DISCORD_BOT_TOKEN}
     depends_on:
       postgres:
         condition: service_healthy

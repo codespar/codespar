@@ -1,0 +1,5 @@
+services:
+  core:
+    environment:
+      ENABLE_TELEGRAM: "true"
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}

@@ -16,6 +16,7 @@
     "@codespar/core": "*",
     "@codespar/agent-supervisor": "*",
     "@codespar/agent-project": "*",
+    "@codespar/agent-coordinator": "*",
     "@codespar/agent-task": "*"
   },
   "devDependencies": {

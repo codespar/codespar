@@ -140,6 +140,7 @@ const INTENT_PERMISSION: Record<IntentType, Permission | null> = {
   autonomy: "set_autonomy",
   link: "link_channel",
   unlink: "link_channel",
+  review: "view_status",
   kill: "kill_switch",
   unknown: null, // always allowed — agent will respond with help text
 };

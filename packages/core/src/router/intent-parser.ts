@@ -60,6 +60,11 @@ const PATTERNS: PatternRule[] = [
     paramExtractor: (m) => ({ level: m[1] }),
   },
   {
+    type: "review",
+    pattern: /^review(?:\s+PR\s*#?\s*(\d+))?$/i,
+    paramExtractor: (m) => ({ prNumber: m[1] || "" }),
+  },
+  {
     type: "link",
     pattern: /^link\s+(https?:\/\/\S+|[\w-]+\/[\w.-]+)$/i,
     paramExtractor: (m) => ({ repo: m[1] }),
