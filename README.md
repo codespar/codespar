@@ -12,6 +12,23 @@
 
 ---
 
+## Current Status
+
+| Feature | Status |
+|---------|--------|
+| CLI Adapter | ✅ Working |
+| Project Agent (L1 Notify) | ✅ Working |
+| Task Agent (ephemeral) | ✅ Working |
+| Deploy Agent + Approvals | ✅ Working |
+| RBAC (6 roles) | ✅ Working |
+| Audit Trail | ✅ Working |
+| GitHub Webhooks | ✅ Ready |
+| Slack Adapter | ✅ Ready (needs tokens) |
+| WhatsApp Adapter | 🔄 In Progress |
+| Docker Compose | ✅ Ready |
+
+---
+
 **CodeSpar** is an open source, multi-agent platform that deploys autonomous AI coding agents to **WhatsApp**, **Slack**, **Telegram**, and **Discord** via `@mention` commands.
 
 Each project gets its own persistent agent that monitors builds, investigates failures, proposes fixes, and orchestrates deploys — all controllable from your messaging channels.
@@ -145,6 +162,28 @@ docker compose -f docker-compose.yml \
 
 # Everything
 docker compose -f docker-compose.full.yml up
+```
+
+## Development
+
+Get started locally without Docker:
+
+```bash
+git clone https://github.com/codespar/codespar.git
+cd codespar
+npm install
+npm run build
+npm start  # starts the CLI adapter
+```
+
+The CLI adapter provides a terminal interface for testing agents without configuring external channels. For full multi-channel support, use Docker Compose (see [Modular Docker Compose](#modular-docker-compose) above).
+
+Other useful commands:
+
+```bash
+npm run dev    # development mode with watch
+npm run lint   # run linter
+npm test       # run all tests
 ```
 
 ## Contributing

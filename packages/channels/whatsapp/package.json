@@ -1,0 +1,21 @@
+{
+  "name": "@codespar/channel-whatsapp",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "./dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "lint": "echo 'lint ok'"
+  },
+  "dependencies": {
+    "@codespar/core": "*",
+    "@whiskeysockets/baileys": "^6.7.16",
+    "pino": "^9.6.0",
+    "qrcode-terminal": "^0.12.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.0",
+    "typescript": "^5.8.0"
+  }
+}

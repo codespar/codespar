@@ -1,0 +1,10 @@
+services:
+  core:
+    environment:
+      ENABLE_WHATSAPP: "true"
+      WHATSAPP_BOT_NAME: "@codespar"
+    volumes:
+      - whatsapp_auth:/app/auth_info
+
+volumes:
+  whatsapp_auth:
