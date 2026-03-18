@@ -88,11 +88,10 @@ codespar/
           coordinator-agent.ts       # Cross-project orchestration
           resource-lock.ts           # Shared resource locks
     channels/
-      whatsapp-baileys/              # @codespar/channel-whatsapp
+      whatsapp/                      # @codespar/channel-whatsapp
         src/
-          adapter.ts                 # ChannelAdapter implementation
-          anti-ban.ts                # Rate limits, typing simulation
-          qr-manager.ts              # QR code pairing
+          adapter.ts                 # ChannelAdapter implementation (via Evolution API)
+          webhook.ts                 # Incoming message webhook handler
       slack/                         # @codespar/channel-slack
         src/
           adapter.ts                 # Bolt.js adapter
@@ -173,7 +172,7 @@ codespar/
 - **Redis 7** — Streams (agent communication bus, task queues), Pub/Sub (progress events), rate limits
 
 ### Channel SDKs
-- **Baileys** (WhatsApp) — linked device protocol, QR pairing, anti-ban
+- **Evolution API** (WhatsApp) — REST wrapper over Baileys (community-maintained, 7.5k+ stars), handles QR pairing, session management, reconnection, and anti-ban
 - **@slack/bolt 4** (Slack) — events, modals, slash commands
 - **grammy** (Telegram) — middleware pattern, inline keyboards
 - **discord.js 14** (Discord) — slash commands, embeds, components
@@ -402,7 +401,7 @@ Every instruction to Claude Code includes:
 ## Roadmap
 
 ### MVP (Weeks 1-4)
-- Channels: WhatsApp (Baileys) + CLI
+- Channels: WhatsApp (Evolution API) + CLI
 - Agents: Project Agent (L1 Notify) + Task Agents
 - Features: Build status, alerts, instruct agent, single approval, basic agent memory
 - Security: Allowlist, @mention filter, command blocklist, audit log, DM escalation
@@ -435,7 +434,7 @@ Every instruction to Claude Code includes:
 - Every package has its own `package.json`, `tsconfig.json`, `src/`, `tests/`
 
 ### Naming
-- Files: kebab-case (`project-agent.ts`, `anti-ban.ts`)
+- Files: kebab-case (`project-agent.ts`, `webhook.ts`)
 - Classes/Interfaces: PascalCase (`ProjectAgent`, `NormalizedMessage`)
 - Functions/Variables: camelCase (`handleMessage`, `agentContext`)
 - Database tables: snake_case (`agent_context`, `approval_votes`)

@@ -1,9 +1,9 @@
 /**
  * WhatsApp Channel Adapter — via Evolution API.
  *
- * Instead of managing Baileys directly, we connect to an Evolution API
- * instance that handles QR pairing, session persistence, reconnection,
- * and anti-ban. Messages arrive via webhook.
+ * Connects to an Evolution API instance (REST wrapper over Baileys,
+ * community-maintained) that handles QR pairing, session persistence,
+ * reconnection, and anti-ban. Messages arrive via webhook.
  *
  * ENV:
  *   EVOLUTION_API_URL      — Evolution API base URL (default: http://localhost:8084)

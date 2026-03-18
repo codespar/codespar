@@ -86,7 +86,7 @@ Then, in your WhatsApp group:
 
 | Channel | Status | Connection |
 |---------|--------|-----------|
-| WhatsApp | First-class | Baileys (linked device, QR scan) |
+| WhatsApp | First-class | Evolution API (QR scan, session management) |
 | Slack | Official API | OAuth + Bot token |
 | Telegram | Official API | BotFather token |
 | Discord | Official API | Bot token + Gateway |

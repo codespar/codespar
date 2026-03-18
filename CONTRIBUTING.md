@@ -44,7 +44,7 @@ codespar/
     channels/
       cli/                 # CLI adapter (terminal interface for dev/debug)
       slack/               # Slack adapter (OAuth + Bot token)
-      whatsapp/            # WhatsApp adapter (Baileys, linked device)
+      whatsapp/            # WhatsApp adapter (Evolution API, webhook)
       telegram/            # Telegram adapter (BotFather token)
       discord/             # Discord adapter (Bot token + Gateway)
 ```
