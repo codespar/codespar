@@ -57,20 +57,29 @@ export class AgentSupervisor {
 
     // Connect all channel adapters
     for (const adapter of this.adapters) {
-      await adapter.connect();
-      console.log(`[supervisor] ${adapter.type} adapter connected`);
-
-      // Wire message handling: adapter → router → agent → response → adapter
+      // Wire message handling BEFORE connect so the handler is ready
+      // when the adapter starts receiving messages
       adapter.onMessage(async (message: NormalizedMessage) => {
-        const response = await this.router.route(message);
-        if (response) {
-          if (message.isDM) {
-            await adapter.sendDM(message.channelUserId, response);
-          } else {
-            await adapter.sendToChannel(message.channelId, response);
+        try {
+          const response = await this.router.route(message);
+          if (response) {
+            if (message.isDM) {
+              await adapter.sendDM(message.channelUserId, response);
+            } else {
+              await adapter.sendToChannel(message.channelId, response);
+            }
           }
+        } catch (err) {
+          console.error(`[supervisor] Error handling message:`, err);
         }
       });
+
+      try {
+        await adapter.connect();
+        console.log(`[supervisor] ${adapter.type} adapter connected`);
+      } catch (err) {
+        console.error(`[supervisor] ${adapter.type} adapter failed to connect:`, err);
+      }
     }
 
     console.log("[supervisor] Ready. Your agents are live.\n");
