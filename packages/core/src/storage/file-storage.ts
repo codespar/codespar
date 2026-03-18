@@ -12,13 +12,18 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { randomUUID } from "node:crypto";
-import type { AgentMemory, AuditEntry, StorageProvider } from "./types.js";
+import type { AgentMemory, AuditEntry, ProjectConfig, StorageProvider } from "./types.js";
 
 /** Serializable shape stored in memory.json */
 interface MemoryFile {
   [agentId: string]: {
     [key: string]: { value: unknown; updatedAt: string };
   };
+}
+
+/** Serializable shape stored in projects.json */
+interface ProjectsFile {
+  [agentId: string]: ProjectConfig;
 }
 
 /** Serializable shape stored in audit.json */
@@ -30,11 +35,13 @@ export class FileStorage implements StorageProvider {
   private readonly dir: string;
   private readonly memoryPath: string;
   private readonly auditPath: string;
+  private readonly projectsPath: string;
 
   constructor(baseDir: string = ".codespar") {
     this.dir = path.resolve(baseDir);
     this.memoryPath = path.join(this.dir, "memory.json");
     this.auditPath = path.join(this.dir, "audit.json");
+    this.projectsPath = path.join(this.dir, "projects.json");
   }
 
   // ── Agent Memory ───────────────────────────────────────────────
@@ -68,6 +75,28 @@ export class FileStorage implements StorageProvider {
       value: entry.value,
       updatedAt: new Date(entry.updatedAt),
     }));
+  }
+
+  // ── Project Config ────────────────────────────────────────────
+
+  async getProjectConfig(agentId: string): Promise<ProjectConfig | null> {
+    const data = await this.readProjectsFile();
+    return data[agentId] ?? null;
+  }
+
+  async setProjectConfig(
+    agentId: string,
+    config: ProjectConfig
+  ): Promise<void> {
+    const data = await this.readProjectsFile();
+    data[agentId] = config;
+    await this.writeFile(this.projectsPath, data);
+  }
+
+  async deleteProjectConfig(agentId: string): Promise<void> {
+    const data = await this.readProjectsFile();
+    delete data[agentId];
+    await this.writeFile(this.projectsPath, data);
   }
 
   // ── Audit Log ──────────────────────────────────────────────────
@@ -109,6 +138,15 @@ export class FileStorage implements StorageProvider {
     try {
       const raw = await fs.readFile(this.memoryPath, "utf-8");
       return JSON.parse(raw) as MemoryFile;
+    } catch {
+      return {};
+    }
+  }
+
+  private async readProjectsFile(): Promise<ProjectsFile> {
+    try {
+      const raw = await fs.readFile(this.projectsPath, "utf-8");
+      return JSON.parse(raw) as ProjectsFile;
     } catch {
       return {};
     }

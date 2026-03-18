@@ -60,6 +60,15 @@ const PATTERNS: PatternRule[] = [
     paramExtractor: (m) => ({ level: m[1] }),
   },
   {
+    type: "link",
+    pattern: /^link\s+(https?:\/\/\S+|[\w-]+\/[\w.-]+)$/i,
+    paramExtractor: (m) => ({ repo: m[1] }),
+  },
+  {
+    type: "unlink",
+    pattern: /^unlink$/i,
+  },
+  {
     type: "kill",
     pattern: /^kill$/i,
   },

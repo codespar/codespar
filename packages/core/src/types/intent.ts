@@ -13,6 +13,8 @@ export type IntentType =
   | "approve"
   | "autonomy"
   | "logs"
+  | "link"
+  | "unlink"
   | "kill"
   | "unknown";
 
@@ -44,6 +46,8 @@ export const INTENT_RISK: Record<IntentType, RiskLevel> = {
   fix: "medium",
   autonomy: "medium",
   approve: "medium",
+  link: "medium",
+  unlink: "medium",
   deploy: "high",
   rollback: "critical",
   kill: "critical",

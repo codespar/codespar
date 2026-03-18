@@ -23,11 +23,25 @@ export interface AuditEntry {
   metadata?: Record<string, unknown>;
 }
 
+export interface ProjectConfig {
+  repoUrl: string;
+  repoOwner: string;
+  repoName: string;
+  linkedAt: string;
+  linkedBy: string;
+  webhookConfigured: boolean;
+}
+
 export interface StorageProvider {
   // Agent memory
   getMemory(agentId: string, key: string): Promise<unknown | null>;
   setMemory(agentId: string, key: string, value: unknown): Promise<void>;
   getAllMemory(agentId: string): Promise<AgentMemory[]>;
+
+  // Project config
+  getProjectConfig(agentId: string): Promise<ProjectConfig | null>;
+  setProjectConfig(agentId: string, config: ProjectConfig): Promise<void>;
+  deleteProjectConfig(agentId: string): Promise<void>;
 
   // Audit log
   appendAudit(

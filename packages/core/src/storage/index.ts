@@ -1,6 +1,7 @@
 export type {
   AgentMemory,
   AuditEntry,
+  ProjectConfig,
   StorageProvider,
 } from "./types.js";
 

@@ -138,6 +138,8 @@ const INTENT_PERMISSION: Record<IntentType, Permission | null> = {
   rollback: "deploy_production",
   approve: "approve_pr",
   autonomy: "set_autonomy",
+  link: "link_channel",
+  unlink: "link_channel",
   kill: "kill_switch",
   unknown: null, // always allowed — agent will respond with help text
 };

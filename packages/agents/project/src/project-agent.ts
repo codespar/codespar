@@ -19,6 +19,7 @@ import type {
   ChannelResponse,
   ParsedIntent,
   StorageProvider,
+  ProjectConfig,
   CIEvent,
 } from "@codespar/core";
 
@@ -30,6 +31,8 @@ const COMMANDS_HELP = `Available commands:
   status [build|agent|all]  — Query current status
   help                      — Show this help
   logs [n]                  — Show recent activity
+  link <repo-url>           — Link a GitHub repo (maintainer+)
+  unlink                    — Remove current project link (maintainer+)
 
 Coming soon:
   instruct [task]           — Instruct agent to execute
@@ -127,7 +130,7 @@ export class ProjectAgent implements Agent {
 
     switch (intent.type) {
       case "status":
-        response = this.handleStatus(intent);
+        response = await this.handleStatus(intent);
         break;
 
       case "help":
@@ -143,6 +146,14 @@ export class ProjectAgent implements Agent {
       case "instruct":
       case "fix":
         response = await this.delegateToTaskAgent(message, intent);
+        break;
+
+      case "link":
+        response = await this.handleLink(message, intent);
+        break;
+
+      case "unlink":
+        response = await this.handleUnlink();
         break;
 
       case "deploy":
@@ -238,13 +249,123 @@ export class ProjectAgent implements Agent {
     };
   }
 
-  private handleStatus(intent: ParsedIntent): ChannelResponse {
+  /**
+   * Parse a repo identifier (URL or shorthand) into owner and name.
+   * Supports:
+   *   - https://github.com/owner/repo
+   *   - http://github.com/owner/repo
+   *   - owner/repo (shorthand)
+   */
+  private parseRepoIdentifier(
+    repo: string
+  ): { owner: string; name: string; url: string } | null {
+    // Full GitHub URL
+    const urlMatch = repo.match(
+      /^https?:\/\/github\.com\/([\w-]+)\/([\w.-]+?)(?:\.git)?$/i
+    );
+    if (urlMatch) {
+      return {
+        owner: urlMatch[1],
+        name: urlMatch[2],
+        url: `https://github.com/${urlMatch[1]}/${urlMatch[2]}`,
+      };
+    }
+
+    // Shorthand: owner/repo
+    const shortMatch = repo.match(/^([\w-]+)\/([\w.-]+)$/);
+    if (shortMatch) {
+      return {
+        owner: shortMatch[1],
+        name: shortMatch[2],
+        url: `https://github.com/${shortMatch[1]}/${shortMatch[2]}`,
+      };
+    }
+
+    return null;
+  }
+
+  private async handleLink(
+    message: NormalizedMessage,
+    intent: ParsedIntent
+  ): Promise<ChannelResponse> {
+    const repoParam = intent.params.repo;
+    if (!repoParam) {
+      return {
+        text: `[${this.config.id}] Usage: link <repo-url>\n  Example: link codespar/codespar\n  Example: link https://github.com/codespar/codespar`,
+      };
+    }
+
+    const parsed = this.parseRepoIdentifier(repoParam);
+    if (!parsed) {
+      return {
+        text: `[${this.config.id}] Invalid repo format: "${repoParam}"\n  Use: owner/repo or https://github.com/owner/repo`,
+      };
+    }
+
+    if (!this.storage) {
+      return {
+        text: `[${this.config.id}] Cannot link project — no storage configured.`,
+      };
+    }
+
+    const config: ProjectConfig = {
+      repoUrl: parsed.url,
+      repoOwner: parsed.owner,
+      repoName: parsed.name,
+      linkedAt: new Date().toISOString(),
+      linkedBy: message.channelUserId,
+      webhookConfigured: false,
+    };
+
+    await this.storage.setProjectConfig(this.config.id, config);
+
+    return {
+      text: `\u2713 [${this.config.id}] Project linked: ${parsed.owner}/${parsed.name}\n  Repository: ${parsed.url}\n  Agent: ${this.config.id} (L${this.config.autonomyLevel} ${this.autonomyLabel()})\n\n  Next steps:\n  1. Configure GitHub webhook:\n     URL: https://codespar-production.up.railway.app/webhooks/github\n     Events: workflow_run, pull_request, push\n  2. Your agent will start monitoring CI/CD events.`,
+    };
+  }
+
+  private async handleUnlink(): Promise<ChannelResponse> {
+    if (!this.storage) {
+      return {
+        text: `[${this.config.id}] Cannot unlink project — no storage configured.`,
+      };
+    }
+
+    const existing = await this.storage.getProjectConfig(this.config.id);
+    if (!existing) {
+      return {
+        text: `[${this.config.id}] No project linked. Nothing to unlink.`,
+      };
+    }
+
+    await this.storage.deleteProjectConfig(this.config.id);
+
+    return {
+      text: `\u2713 [${this.config.id}] Project unlinked.`,
+    };
+  }
+
+  private async handleStatus(intent: ParsedIntent): Promise<ChannelResponse> {
     const target = intent.params.target || "all";
     const uptimeMs = Date.now() - this.startedAt.getTime();
     const uptimeMin = Math.floor(uptimeMs / 60000);
 
+    // Fetch project config if storage is available
+    let projectLine: string;
+    if (this.storage) {
+      const projectConfig = await this.storage.getProjectConfig(this.config.id);
+      if (projectConfig) {
+        projectLine = `Project: ${projectConfig.repoOwner}/${projectConfig.repoName} (${projectConfig.repoUrl})`;
+      } else {
+        projectLine = `Project: No project linked. Use: link <repo-url>`;
+      }
+    } else {
+      projectLine = `Project: No project linked. Use: link <repo-url>`;
+    }
+
     const agentInfo = [
       `Agent: ${this.config.id}`,
+      projectLine,
       `State: ${this._state}`,
       `Autonomy: L${this.config.autonomyLevel} (${this.autonomyLabel()})`,
       `Uptime: ${uptimeMin}m`,

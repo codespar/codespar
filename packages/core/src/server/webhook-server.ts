@@ -15,7 +15,7 @@ import Fastify, { type FastifyInstance } from "fastify";
 import cors from "@fastify/cors";
 import { parseGitHubWebhook, type CIEvent } from "../webhooks/github-handler.js";
 import type { AgentStatus } from "../types/agent.js";
-import type { StorageProvider } from "../storage/types.js";
+import type { StorageProvider, ProjectConfig } from "../storage/types.js";
 
 export interface WebhookServerConfig {
   port?: number;
@@ -146,6 +146,11 @@ export class WebhookServer {
           return reply.status(404).send({ error: "Agent not found" });
         }
 
+        let projectConfig: ProjectConfig | null = null;
+        if (this.storageProvider) {
+          projectConfig = await this.storageProvider.getProjectConfig(id);
+        }
+
         return {
           id: agent.id,
           name: agent.id,
@@ -156,6 +161,28 @@ export class WebhookServer {
           tasksHandled: agent.tasksHandled,
           uptimeMs: agent.uptimeMs,
           lastActive: agent.lastActiveAt?.toISOString() ?? null,
+          projectConfig: projectConfig ?? undefined,
+        };
+      }
+    );
+
+    // Get current project config
+    this.app.get<{ Querystring: { agentId?: string } }>(
+      "/api/project",
+      async (request, _reply) => {
+        if (!this.storageProvider) {
+          return { linked: false, config: null };
+        }
+
+        const agentId = request.query.agentId ?? "";
+        if (!agentId) {
+          return { linked: false, config: null, error: "agentId query param required" };
+        }
+
+        const config = await this.storageProvider.getProjectConfig(agentId);
+        return {
+          linked: config !== null,
+          config: config ?? null,
         };
       }
     );
