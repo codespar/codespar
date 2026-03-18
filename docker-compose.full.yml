@@ -27,6 +27,20 @@ services:
       timeout: 3s
       retries: 5
 
+  evolution-api:
+    image: atendai/evolution-api:latest
+    ports:
+      - "8084:8084"
+    environment:
+      AUTHENTICATION_API_KEY: ${EVOLUTION_API_KEY:-codespar_dev_key}
+    volumes:
+      - evolution_data:/evolution/instances
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8084/"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
   core:
     build: .
     ports:
@@ -37,7 +51,11 @@ services:
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
       PORT: 3000
       ENABLE_WHATSAPP: "true"
-      WHATSAPP_BOT_NAME: "@codespar"
+      EVOLUTION_API_URL: http://evolution-api:8084
+      EVOLUTION_API_KEY: ${EVOLUTION_API_KEY:-codespar_dev_key}
+      EVOLUTION_INSTANCE: codespar
+      WHATSAPP_WEBHOOK_PORT: "3001"
+      WHATSAPP_BOT_MENTION: "@codespar"
       ENABLE_SLACK: "true"
       SLACK_BOT_TOKEN: ${SLACK_BOT_TOKEN}
       SLACK_SIGNING_SECRET: ${SLACK_SIGNING_SECRET}
@@ -47,10 +65,10 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-    volumes:
-      - whatsapp_auth:/app/auth_info
+      evolution-api:
+        condition: service_healthy
 
 volumes:
   postgres_data:
   redis_data:
-  whatsapp_auth:
+  evolution_data:

@@ -1,10 +1,28 @@
 services:
+  evolution-api:
+    image: atendai/evolution-api:latest
+    ports:
+      - "8084:8084"
+    environment:
+      AUTHENTICATION_API_KEY: ${EVOLUTION_API_KEY:-codespar_dev_key}
+    volumes:
+      - evolution_data:/evolution/instances
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8084/"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
   core:
     environment:
       ENABLE_WHATSAPP: "true"
-      WHATSAPP_BOT_NAME: "@codespar"
-    volumes:
-      - whatsapp_auth:/app/auth_info
+      EVOLUTION_API_URL: http://evolution-api:8084
+      EVOLUTION_API_KEY: ${EVOLUTION_API_KEY:-codespar_dev_key}
+      EVOLUTION_INSTANCE: codespar
+      WHATSAPP_WEBHOOK_PORT: "3001"
+    depends_on:
+      evolution-api:
+        condition: service_healthy
 
 volumes:
-  whatsapp_auth:
+  evolution_data:
