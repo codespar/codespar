@@ -22,7 +22,9 @@ import type {
   CIEvent,
 } from "@codespar/core";
 
+import { ApprovalManager } from "@codespar/core";
 import { TaskAgent } from "@codespar/agent-task";
+import { DeployAgent } from "@codespar/agent-deploy";
 
 const COMMANDS_HELP = `Available commands:
   status [build|agent|all]  — Query current status
@@ -44,13 +46,29 @@ export class ProjectAgent implements Agent {
   private tasksHandled: number = 0;
   private taskAgentCounter: number = 0;
   private storage: StorageProvider | null;
+  private approvalManager: ApprovalManager;
+  private deployAgent: DeployAgent;
 
-  constructor(config: AgentConfig, storage?: StorageProvider) {
+  constructor(
+    config: AgentConfig,
+    storage?: StorageProvider,
+    approvalManager?: ApprovalManager
+  ) {
     this.config = {
       ...config,
       type: "project",
     };
     this.storage = storage ?? null;
+    this.approvalManager = approvalManager ?? new ApprovalManager();
+    this.deployAgent = new DeployAgent(
+      {
+        id: `${config.id}-deploy`,
+        type: "deploy",
+        projectId: config.projectId,
+        autonomyLevel: config.autonomyLevel,
+      },
+      this.approvalManager
+    );
   }
 
   get state(): AgentState {
@@ -70,6 +88,9 @@ export class ProjectAgent implements Agent {
         this.tasksHandled = savedCount;
       }
     }
+
+    // Initialize the Deploy Agent
+    await this.deployAgent.initialize();
 
     this.startedAt = new Date();
     this._state = "IDLE";
@@ -125,15 +146,15 @@ export class ProjectAgent implements Agent {
         break;
 
       case "deploy":
-        response = {
-          text: `[${this.config.id}] Deploy to ${intent.params.environment} requires approval.\n  (Deploy Agent coming in Phase 3)`,
-        };
+        response = await this.deployAgent.handleMessage(message, intent);
+        break;
+
+      case "approve":
+        response = await this.deployAgent.handleMessage(message, intent);
         break;
 
       case "rollback":
-        response = {
-          text: `[${this.config.id}] Rollback ${intent.params.environment} requires quorum (2 approvals).\n  (Rollback flow coming in Phase 3)`,
-        };
+        response = await this.deployAgent.handleMessage(message, intent);
         break;
 
       case "autonomy":

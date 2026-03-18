@@ -1,18 +1,16 @@
 {
-  "name": "@codespar/agent-project",
+  "name": "@codespar/agent-deploy",
   "version": "0.1.0",
   "type": "module",
-  "main": "./dist/project-agent.js",
-  "types": "./dist/project-agent.d.ts",
+  "main": "./dist/deploy-agent.js",
+  "types": "./dist/deploy-agent.d.ts",
   "scripts": {
     "build": "tsc",
     "dev": "tsc --watch",
     "lint": "echo 'lint ok'"
   },
   "dependencies": {
-    "@codespar/core": "*",
-    "@codespar/agent-task": "*",
-    "@codespar/agent-deploy": "*"
+    "@codespar/core": "*"
   },
   "devDependencies": {
     "typescript": "^5.8.0"

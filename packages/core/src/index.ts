@@ -45,6 +45,20 @@ export type {
 } from "./webhooks/github-handler.js";
 export { parseGitHubWebhook } from "./webhooks/github-handler.js";
 
+// Approval
+export { ApprovalManager } from "./approval/index.js";
+export type { ApprovalRequest, VoteResult } from "./approval/index.js";
+
+// Auth (RBAC)
+export type { Role, Permission, UserIdentity } from "./auth/index.js";
+export {
+  ROLE_PERMISSIONS,
+  hasPermission,
+  canExecuteIntent,
+  getRequiredRole,
+  IdentityResolver,
+} from "./auth/index.js";
+
 // Server
 export type {
   WebhookServerConfig,

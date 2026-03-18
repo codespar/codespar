@@ -1,9 +1,8 @@
 {
-  "name": "@codespar/agent-project",
+  "name": "@codespar/channel-slack",
   "version": "0.1.0",
   "type": "module",
-  "main": "./dist/project-agent.js",
-  "types": "./dist/project-agent.d.ts",
+  "main": "./dist/index.js",
   "scripts": {
     "build": "tsc",
     "dev": "tsc --watch",
@@ -11,10 +10,10 @@
   },
   "dependencies": {
     "@codespar/core": "*",
-    "@codespar/agent-task": "*",
-    "@codespar/agent-deploy": "*"
+    "@slack/bolt": "^4.1.0"
   },
   "devDependencies": {
+    "@types/node": "^22.15.0",
     "typescript": "^5.8.0"
   }
 }

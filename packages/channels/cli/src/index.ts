@@ -13,7 +13,7 @@
  *   node packages/channels/cli/dist/index.js
  */
 
-import { MessageRouter, FileStorage } from "@codespar/core";
+import { MessageRouter, FileStorage, ApprovalManager } from "@codespar/core";
 import { AgentSupervisor } from "@codespar/agent-supervisor";
 import { ProjectAgent } from "@codespar/agent-project";
 import { CLIAdapter } from "./adapter.js";
@@ -39,13 +39,16 @@ async function main() {
   // 4. Create file-based storage for agent memory and audit
   const storage = new FileStorage();
 
-  // 5. Spawn a Project Agent (L1 Notify) with storage
+  // 4b. Create shared ApprovalManager for deploy/rollback workflows
+  const approvalManager = new ApprovalManager();
+
+  // 5. Spawn a Project Agent (L1 Notify) with storage and approval manager
   const agent = new ProjectAgent({
     id: "agent-local",
     type: "project",
     projectId: "local-dev",
     autonomyLevel: 1,
-  }, storage);
+  }, storage, approvalManager);
   await supervisor.spawnAgent("local-dev", agent);
 
   // 5. Start the supervisor (connects adapters, wires routing)
