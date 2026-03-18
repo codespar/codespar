@@ -90,6 +90,38 @@ export class AgentSupervisor {
     return Array.from(this.agents.values()).map((agent) => agent.getStatus());
   }
 
+  /** Get agent by its config id */
+  getAgentById(agentId: string): Agent | undefined {
+    for (const agent of this.agents.values()) {
+      if (agent.config.id === agentId) return agent;
+    }
+    return undefined;
+  }
+
+  /** Get the projectId key for an agent by its config id */
+  getProjectIdForAgent(agentId: string): string | undefined {
+    for (const [projectId, agent] of this.agents) {
+      if (agent.config.id === agentId) return projectId;
+    }
+    return undefined;
+  }
+
+  /** Re-initialize an agent (shutdown + initialize) */
+  async restartAgent(agentId: string): Promise<boolean> {
+    const agent = this.getAgentById(agentId);
+    if (!agent) return false;
+    console.log(`[supervisor] Restarting agent ${agentId}...`);
+    await agent.shutdown();
+    await agent.initialize();
+    console.log(`[supervisor] Agent ${agentId} restarted, state: ${agent.state}`);
+    return true;
+  }
+
+  /** Get all registered channel adapters with connection status */
+  getAdapters(): ChannelAdapter[] {
+    return this.adapters;
+  }
+
   /** Graceful shutdown */
   async shutdown(): Promise<void> {
     console.log("\n[supervisor] Shutting down...");

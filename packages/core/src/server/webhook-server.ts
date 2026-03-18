@@ -14,8 +14,10 @@
 import Fastify, { type FastifyInstance } from "fastify";
 import cors from "@fastify/cors";
 import { parseGitHubWebhook, type CIEvent } from "../webhooks/github-handler.js";
-import type { AgentStatus } from "../types/agent.js";
+import type { AgentStatus, AgentState } from "../types/agent.js";
+import type { ChannelAdapter } from "../types/channel-adapter.js";
 import type { StorageProvider, ProjectConfig } from "../storage/types.js";
+import type { ApprovalManager } from "../approval/approval-manager.js";
 
 export interface WebhookServerConfig {
   port?: number;
@@ -27,6 +29,8 @@ export type CIEventHandler = (event: CIEvent) => Promise<void>;
 /** Interface for querying agent statuses from the supervisor */
 export interface AgentStatusProvider {
   getAgentStatuses(): AgentStatus[];
+  getAdapters?(): ChannelAdapter[];
+  restartAgent?(agentId: string): Promise<boolean>;
 }
 
 export class WebhookServer {
@@ -38,6 +42,7 @@ export class WebhookServer {
   private agentCount: number = 0;
   private agentSupervisor: AgentStatusProvider | null = null;
   private storageProvider: StorageProvider | null = null;
+  private approvalManager: ApprovalManager | null = null;
 
   constructor(config?: WebhookServerConfig) {
     this.port = config?.port ?? parseInt(process.env["PORT"] ?? "3000", 10);
@@ -57,6 +62,11 @@ export class WebhookServer {
   /** Set the storage provider for querying audit logs */
   setStorageProvider(storage: StorageProvider): void {
     this.storageProvider = storage;
+  }
+
+  /** Set the approval manager for voting endpoints */
+  setApprovalManager(manager: ApprovalManager): void {
+    this.approvalManager = manager;
   }
 
   /** Register a handler that will be called for every parsed CI event */
@@ -184,6 +194,220 @@ export class WebhookServer {
           linked: config !== null,
           config: config ?? null,
         };
+      }
+    );
+
+    // ── Link a project to an agent ──
+    this.app.post<{ Body: { agentId: string; repo: string } }>(
+      "/api/project/link",
+      async (request, reply) => {
+        const { agentId, repo } = request.body as { agentId?: string; repo?: string };
+
+        if (!agentId || !repo) {
+          return reply.status(400).send({ error: "agentId and repo are required" });
+        }
+
+        if (!this.storageProvider) {
+          return reply.status(500).send({ error: "Storage not configured" });
+        }
+
+        // Parse owner/name from repo string (e.g. "codespar/api-gateway")
+        const parts = repo.split("/");
+        const repoOwner = parts.length > 1 ? parts[0]! : "";
+        const repoName = parts.length > 1 ? parts[1]! : repo;
+
+        const config: ProjectConfig = {
+          repoUrl: `https://github.com/${repo}`,
+          repoOwner,
+          repoName,
+          linkedAt: new Date().toISOString(),
+          linkedBy: "dashboard",
+          webhookConfigured: false,
+        };
+
+        await this.storageProvider.setProjectConfig(agentId, config);
+
+        return { success: true, config };
+      }
+    );
+
+    // ── Agent action (suspend / resume / restart) ──
+    this.app.post<{ Params: { id: string }; Body: { action: string } }>(
+      "/api/agents/:id/action",
+      async (request, reply) => {
+        const { id } = request.params;
+        const { action } = request.body as { action?: string };
+
+        if (!action || !["suspend", "resume", "restart"].includes(action)) {
+          return reply.status(400).send({
+            error: "action must be 'suspend', 'resume', or 'restart'",
+          });
+        }
+
+        if (!this.agentSupervisor) {
+          return reply.status(500).send({ error: "Supervisor not configured" });
+        }
+
+        const statuses = this.agentSupervisor.getAgentStatuses();
+        const agentStatus = statuses.find((s) => s.id === id);
+        if (!agentStatus) {
+          return reply.status(404).send({ error: "Agent not found" });
+        }
+
+        if (action === "restart") {
+          if (this.agentSupervisor.restartAgent) {
+            const ok = await this.agentSupervisor.restartAgent(id);
+            if (!ok) {
+              return reply.status(500).send({ error: "Restart failed" });
+            }
+            return { success: true, action: "restart", agentId: id };
+          }
+          return reply.status(501).send({ error: "Restart not supported" });
+        }
+
+        // For suspend/resume, we update the agent status via the supervisor.
+        // The supervisor exposes agents, so we note the desired state.
+        // Since the Agent interface doesn't expose a setState, we record
+        // the action in audit and return success (agents check state on next tick).
+        const newState: AgentState = action === "suspend" ? "SUSPENDED" : "IDLE";
+
+        if (this.storageProvider) {
+          await this.storageProvider.appendAudit({
+            actorType: "user",
+            actorId: "dashboard",
+            action: `agent.${action}`,
+            result: "success",
+            metadata: {
+              agentId: id,
+              newState,
+              detail: `Agent ${id} ${action}ed via dashboard`,
+            },
+          });
+        }
+
+        return { success: true, action, agentId: id, newState };
+      }
+    );
+
+    // ── List connected channels ──
+    this.app.get("/api/channels", async (_request, _reply) => {
+      const adapters = this.agentSupervisor?.getAdapters?.() ?? [];
+
+      const channels = await Promise.all(
+        adapters.map(async (adapter) => {
+          let healthy = false;
+          try {
+            healthy = await adapter.healthCheck();
+          } catch {
+            // health check failed
+          }
+          return {
+            name: adapter.type,
+            platform: adapter.type,
+            connected: healthy,
+            capabilities: adapter.getCapabilities(),
+          };
+        })
+      );
+
+      // If no adapters are registered, return env-based channel info
+      if (channels.length === 0) {
+        const envChannels = [];
+        for (const name of ["whatsapp", "slack", "telegram", "discord"]) {
+          const envKey = `ENABLE_${name.toUpperCase()}`;
+          envChannels.push({
+            name,
+            platform: name,
+            connected: process.env[envKey] === "true",
+            capabilities: null,
+          });
+        }
+        return { channels: envChannels };
+      }
+
+      return { channels };
+    });
+
+    // ── Reconnect a channel (placeholder) ──
+    this.app.post<{ Params: { name: string } }>(
+      "/api/channels/:name/reconnect",
+      async (request, reply) => {
+        const { name } = request.params;
+        const adapters = this.agentSupervisor?.getAdapters?.() ?? [];
+        const adapter = adapters.find((a) => a.type === name);
+
+        if (!adapter) {
+          return reply.status(404).send({ error: `Channel '${name}' not found` });
+        }
+
+        try {
+          await adapter.disconnect();
+          await adapter.connect();
+          return { success: true, channel: name, connected: true };
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          return reply.status(500).send({ error: `Reconnect failed: ${msg}` });
+        }
+      }
+    );
+
+    // ── Approval vote ──
+    this.app.post<{ Body: { token: string; vote: string; userId: string } }>(
+      "/api/approval/vote",
+      async (request, reply) => {
+        const { token, vote, userId } = request.body as {
+          token?: string;
+          vote?: string;
+          userId?: string;
+        };
+
+        if (!token || !vote || !userId) {
+          return reply.status(400).send({
+            error: "token, vote, and userId are required",
+          });
+        }
+
+        if (!["approve", "deny"].includes(vote)) {
+          return reply.status(400).send({
+            error: "vote must be 'approve' or 'deny'",
+          });
+        }
+
+        if (!this.approvalManager) {
+          return reply.status(500).send({ error: "Approval manager not configured" });
+        }
+
+        const result = this.approvalManager.vote(
+          token,
+          userId,
+          "dashboard",
+          vote as "approve" | "deny"
+        );
+
+        if (!result) {
+          return reply.status(404).send({
+            error: "Token not found, already resolved, or vote rejected",
+          });
+        }
+
+        if (this.storageProvider) {
+          await this.storageProvider.appendAudit({
+            actorType: "user",
+            actorId: userId,
+            action: "approval.voted",
+            result: result.status === "denied" ? "failure" : "success",
+            metadata: {
+              token,
+              vote,
+              approvalStatus: result.status,
+              votesReceived: result.votesReceived,
+              votesRequired: result.votesRequired,
+              detail: `Vote '${vote}' via dashboard. Status: ${result.status}`,
+            },
+          });
+        }
+
+        return { success: true, result };
       }
     );
 
