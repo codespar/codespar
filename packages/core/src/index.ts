@@ -63,5 +63,10 @@ export {
 export type {
   WebhookServerConfig,
   CIEventHandler,
+  AgentStatusProvider,
 } from "./server/webhook-server.js";
 export { WebhookServer } from "./server/webhook-server.js";
+
+// Execution
+export { ClaudeBridge } from "./execution/index.js";
+export type { ExecutionRequest, ExecutionResult } from "./execution/index.js";

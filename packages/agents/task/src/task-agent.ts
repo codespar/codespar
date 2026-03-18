@@ -1,13 +1,8 @@
 /**
  * Task Agent — Ephemeral agent that executes coding tasks.
  *
- * Responsibilities:
- * - Receives instructions from Project Agent (instruct/fix intents)
- * - Queues and executes tasks sequentially
- * - Reports execution results back
- *
- * MVP: Simulates execution with a delay and returns mock results.
- * Future: Will spawn Claude Code CLI in a Docker container.
+ * Uses ClaudeBridge to execute instructions via Claude Code CLI.
+ * Falls back to simulation if Claude CLI is not available.
  */
 
 import type {
@@ -19,6 +14,7 @@ import type {
   ChannelResponse,
   ParsedIntent,
 } from "@codespar/core";
+import { ClaudeBridge, type ExecutionResult } from "@codespar/core";
 
 export interface TaskResult {
   taskId: string;
@@ -26,6 +22,7 @@ export interface TaskResult {
   status: "queued" | "running" | "completed" | "failed";
   output?: string;
   durationMs?: number;
+  simulated?: boolean;
 }
 
 let taskCounter = 0;
@@ -42,12 +39,11 @@ export class TaskAgent implements Agent {
   private tasksHandled: number = 0;
   private taskQueue: TaskResult[] = [];
   private executionHistory: TaskResult[] = [];
+  private bridge: ClaudeBridge = new ClaudeBridge();
+  private claudeAvailable: boolean = false;
 
   constructor(config: AgentConfig) {
-    this.config = {
-      ...config,
-      type: "task",
-    };
+    this.config = { ...config, type: "task" };
   }
 
   get state(): AgentState {
@@ -57,6 +53,10 @@ export class TaskAgent implements Agent {
   async initialize(): Promise<void> {
     this._state = "INITIALIZING";
     this.startedAt = new Date();
+    this.claudeAvailable = await this.bridge.isAvailable();
+    if (this.claudeAvailable) {
+      console.log(`[${this.config.id}] Claude Code CLI detected`);
+    }
     this._state = "IDLE";
   }
 
@@ -66,11 +66,15 @@ export class TaskAgent implements Agent {
   ): Promise<ChannelResponse> {
     switch (intent.type) {
       case "instruct":
-        return this.handleInstruct(intent);
-
+        return this.executeTask(
+          intent.params.instruction || intent.rawText,
+          "instruct"
+        );
       case "fix":
-        return this.handleFix(intent);
-
+        return this.executeTask(
+          `Fix: ${intent.params.issue || intent.rawText}`,
+          "fix"
+        );
       default:
         return {
           text: `[${this.config.id}] Task Agent only handles instruct and fix commands.`,
@@ -78,75 +82,57 @@ export class TaskAgent implements Agent {
     }
   }
 
-  private async handleInstruct(intent: ParsedIntent): Promise<ChannelResponse> {
-    const instruction = intent.params.instruction || intent.rawText;
-    return this.executeTask(instruction, "instruct");
-  }
-
-  private async handleFix(intent: ParsedIntent): Promise<ChannelResponse> {
-    const issue = intent.params.issue || intent.rawText;
-    const instruction = `Fix: ${issue}`;
-    return this.executeTask(instruction, "fix");
-  }
-
-  /**
-   * Queues a task, simulates execution, and returns the result.
-   * MVP: uses a delay to simulate Claude Code execution.
-   * Future: will spawn `claude-code` in a Docker container via child_process.
-   */
   private async executeTask(
     instruction: string,
     type: "instruct" | "fix"
   ): Promise<ChannelResponse> {
     const taskId = generateTaskId();
-
-    // Queue the task
-    const task: TaskResult = {
-      taskId,
-      instruction,
-      status: "queued",
-    };
+    const task: TaskResult = { taskId, instruction, status: "queued" };
     this.taskQueue.push(task);
 
-    // Transition to ACTIVE
     this._state = "ACTIVE";
     task.status = "running";
 
-    const startTime = Date.now();
-
     try {
-      // Simulate execution (MVP: delay + mock result)
-      await this.simulateExecution(instruction);
+      const workDir = process.env.CODESPAR_WORK_DIR || process.cwd();
 
-      const durationMs = Date.now() - startTime;
-      task.status = "completed";
-      task.durationMs = durationMs;
-      task.output = this.generateMockOutput(instruction, type);
+      const result: ExecutionResult = await this.bridge.execute({
+        taskId,
+        instruction,
+        workDir,
+        timeout: 300_000,
+      });
+
+      task.status = result.status === "completed" ? "completed" : "failed";
+      task.durationMs = result.durationMs;
+      task.output = result.output;
+      task.simulated = result.simulated;
 
       this.tasksHandled++;
       this.executionHistory.push({ ...task });
-      this.removeFromQueue(taskId);
-
+      this.taskQueue = this.taskQueue.filter((t) => t.taskId !== taskId);
       this._state = "IDLE";
+
+      const duration = result.durationMs < 1000
+        ? `${result.durationMs}ms`
+        : `${(result.durationMs / 1000).toFixed(1)}s`;
+
+      const mode = result.simulated ? " (simulated)" : "";
 
       return {
         text: [
-          `[${this.config.id}] Task completed: ${taskId}`,
+          `[${this.config.id}] Task ${task.status}${mode}: ${taskId}`,
           `  Instruction: ${instruction}`,
           `  Status: ${task.status}`,
-          `  Duration: ${durationMs}ms`,
-          `  Output: ${task.output}`,
+          `  Duration: ${duration}`,
+          `  Output: ${(task.output || "").slice(0, 500)}`,
         ].join("\n"),
       };
     } catch (error) {
-      const durationMs = Date.now() - startTime;
       task.status = "failed";
-      task.durationMs = durationMs;
       task.output = error instanceof Error ? error.message : "Unknown error";
-
       this.executionHistory.push({ ...task });
-      this.removeFromQueue(taskId);
-
+      this.taskQueue = this.taskQueue.filter((t) => t.taskId !== taskId);
       this._state = "IDLE";
 
       return {
@@ -154,42 +140,15 @@ export class TaskAgent implements Agent {
           `[${this.config.id}] Task failed: ${taskId}`,
           `  Instruction: ${instruction}`,
           `  Error: ${task.output}`,
-          `  Duration: ${durationMs}ms`,
         ].join("\n"),
       };
     }
   }
 
-  /**
-   * Simulates Claude Code execution with a short delay.
-   * MVP placeholder — will be replaced by child_process.spawn in Phase 2.
-   */
-  private simulateExecution(instruction: string): Promise<void> {
-    const delayMs = 100 + Math.floor(Math.random() * 200);
-    return new Promise((resolve) => setTimeout(resolve, delayMs));
-  }
-
-  /**
-   * Generates a mock output based on the instruction type.
-   * MVP placeholder — will be replaced by real Claude Code output.
-   */
-  private generateMockOutput(instruction: string, type: "instruct" | "fix"): string {
-    if (type === "fix") {
-      return `Analyzed and applied fix for: "${instruction}". Changes staged for review.`;
-    }
-    return `Executed instruction: "${instruction}". Changes applied successfully.`;
-  }
-
-  private removeFromQueue(taskId: string): void {
-    this.taskQueue = this.taskQueue.filter((t) => t.taskId !== taskId);
-  }
-
-  /** Returns the current task queue */
   getTaskQueue(): TaskResult[] {
     return [...this.taskQueue];
   }
 
-  /** Returns completed/failed task history */
   getExecutionHistory(): TaskResult[] {
     return [...this.executionHistory];
   }

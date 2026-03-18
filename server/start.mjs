@@ -73,6 +73,8 @@ webhookServer.onCIEvent(async (event) => {
 });
 
 webhookServer.setAgentCount(1);
+webhookServer.setAgentSupervisor(supervisor);
+webhookServer.setStorageProvider(storage);
 await webhookServer.start();
 
 console.log(`[server] Webhook server on port ${port}`);
