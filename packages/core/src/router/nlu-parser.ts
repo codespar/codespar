@@ -35,7 +35,12 @@ export async function parseWithNLU(
   text: string,
 ): Promise<ParsedIntent | null> {
   const apiKey = process.env.ANTHROPIC_API_KEY;
-  if (!apiKey) return null;
+  if (!apiKey) {
+    console.log("[nlu] No ANTHROPIC_API_KEY set, skipping NLU");
+    return null;
+  }
+
+  console.log("[nlu] Classifying:", text);
 
   try {
     const res = await fetch("https://api.anthropic.com/v1/messages", {
@@ -46,14 +51,17 @@ export async function parseWithNLU(
         "content-type": "application/json",
       },
       body: JSON.stringify({
-        model: "claude-haiku-4-5-20251001",
+        model: process.env.NLU_MODEL || "claude-haiku-4-5-20251001",
         max_tokens: 200,
         system: SYSTEM_PROMPT,
         messages: [{ role: "user", content: text }],
       }),
     });
 
-    if (!res.ok) return null;
+    if (!res.ok) {
+      console.log("[nlu] API error:", res.status, await res.text().catch(() => ""));
+      return null;
+    }
 
     const data = (await res.json()) as {
       content?: Array<{ text?: string }>;
@@ -71,14 +79,17 @@ export async function parseWithNLU(
     // Validate that the intent is a known type
     if (!(intentType in INTENT_RISK)) return null;
 
-    return {
+    const result = {
       type: intentType,
       risk: INTENT_RISK[intentType] ?? "low",
       params: parsed.params ?? {},
       rawText: text,
       confidence: parsed.confidence ?? 0.8,
     };
-  } catch {
+    console.log(`[nlu] Classified "${text}" → ${intentType} (${result.confidence})`);
+    return result;
+  } catch (err) {
+    console.log("[nlu] Parse error:", err);
     return null;
   }
 }
