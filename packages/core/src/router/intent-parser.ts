@@ -1,12 +1,13 @@
 /**
- * Intent Parser v0 — Regex-based classification.
+ * Intent Parser — Regex-based classification with Claude Haiku NLU fallback.
  * Parses @codespar commands into structured intents.
  *
- * v1 will add Claude Haiku NLU for natural language understanding.
+ * Strategy: regex first (fast, free), NLU only when regex returns "unknown".
  */
 
 import type { ParsedIntent, IntentType } from "../types/intent.js";
 import { INTENT_RISK } from "../types/intent.js";
+import { parseWithNLU } from "./nlu-parser.js";
 
 interface PatternRule {
   type: IntentType;
@@ -79,7 +80,8 @@ const PATTERNS: PatternRule[] = [
   },
 ];
 
-export function parseIntent(text: string): ParsedIntent {
+/** Synchronous regex-only parser (used internally). */
+function parseIntentRegex(text: string): ParsedIntent {
   const trimmed = text.trim();
 
   for (const rule of PATTERNS) {
@@ -102,4 +104,28 @@ export function parseIntent(text: string): ParsedIntent {
     rawText: trimmed,
     confidence: 0,
   };
+}
+
+/**
+ * Parse user text into a structured intent.
+ * Tries regex first (fast, no API call). Falls back to Claude Haiku NLU
+ * when regex returns "unknown" and ANTHROPIC_API_KEY is available.
+ */
+export async function parseIntent(text: string): Promise<ParsedIntent> {
+  // Try regex first (fast, no API call)
+  const regexResult = parseIntentRegex(text);
+
+  // If regex matched a known intent, use it
+  if (regexResult.type !== "unknown") {
+    return regexResult;
+  }
+
+  // Fall back to NLU for natural language
+  const nluResult = await parseWithNLU(text);
+  if (nluResult && nluResult.type !== "unknown") {
+    return nluResult;
+  }
+
+  // Nothing matched
+  return regexResult;
 }

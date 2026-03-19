@@ -13,7 +13,8 @@
     "@codespar/core": "*",
     "@codespar/agent-task": "*",
     "@codespar/agent-deploy": "*",
-    "@codespar/agent-review": "*"
+    "@codespar/agent-review": "*",
+    "@codespar/agent-incident": "*"
   },
   "devDependencies": {
     "typescript": "^5.8.0"

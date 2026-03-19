@@ -38,6 +38,7 @@ export { FileStorage } from "./storage/index.js";
 // Router
 export { MessageRouter } from "./router/message-router.js";
 export { parseIntent } from "./router/intent-parser.js";
+export { parseWithNLU } from "./router/nlu-parser.js";
 
 // Webhooks
 export type {

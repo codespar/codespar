@@ -99,6 +99,33 @@ export class DeployAgent implements Agent {
     return response;
   }
 
+  /**
+   * Execute a deploy directly, bypassing the approval workflow.
+   * Used by ProjectAgent when autonomy level permits auto-execution.
+   * IMPORTANT: Caller must ensure production deploys are never auto-executed.
+   */
+  executeDeploy(environment: "staging" | "production"): ChannelResponse {
+    const deployRequest: DeployRequest = {
+      id: `auto-${Date.now()}`,
+      environment,
+      requestedBy: `${this.config.id}:auto`,
+      requestedAt: new Date(),
+      status: "deploying",
+      approvals: [],
+      requiredApprovals: 0,
+      approvalToken: "",
+    };
+
+    this.deployHistory.push(deployRequest);
+
+    // Simulate deployment
+    deployRequest.status = "deployed";
+
+    return {
+      text: `[${this.config.id}] Auto-deployed to ${environment}. Deploy complete.`,
+    };
+  }
+
   private handleDeploy(
     message: NormalizedMessage,
     intent: ParsedIntent

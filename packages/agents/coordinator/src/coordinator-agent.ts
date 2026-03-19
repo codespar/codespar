@@ -268,7 +268,7 @@ export class CoordinatorAgent implements Agent {
 
     // Re-parse the command portion (without the alias prefix) into a new intent
     const { parseIntent } = await import("@codespar/core");
-    const routedIntent = parseIntent(commandText);
+    const routedIntent = await parseIntent(commandText);
 
     return agent.handleMessage(message, routedIntent);
   }

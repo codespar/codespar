@@ -41,7 +41,7 @@ export class MessageRouter {
       return null;
     }
 
-    const intent = parseIntent(message.text);
+    const intent = await parseIntent(message.text);
 
     // ---- RBAC check ----
     if (this.identityResolver) {
@@ -77,13 +77,13 @@ export class MessageRouter {
       const subText = words.slice(1).join(" ");
       if (!subText) {
         // Bare alias with no command — treat as status
-        const subIntent = parseIntent("status");
+        const subIntent = await parseIntent("status");
         return agentByAlias.handleMessage(
           { ...message, text: "status" },
           subIntent,
         );
       }
-      const subIntent = parseIntent(subText);
+      const subIntent = await parseIntent(subText);
       return agentByAlias.handleMessage(
         { ...message, text: subText },
         subIntent,

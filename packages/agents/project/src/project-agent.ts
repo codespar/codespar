@@ -7,7 +7,7 @@
  * - Maintains codebase context
  * - Spawns ephemeral agents (Task, Review, Deploy, Incident)
  *
- * MVP: L1 Notify — responds to commands, never auto-executes.
+ * Autonomy levels L0-L5 control auto-execution of actions by risk level.
  */
 
 import type {
@@ -27,6 +27,7 @@ import { ApprovalManager } from "@codespar/core";
 import { TaskAgent } from "@codespar/agent-task";
 import { DeployAgent } from "@codespar/agent-deploy";
 import { ReviewAgent } from "@codespar/agent-review";
+import { IncidentAgent } from "@codespar/agent-incident";
 
 const COMMANDS_HELP = `Available commands:
   status [build|agent|all]  — Query current status
@@ -49,6 +50,7 @@ export class ProjectAgent implements Agent {
   private tasksHandled: number = 0;
   private taskAgentCounter: number = 0;
   private reviewAgentCounter: number = 0;
+  private incidentAgentCounter: number = 0;
   private storage: StorageProvider | null;
   private approvalManager: ApprovalManager;
   private deployAgent: DeployAgent;
@@ -82,7 +84,7 @@ export class ProjectAgent implements Agent {
   async initialize(): Promise<void> {
     this._state = "INITIALIZING";
 
-    // Restore persisted task count from storage
+    // Restore persisted state from storage
     if (this.storage) {
       const savedCount = await this.storage.getMemory(
         this.config.id,
@@ -90,6 +92,15 @@ export class ProjectAgent implements Agent {
       );
       if (typeof savedCount === "number") {
         this.tasksHandled = savedCount;
+      }
+
+      // Restore persisted autonomy level
+      const savedLevel = await this.storage.getMemory(
+        this.config.id,
+        "autonomyLevel"
+      );
+      if (typeof savedLevel === "number" && savedLevel >= 0 && savedLevel <= 5) {
+        (this.config as { autonomyLevel: number }).autonomyLevel = savedLevel;
       }
     }
 
@@ -152,9 +163,18 @@ export class ProjectAgent implements Agent {
         break;
 
       case "instruct":
-      case "fix":
-        response = await this.delegateToTaskAgent(message, intent);
+      case "fix": {
+        if (this.shouldAutoExecute(intent)) {
+          // L4+: auto-execute without confirmation, notify after
+          const result = await this.delegateToTaskAgent(message, intent);
+          response = {
+            text: `[${this.config.id}] Auto-executed (L${this.config.autonomyLevel} policy):\n${result.text}`,
+          };
+        } else {
+          response = await this.delegateToTaskAgent(message, intent);
+        }
         break;
+      }
 
       case "link":
         response = await this.handleLink(message, intent);
@@ -164,9 +184,35 @@ export class ProjectAgent implements Agent {
         response = await this.handleUnlink();
         break;
 
-      case "deploy":
-        response = await this.deployAgent.handleMessage(message, intent);
+      case "deploy": {
+        if (this.shouldAutoExecute(intent)) {
+          // Auto-execute: skip approval, deploy directly
+          const env =
+            (intent.params.environment as "staging" | "production") ||
+            "staging";
+          response = this.deployAgent.executeDeploy(env);
+
+          // Log as autonomous action
+          if (this.storage) {
+            await this.storage.appendAudit({
+              actorType: "agent",
+              actorId: this.config.id,
+              action: "deploy.auto_executed",
+              result: "success",
+              metadata: {
+                environment: env,
+                autonomyLevel: this.config.autonomyLevel,
+                risk: intent.risk,
+                detail: `Auto-deployed to ${env} (L${this.config.autonomyLevel} policy)`,
+              },
+            });
+          }
+        } else {
+          // Normal flow: request approval
+          response = await this.deployAgent.handleMessage(message, intent);
+        }
         break;
+      }
 
       case "approve":
         response = await this.deployAgent.handleMessage(message, intent);
@@ -176,11 +222,40 @@ export class ProjectAgent implements Agent {
         response = await this.deployAgent.handleMessage(message, intent);
         break;
 
-      case "autonomy":
-        response = {
-          text: `[${this.config.id}] Autonomy level change to L${intent.params.level} requires operator+ role.\n  (RBAC coming in Phase 3)`,
-        };
+      case "autonomy": {
+        const newLevel = parseInt(intent.params.level, 10);
+        if (isNaN(newLevel) || newLevel < 0 || newLevel > 5) {
+          response = {
+            text: `[${this.config.id}] Invalid level. Use L0-L5.`,
+          };
+        } else {
+          // Update config (in-memory). AgentConfig.autonomyLevel is readonly,
+          // so we use a cast here intentionally — this is the only mutation point.
+          (this.config as { autonomyLevel: number }).autonomyLevel = newLevel;
+
+          // Persist to storage so it survives restarts
+          if (this.storage) {
+            await this.storage.setMemory(
+              this.config.id,
+              "autonomyLevel",
+              newLevel
+            );
+          }
+
+          const labels = [
+            "Passive",
+            "Notify",
+            "Suggest",
+            "Auto-Low",
+            "Auto-Med",
+            "Full Auto",
+          ];
+          response = {
+            text: `[${this.config.id}] Autonomy updated to L${newLevel} (${labels[newLevel]}).`,
+          };
+        }
         break;
+      }
 
       case "kill":
         response = {
@@ -198,6 +273,41 @@ export class ProjectAgent implements Agent {
 
     this._state = "IDLE";
     return response;
+  }
+
+  /**
+   * Determine whether an intent should be auto-executed based on the
+   * current autonomy level and the intent's risk classification.
+   *
+   * Safety guardrail: production deploys, rollbacks, and kill are NEVER
+   * auto-executed regardless of autonomy level.
+   */
+  private shouldAutoExecute(intent: ParsedIntent): boolean {
+    const level = this.config.autonomyLevel;
+
+    switch (intent.risk) {
+      case "low":
+        // L3+: auto-execute low risk (status, help, logs, review)
+        return level >= 3;
+      case "medium":
+        // L4+: auto-execute medium risk (instruct, fix, link, unlink)
+        return level >= 4;
+      case "high":
+        // L5 only: auto-execute high risk (staging deploy)
+        // NEVER auto-execute production deploys regardless of level
+        if (
+          intent.type === "deploy" &&
+          intent.params.environment === "production"
+        ) {
+          return false;
+        }
+        return level >= 5;
+      case "critical":
+        // NEVER auto-execute critical (prod deploy, rollback, kill)
+        return false;
+      default:
+        return false;
+    }
   }
 
   /**
@@ -280,6 +390,34 @@ export class ProjectAgent implements Agent {
     await reviewAgent.shutdown();
 
     return result;
+  }
+
+  /**
+   * Spawns an ephemeral Incident Agent to investigate a CI failure.
+   * The Incident Agent analyzes the event and returns an investigation report.
+   */
+  private async delegateToIncidentAgent(
+    event: CIEvent
+  ): Promise<ChannelResponse> {
+    this.incidentAgentCounter++;
+    const incidentAgentId = `${this.config.id}-incident-${this.incidentAgentCounter}`;
+
+    const incidentAgent = new IncidentAgent(
+      {
+        id: incidentAgentId,
+        type: "incident",
+        projectId: this.config.projectId,
+        autonomyLevel: this.config.autonomyLevel,
+      },
+      this.storage ?? undefined
+    );
+
+    await incidentAgent.initialize();
+    const investigation = await incidentAgent.investigate(event);
+    const report = incidentAgent.formatReport(investigation);
+    await incidentAgent.shutdown();
+
+    return { text: report };
   }
 
   private async handleLogs(intent: ParsedIntent): Promise<ChannelResponse> {
@@ -478,6 +616,10 @@ export class ProjectAgent implements Agent {
           text = `\u2713 [${this.config.id}] Build #${runId}${title} \u2014 ${event.repo} (${event.branch}) | ${event.details.conclusion ?? "success"}${duration}`;
         } else if (event.status === "failure") {
           text = `\u2717 [${this.config.id}] Build #${runId}${title} failed \u2014 ${event.repo} (${event.branch}) | ${event.details.conclusion ?? "failure"}${duration}`;
+
+          // Spawn Incident Agent to investigate the failure
+          const investigation = await this.delegateToIncidentAgent(event);
+          text += `\n\n${investigation.text}`;
         } else {
           text = `\u25cb [${this.config.id}] Build #${runId}${title} ${event.status} \u2014 ${event.repo} (${event.branch})`;
         }
