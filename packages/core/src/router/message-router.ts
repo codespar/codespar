@@ -58,24 +58,103 @@ export class MessageRouter {
       }
     }
 
-    // For MVP: route to first available agent
-    // Future: resolve project from channel mapping
-    const agent = this.resolveAgent(message.channelId);
-    if (!agent) {
+    // ---- Multi-project routing ----
+    const words = message.text.trim().split(/\s+/);
+    const firstWord = words[0]?.toLowerCase();
+
+    // "all <command>" → route to coordinator for cross-project aggregation
+    if (firstWord === "all") {
+      const coordinator = this.findCoordinator();
+      if (coordinator) {
+        // Pass "all <command>" as-is so coordinator handles aggregation
+        return coordinator.handleMessage(message, intent);
+      }
+    }
+
+    // Check if first word matches a project alias or partial project ID
+    const agentByAlias = this.findAgentByAlias(firstWord);
+    if (agentByAlias) {
+      const subText = words.slice(1).join(" ");
+      if (!subText) {
+        // Bare alias with no command — treat as status
+        const subIntent = parseIntent("status");
+        return agentByAlias.handleMessage(
+          { ...message, text: "status" },
+          subIntent,
+        );
+      }
+      const subIntent = parseIntent(subText);
+      return agentByAlias.handleMessage(
+        { ...message, text: subText },
+        subIntent,
+      );
+    }
+
+    // Single project → route directly (skip coordinator)
+    const projectAgents = this.getProjectAgents();
+    if (projectAgents.length === 1) {
+      return projectAgents[0].handleMessage(message, intent);
+    }
+
+    // Multiple projects, no alias specified → ask for clarification
+    if (projectAgents.length > 1) {
+      const aliases = Array.from(this.agents.entries())
+        .filter(([key]) => key !== "_coordinator")
+        .map(([key]) => key)
+        .join(" | ");
+      const exampleAlias = Array.from(this.agents.keys()).find(
+        (k) => k !== "_coordinator",
+      );
       return {
-        text: `[codespar] No agent linked to this channel. Use \`link <repo-url>\` to connect a project.`,
+        text: `[codespar] Multiple projects registered. Specify which one:\n  ${aliases}\n\nExample: @codespar ${exampleAlias} status`,
       };
     }
 
-    return agent.handleMessage(message, intent);
+    return {
+      text: "[codespar] No projects configured. Use the dashboard to add one.",
+    };
   }
 
-  /** Resolve which agent handles this channel */
-  private resolveAgent(channelId: string): Agent | undefined {
-    // MVP: return first registered agent
-    // Future: lookup channel_links table for channel → project → agent mapping
-    const firstEntry = this.agents.entries().next();
-    return firstEntry.done ? undefined : firstEntry.value[1];
+  /** Find the coordinator agent (registered under "_coordinator") */
+  private findCoordinator(): Agent | undefined {
+    return this.agents.get("_coordinator");
+  }
+
+  /** Known command words that should never be treated as project aliases */
+  private static readonly RESERVED_WORDS = new Set([
+    "status", "help", "instruct", "fix", "deploy", "rollback",
+    "approve", "autonomy", "logs", "link", "unlink", "review", "kill",
+  ]);
+
+  /** Find a project agent by alias, partial project ID, or repo name fragment */
+  private findAgentByAlias(alias: string | undefined): Agent | undefined {
+    if (!alias) return undefined;
+
+    // Exact match on registration key (but not reserved commands or coordinator)
+    if (alias !== "_coordinator" && this.agents.has(alias)) {
+      return this.agents.get(alias);
+    }
+
+    // Never treat known command words as partial project aliases
+    if (MessageRouter.RESERVED_WORDS.has(alias)) return undefined;
+
+    // Partial match: alias is a substring of the project key or agent ID
+    for (const [key, agent] of this.agents) {
+      if (key === "_coordinator") continue;
+      if (key.includes(alias) || agent.config.id.includes(alias)) {
+        return agent;
+      }
+    }
+
+    return undefined;
+  }
+
+  /** Get only project-type agents (excludes coordinator) */
+  private getProjectAgents(): Agent[] {
+    return Array.from(this.agents.entries())
+      .filter(([key]) => key !== "_coordinator")
+      .map(([, agent]) => agent)
+      .filter((a) => a.config.type === "project");
   }
 
   /** Get all registered agents */

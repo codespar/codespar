@@ -94,7 +94,7 @@ coordinator.registerProject("default", projectId, agentId);
 coordinator.setProjectAgent("default", agent);
 await supervisor.spawnAgent("_coordinator", coordinator);
 
-// 5. Restore saved projects
+// 5. Restore saved projects (and register each with the coordinator)
 const savedProjects = await storage.getProjectsList();
 for (const proj of savedProjects) {
   if (proj.agentId === agentId) continue; // skip default
@@ -105,6 +105,8 @@ for (const proj of savedProjects) {
       approvalManager
     );
     await supervisor.spawnAgent(proj.id, restoredAgent);
+    coordinator.registerProject(proj.id, proj.id, proj.agentId);
+    coordinator.setProjectAgent(proj.id, restoredAgent);
     console.log(`[server] Restored project: ${proj.repo} → ${proj.agentId}`);
   } catch (err) {
     console.error(`[server] Failed to restore ${proj.repo}:`, err.message);
@@ -136,6 +138,9 @@ webhookServer.setAgentFactory({
       approvalManager
     );
     await supervisor.spawnAgent(newProjectId, newAgent);
+    // Register with coordinator for multi-project routing
+    coordinator.registerProject(newProjectId, newProjectId, newAgentId);
+    coordinator.setProjectAgent(newProjectId, newAgent);
     // Link repo config
     await storage.setProjectConfig(newAgentId, {
       repoUrl: `https://github.com/${repo}`,
