@@ -21,6 +21,7 @@ Classify the user's message into ONE of these intents:
 - logs: asking to see activity or audit logs
 - link: linking a repository
 - unlink: unlinking a repository
+- context: asking about agent memory, context, or learned patterns
 - unknown: cannot determine intent
 
 Respond with ONLY a JSON object: {"intent":"<type>","params":{},"confidence":0.95}

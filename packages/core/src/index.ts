@@ -52,7 +52,7 @@ export { parseGitHubWebhook } from "./webhooks/github-handler.js";
 export { ApprovalManager } from "./approval/index.js";
 export type { ApprovalRequest, VoteResult } from "./approval/index.js";
 
-// Auth (RBAC)
+// Auth (RBAC + Identity)
 export type { Role, Permission, UserIdentity } from "./auth/index.js";
 export {
   ROLE_PERMISSIONS,
@@ -60,6 +60,7 @@ export {
   canExecuteIntent,
   getRequiredRole,
   IdentityResolver,
+  IdentityStore,
 } from "./auth/index.js";
 
 // Server
@@ -74,3 +75,7 @@ export { WebhookServer } from "./server/webhook-server.js";
 // Execution
 export { ClaudeBridge } from "./execution/index.js";
 export type { ExecutionRequest, ExecutionResult } from "./execution/index.js";
+
+// Memory (Vector Store)
+export { VectorStore } from "./memory/index.js";
+export type { MemoryEntry, SearchResult } from "./memory/index.js";

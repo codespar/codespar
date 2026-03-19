@@ -15,7 +15,7 @@
  *   PROJECT_NAME      — Project identifier (default "default")
  */
 
-import { MessageRouter, WebhookServer, FileStorage, ApprovalManager } from "@codespar/core";
+import { MessageRouter, WebhookServer, FileStorage, ApprovalManager, VectorStore, IdentityStore } from "@codespar/core";
 import { AgentSupervisor } from "@codespar/agent-supervisor";
 import { ProjectAgent } from "@codespar/agent-project";
 import { CoordinatorAgent } from "@codespar/agent-coordinator";
@@ -33,7 +33,20 @@ console.log("");
 const router = new MessageRouter();
 const storage = new FileStorage();
 const approvalManager = new ApprovalManager();
+const vectorStore = new VectorStore();
 const supervisor = new AgentSupervisor(router);
+
+// 1b. Identity store — persistent cross-channel user resolution
+const identityStore = new IdentityStore(storage);
+await identityStore.load();
+
+// Register the admin user (from env or default)
+await identityStore.registerUser({
+  displayName: process.env.ADMIN_NAME || "Admin",
+  role: "owner",
+  channelType: "cli",
+  channelUserId: "local-user",
+});
 
 // 2. Channel adapters (conditional)
 if (process.env.ENABLE_WHATSAPP === "true") {
@@ -80,8 +93,10 @@ if (process.env.ENABLE_DISCORD === "true") {
 const agent = new ProjectAgent(
   { id: agentId, type: "project", projectId, autonomyLevel: 1 },
   storage,
-  approvalManager
+  approvalManager,
+  vectorStore
 );
+agent.setIdentityStore(identityStore);
 await supervisor.spawnAgent(projectId, agent);
 
 // 4. Spawn Coordinator Agent (per-org, cross-project orchestration)
@@ -102,8 +117,10 @@ for (const proj of savedProjects) {
     const restoredAgent = new ProjectAgent(
       { id: proj.agentId, type: "project", projectId: proj.id, autonomyLevel: 1 },
       storage,
-      approvalManager
+      approvalManager,
+      vectorStore
     );
+    restoredAgent.setIdentityStore(identityStore);
     await supervisor.spawnAgent(proj.id, restoredAgent);
     coordinator.registerProject(proj.id, proj.id, proj.agentId);
     coordinator.setProjectAgent(proj.id, restoredAgent);
@@ -128,6 +145,7 @@ webhookServer.setAgentCount(supervisor.getAgentStatuses().length);
 webhookServer.setAgentSupervisor(supervisor);
 webhookServer.setStorageProvider(storage);
 webhookServer.setApprovalManager(approvalManager);
+webhookServer.setIdentityStore(identityStore);
 
 // Give webhook server ability to dynamically create agents
 webhookServer.setAgentFactory({
@@ -135,8 +153,10 @@ webhookServer.setAgentFactory({
     const newAgent = new ProjectAgent(
       { id: newAgentId, type: "project", projectId: newProjectId, autonomyLevel: 1 },
       storage,
-      approvalManager
+      approvalManager,
+      vectorStore
     );
+    newAgent.setIdentityStore(identityStore);
     await supervisor.spawnAgent(newProjectId, newAgent);
     // Register with coordinator for multi-project routing
     coordinator.registerProject(newProjectId, newProjectId, newAgentId);

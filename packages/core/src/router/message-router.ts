@@ -123,7 +123,7 @@ export class MessageRouter {
   /** Known command words that should never be treated as project aliases */
   private static readonly RESERVED_WORDS = new Set([
     "status", "help", "instruct", "fix", "deploy", "rollback",
-    "approve", "autonomy", "logs", "link", "unlink", "review", "kill",
+    "approve", "autonomy", "logs", "link", "unlink", "review", "context", "memory", "kill",
   ]);
 
   /** Find a project agent by alias, partial project ID, or repo name fragment */

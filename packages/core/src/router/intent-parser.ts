@@ -66,6 +66,10 @@ const PATTERNS: PatternRule[] = [
     paramExtractor: (m) => ({ prNumber: m[1] || "" }),
   },
   {
+    type: "context",
+    pattern: /^(?:context|memory)$/i,
+  },
+  {
     type: "link",
     pattern: /^link\s+(https?:\/\/\S+|[\w-]+\/[\w.-]+)$/i,
     paramExtractor: (m) => ({ repo: m[1] }),
@@ -77,6 +81,15 @@ const PATTERNS: PatternRule[] = [
   {
     type: "kill",
     pattern: /^kill$/i,
+  },
+  {
+    type: "whoami",
+    pattern: /^whoami$/i,
+  },
+  {
+    type: "register",
+    pattern: /^register\s+(.+)$/i,
+    paramExtractor: (m) => ({ name: m[1] }),
   },
 ];
 

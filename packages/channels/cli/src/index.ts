@@ -13,7 +13,7 @@
  *   node packages/channels/cli/dist/index.js
  */
 
-import { MessageRouter, FileStorage, ApprovalManager } from "@codespar/core";
+import { MessageRouter, FileStorage, ApprovalManager, VectorStore } from "@codespar/core";
 import { AgentSupervisor } from "@codespar/agent-supervisor";
 import { ProjectAgent } from "@codespar/agent-project";
 import { CoordinatorAgent } from "@codespar/agent-coordinator";
@@ -43,13 +43,16 @@ async function main() {
   // 4b. Create shared ApprovalManager for deploy/rollback workflows
   const approvalManager = new ApprovalManager();
 
-  // 5. Spawn a Project Agent (L1 Notify) with storage and approval manager
+  // 4c. Create VectorStore for semantic memory
+  const vectorStore = new VectorStore();
+
+  // 5. Spawn a Project Agent (L1 Notify) with storage, approval manager, and vector memory
   const agent = new ProjectAgent({
     id: "agent-local",
     type: "project",
     projectId: "local-dev",
     autonomyLevel: 1,
-  }, storage, approvalManager);
+  }, storage, approvalManager, vectorStore);
   await supervisor.spawnAgent("local-dev", agent);
 
   // 6. Spawn Coordinator Agent (per-org, cross-project orchestration)

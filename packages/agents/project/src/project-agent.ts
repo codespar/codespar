@@ -23,7 +23,7 @@ import type {
   CIEvent,
 } from "@codespar/core";
 
-import { ApprovalManager } from "@codespar/core";
+import { ApprovalManager, VectorStore, IdentityStore } from "@codespar/core";
 import { TaskAgent } from "@codespar/agent-task";
 import { DeployAgent } from "@codespar/agent-deploy";
 import { ReviewAgent } from "@codespar/agent-review";
@@ -41,7 +41,10 @@ const COMMANDS_HELP = `Available commands:
   deploy [env]              — Trigger deployment
   rollback [env]            — Rollback last deploy
   approve [token]           — Approve pending action
-  autonomy [L0-L5]          — Set autonomy level`;
+  autonomy [L0-L5]          — Set autonomy level
+  memory                    — Show agent memory stats
+  whoami                    — Show your identity and linked channels
+  register <name>           — Register your display name`;
 
 export class ProjectAgent implements Agent {
   readonly config: AgentConfig;
@@ -52,19 +55,23 @@ export class ProjectAgent implements Agent {
   private reviewAgentCounter: number = 0;
   private incidentAgentCounter: number = 0;
   private storage: StorageProvider | null;
+  private vectorStore: VectorStore | null;
+  private identityStore: IdentityStore | null = null;
   private approvalManager: ApprovalManager;
   private deployAgent: DeployAgent;
 
   constructor(
     config: AgentConfig,
     storage?: StorageProvider,
-    approvalManager?: ApprovalManager
+    approvalManager?: ApprovalManager,
+    vectorStore?: VectorStore,
   ) {
     this.config = {
       ...config,
       type: "project",
     };
     this.storage = storage ?? null;
+    this.vectorStore = vectorStore ?? null;
     this.approvalManager = approvalManager ?? new ApprovalManager();
     this.deployAgent = new DeployAgent(
       {
@@ -75,6 +82,11 @@ export class ProjectAgent implements Agent {
       },
       this.approvalManager
     );
+  }
+
+  /** Attach a persistent identity store for cross-channel user resolution. */
+  setIdentityStore(store: IdentityStore): void {
+    this.identityStore = store;
   }
 
   get state(): AgentState {
@@ -162,16 +174,41 @@ export class ProjectAgent implements Agent {
         response = await this.delegateToReviewAgent(message, intent);
         break;
 
+      case "context":
+        response = this.handleMemoryStats();
+        break;
+
       case "instruct":
       case "fix": {
+        // Search vector memory for similar past tasks
+        let similarContext = "";
+        if (this.vectorStore) {
+          const similar = await this.vectorStore.search(
+            intent.rawText,
+            3,
+            "conversation",
+          );
+          const relevant = similar.filter((s) => s.score > 0.3);
+          if (relevant.length > 0) {
+            const lines = relevant.map(
+              (s) =>
+                `  - (${(s.score * 100).toFixed(0)}%) ${s.entry.content.split("\n")[0]}`,
+            );
+            similarContext = `\n\nSimilar past tasks found:\n${lines.join("\n")}`;
+          }
+        }
+
         if (this.shouldAutoExecute(intent)) {
           // L4+: auto-execute without confirmation, notify after
           const result = await this.delegateToTaskAgent(message, intent);
           response = {
-            text: `[${this.config.id}] Auto-executed (L${this.config.autonomyLevel} policy):\n${result.text}`,
+            text: `[${this.config.id}] Auto-executed (L${this.config.autonomyLevel} policy):\n${result.text}${similarContext}`,
           };
         } else {
-          response = await this.delegateToTaskAgent(message, intent);
+          const result = await this.delegateToTaskAgent(message, intent);
+          response = {
+            text: `${result.text}${similarContext}`,
+          };
         }
         break;
       }
@@ -257,6 +294,50 @@ export class ProjectAgent implements Agent {
         break;
       }
 
+      case "whoami": {
+        const identity = this.identityStore?.resolve(
+          message.channelType,
+          message.channelUserId,
+        );
+        if (identity) {
+          const channels = Array.from(identity.channelIdentities.entries())
+            .map(([type, id]) => `${type}: ${id}`)
+            .join(", ");
+          response = {
+            text: `[${this.config.id}] Identity: ${identity.displayName}\n  Role: ${identity.role}\n  Channels: ${channels}`,
+          };
+        } else {
+          response = {
+            text: `[${this.config.id}] Unknown identity. Use: register <your-name> to register.`,
+          };
+        }
+        break;
+      }
+
+      case "register": {
+        const name = intent.params.name;
+        if (!name) {
+          response = {
+            text: `[${this.config.id}] Usage: register <your-name>`,
+          };
+        } else if (!this.identityStore) {
+          response = {
+            text: `[${this.config.id}] Cannot register — no identity store configured.`,
+          };
+        } else {
+          const registered = await this.identityStore.registerUser({
+            displayName: name,
+            role: "operator",
+            channelType: message.channelType,
+            channelUserId: message.channelUserId,
+          });
+          response = {
+            text: `[${this.config.id}] Registered: ${registered.displayName} (${message.channelType}:${message.channelUserId})\n  Role: ${registered.role}\n  ID: ${registered.id}`,
+          };
+        }
+        break;
+      }
+
       case "kill":
         response = {
           text: `[${this.config.id}] Kill switch requires emergency_admin role.\n  (Kill switch coming in Phase 3)`,
@@ -269,6 +350,16 @@ export class ProjectAgent implements Agent {
           text: `[${this.config.id}] Unknown command: "${intent.rawText}"\n  Type "help" for available commands.`,
         };
         break;
+    }
+
+    // Store interaction in vector memory for future semantic search
+    if (this.vectorStore) {
+      await this.vectorStore.add({
+        agentId: this.config.id,
+        content: `Command: ${intent.rawText}\nResponse: ${response.text.slice(0, 200)}`,
+        category: "conversation",
+        metadata: { intent: intent.type, risk: intent.risk },
+      });
     }
 
     this._state = "IDLE";
@@ -418,6 +509,27 @@ export class ProjectAgent implements Agent {
     await incidentAgent.shutdown();
 
     return { text: report };
+  }
+
+  private handleMemoryStats(): ChannelResponse {
+    if (!this.vectorStore) {
+      return {
+        text: `[${this.config.id}] Memory: no vector store configured.`,
+      };
+    }
+
+    const stats = this.vectorStore.getStats();
+    const categories = ["conversation", "pattern", "code", "incident"];
+    const parts = categories
+      .filter((c) => (stats.byCategory[c] ?? 0) > 0 || c === "conversation")
+      .map(
+        (c) =>
+          `${c.charAt(0).toUpperCase() + c.slice(1)}: ${stats.byCategory[c] ?? 0}`,
+      );
+
+    return {
+      text: `[${this.config.id}] Memory: ${stats.total} entries\n  ${parts.join(" | ")}`,
+    };
   }
 
   private async handleLogs(intent: ParsedIntent): Promise<ChannelResponse> {

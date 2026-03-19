@@ -141,7 +141,10 @@ const INTENT_PERMISSION: Record<IntentType, Permission | null> = {
   link: "link_channel",
   unlink: "link_channel",
   review: "view_status",
+  context: "view_status",
   kill: "kill_switch",
+  whoami: null, // always allowed — shows your own identity
+  register: null, // always allowed — self-registration
   unknown: null, // always allowed — agent will respond with help text
 };
 

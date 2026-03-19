@@ -18,6 +18,8 @@ import type { AgentStatus, AgentState } from "../types/agent.js";
 import type { ChannelAdapter } from "../types/channel-adapter.js";
 import type { StorageProvider, ProjectConfig, ProjectListEntry } from "../storage/types.js";
 import type { ApprovalManager } from "../approval/approval-manager.js";
+import type { IdentityStore } from "../auth/identity-store.js";
+import type { ChannelType } from "../types/normalized-message.js";
 
 export interface WebhookServerConfig {
   port?: number;
@@ -50,6 +52,7 @@ export class WebhookServer {
   private storageProvider: StorageProvider | null = null;
   private approvalManager: ApprovalManager | null = null;
   private agentFactory: AgentFactory | null = null;
+  private identityStore: IdentityStore | null = null;
 
   constructor(config?: WebhookServerConfig) {
     this.port = config?.port ?? parseInt(process.env["PORT"] ?? "3000", 10);
@@ -79,6 +82,11 @@ export class WebhookServer {
   /** Set the agent factory for dynamically creating/removing agents */
   setAgentFactory(factory: AgentFactory): void {
     this.agentFactory = factory;
+  }
+
+  /** Set the identity store for resolving display names in audit entries */
+  setIdentityStore(store: IdentityStore): void {
+    this.identityStore = store;
   }
 
   /** Register a handler that will be called for every parsed CI event */
@@ -535,18 +543,30 @@ export class WebhookServer {
               );
 
         return {
-          entries: filtered.map((e) => ({
-            id: e.id,
-            ts: e.timestamp.toISOString(),
-            actor: e.actorId,
-            actorType: e.actorType,
-            action: e.action,
-            result: e.result,
-            detail: e.metadata?.["detail"] ?? "",
-            risk: e.metadata?.["risk"] ?? "low",
-            project: e.metadata?.["project"] ?? "unknown",
-            hash: e.metadata?.["hash"] ?? "",
-          })),
+          entries: filtered.map((e) => {
+            // Resolve display name from identity store when available
+            let displayName: string | undefined;
+            if (this.identityStore && e.actorType === "user") {
+              const channel = (e.metadata?.["channel"] as ChannelType) ?? "cli";
+              displayName = this.identityStore.getDisplayName(channel, e.actorId);
+              // Only include if it differs from the raw actorId
+              if (displayName === e.actorId) displayName = undefined;
+            }
+
+            return {
+              id: e.id,
+              ts: e.timestamp.toISOString(),
+              actor: e.actorId,
+              actorType: e.actorType,
+              displayName,
+              action: e.action,
+              result: e.result,
+              detail: e.metadata?.["detail"] ?? "",
+              risk: e.metadata?.["risk"] ?? "low",
+              project: e.metadata?.["project"] ?? "unknown",
+              hash: e.metadata?.["hash"] ?? "",
+            };
+          }),
           total: filtered.length,
         };
       }
