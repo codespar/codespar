@@ -11,12 +11,15 @@
  *   await server.start();
  */
 
+import * as fs from "node:fs/promises";
+import * as path from "node:path";
 import Fastify, { type FastifyInstance } from "fastify";
 import cors from "@fastify/cors";
 import { parseGitHubWebhook, type CIEvent } from "../webhooks/github-handler.js";
 import type { AgentStatus, AgentState } from "../types/agent.js";
 import type { ChannelAdapter } from "../types/channel-adapter.js";
 import type { StorageProvider, ProjectConfig, ProjectListEntry } from "../storage/types.js";
+import { FileStorage } from "../storage/file-storage.js";
 import type { ApprovalManager } from "../approval/approval-manager.js";
 import type { IdentityStore } from "../auth/identity-store.js";
 import type { ChannelType } from "../types/normalized-message.js";
@@ -53,6 +56,8 @@ export class WebhookServer {
   private approvalManager: ApprovalManager | null = null;
   private agentFactory: AgentFactory | null = null;
   private identityStore: IdentityStore | null = null;
+  private storageBaseDir: string = ".codespar";
+  private orgStorageCache: Map<string, StorageProvider> = new Map();
 
   constructor(config?: WebhookServerConfig) {
     this.port = config?.port ?? parseInt(process.env["PORT"] ?? "3000", 10);
@@ -87,6 +92,37 @@ export class WebhookServer {
   /** Set the identity store for resolving display names in audit entries */
   setIdentityStore(store: IdentityStore): void {
     this.identityStore = store;
+  }
+
+  /** Set the base directory used for org-scoped file storage */
+  setStorageBaseDir(baseDir: string): void {
+    this.storageBaseDir = baseDir;
+  }
+
+  /**
+   * Get org ID from the x-org-id header, falling back to "default".
+   * When orgId is "default", the root (legacy) storage is used.
+   */
+  private getOrgId(request: { headers: Record<string, string | string[] | undefined> }): string {
+    return (request.headers["x-org-id"] as string) || "default";
+  }
+
+  /**
+   * Get a StorageProvider scoped to the given org.
+   * Returns the root storage provider for "default" org (backward compatible).
+   * Creates org-scoped FileStorage instances for named orgs, cached per orgId.
+   */
+  private getOrgStorage(orgId: string): StorageProvider {
+    if (orgId === "default" && this.storageProvider) {
+      return this.storageProvider;
+    }
+
+    let storage = this.orgStorageCache.get(orgId);
+    if (!storage) {
+      storage = new FileStorage(this.storageBaseDir, orgId);
+      this.orgStorageCache.set(orgId, storage);
+    }
+    return storage;
   }
 
   /** Register a handler that will be called for every parsed CI event */
@@ -253,7 +289,7 @@ export class WebhookServer {
 
     // ── Multi-project management ──
 
-    // Create a new project (spawns a new Project Agent)
+    // Create a new project (spawns a new Project Agent, org-scoped)
     this.app.post<{ Body: { repo: string; name?: string } }>(
       "/api/projects",
       async (request, reply) => {
@@ -263,9 +299,8 @@ export class WebhookServer {
           return reply.status(400).send({ error: "repo is required in 'owner/repo' format" });
         }
 
-        if (!this.storageProvider) {
-          return reply.status(500).send({ error: "Storage not configured" });
-        }
+        const orgId = this.getOrgId(request);
+        const storage = this.getOrgStorage(orgId);
 
         if (!this.agentFactory) {
           return reply.status(500).send({ error: "Agent factory not configured" });
@@ -275,21 +310,22 @@ export class WebhookServer {
         const projectId = name ?? `${owner}-${repoName}`;
         const agentId = `agent-${projectId}`;
 
-        // Check if project already exists
-        const existingProjects = await this.storageProvider.getProjectsList();
+        // Check if project already exists within this org
+        const existingProjects = await storage.getProjectsList();
         if (existingProjects.some((p) => p.id === projectId)) {
           return reply.status(409).send({ error: `Project '${projectId}' already exists` });
         }
 
         try {
           await this.agentFactory.createAgent(projectId, agentId, repo);
-          await this.storageProvider.addProject({ id: projectId, agentId, repo });
+          await storage.addProject({ id: projectId, agentId, repo });
 
           const port = this.port;
           return {
             id: projectId,
             agentId,
             repo,
+            orgId,
             webhookUrl: `http://localhost:${port}/webhooks/github`,
           };
         } catch (err) {
@@ -299,27 +335,24 @@ export class WebhookServer {
       }
     );
 
-    // List all projects with their agents
-    this.app.get("/api/projects", async (_request, _reply) => {
-      if (!this.storageProvider) {
-        return { projects: [] };
-      }
+    // List all projects with their agents (org-scoped)
+    this.app.get("/api/projects", async (request, _reply) => {
+      const orgId = this.getOrgId(request);
+      const storage = this.getOrgStorage(orgId);
 
-      const projects = await this.storageProvider.getProjectsList();
+      const projects = await storage.getProjectsList();
       return { projects };
     });
 
-    // Remove a project (shuts down its agent)
+    // Remove a project (shuts down its agent, org-scoped)
     this.app.delete<{ Params: { id: string } }>(
       "/api/projects/:id",
       async (request, reply) => {
         const { id } = request.params;
+        const orgId = this.getOrgId(request);
+        const storage = this.getOrgStorage(orgId);
 
-        if (!this.storageProvider) {
-          return reply.status(500).send({ error: "Storage not configured" });
-        }
-
-        const projects = await this.storageProvider.getProjectsList();
+        const projects = await storage.getProjectsList();
         const project = projects.find((p) => p.id === id);
 
         if (!project) {
@@ -332,8 +365,8 @@ export class WebhookServer {
         }
 
         // Remove project config and list entry
-        await this.storageProvider.deleteProjectConfig(project.agentId);
-        await this.storageProvider.removeProject(id);
+        await storage.deleteProjectConfig(project.agentId);
+        await storage.removeProject(id);
 
         return { success: true, removed: id };
       }
@@ -519,20 +552,18 @@ export class WebhookServer {
       }
     );
 
-    // List audit entries
+    // List audit entries (org-scoped via x-org-id header)
     this.app.get<{ Querystring: { limit?: string; risk?: string } }>(
       "/api/audit",
       async (request, _reply) => {
         const limit = parseInt(request.query.limit ?? "20", 10);
         const riskFilter = request.query.risk ?? "all";
-
-        if (!this.storageProvider) {
-          return { entries: [], total: 0 };
-        }
+        const orgId = this.getOrgId(request);
+        const storage = this.getOrgStorage(orgId);
 
         // Query audit for all agents (empty string matches broad query)
         // FileStorage.queryAudit filters by actorId, so we query broadly
-        const entries = await this.storageProvider.queryAudit("", limit);
+        const entries = await storage.queryAudit("", limit);
 
         const filtered =
           riskFilter === "all"
@@ -568,6 +599,63 @@ export class WebhookServer {
             };
           }),
           total: filtered.length,
+        };
+      }
+    );
+
+    // ── Organization management ──────────────────────────────────
+
+    // Create a new organization (creates directory structure)
+    this.app.post<{ Body: { id: string; name?: string } }>(
+      "/api/orgs",
+      async (request, reply) => {
+        const { id, name } = request.body as { id?: string; name?: string };
+
+        if (!id) {
+          return reply.status(400).send({ error: "id is required" });
+        }
+
+        // Initialize the org storage (creates directory on first write)
+        const storage = this.getOrgStorage(id);
+        // Write an empty projects list to initialize the org directory
+        await storage.addProject({ id: "__init__", agentId: "__init__", repo: "__init__" });
+        await storage.removeProject("__init__");
+
+        return {
+          id,
+          name: name ?? id,
+          createdAt: new Date().toISOString(),
+        };
+      }
+    );
+
+    // List organizations (scan orgs directory)
+    this.app.get("/api/orgs", async (_request, _reply) => {
+      const orgsDir = path.resolve(this.storageBaseDir, "orgs");
+      try {
+        const entries = await fs.readdir(orgsDir, { withFileTypes: true });
+        const orgs = entries
+          .filter((e) => e.isDirectory())
+          .map((e) => ({ id: e.name, name: e.name }));
+        return { orgs };
+      } catch {
+        return { orgs: [] };
+      }
+    });
+
+    // Get organization details
+    this.app.get<{ Params: { id: string } }>(
+      "/api/orgs/:id",
+      async (request, _reply) => {
+        const { id } = request.params;
+        const storage = this.getOrgStorage(id);
+
+        const projects = await storage.getProjectsList();
+
+        return {
+          id,
+          name: id,
+          projects,
         };
       }
     );

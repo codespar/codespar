@@ -38,8 +38,15 @@ export class FileStorage implements StorageProvider {
   private readonly projectsPath: string;
   private readonly projectsListPath: string;
 
-  constructor(baseDir: string = ".codespar") {
-    this.dir = path.resolve(baseDir);
+  /**
+   * @param baseDir  Root storage directory (default ".codespar")
+   * @param orgId    Optional organization ID for multi-tenant scoping.
+   *                 When provided, data is stored under `baseDir/orgs/<orgId>/`.
+   *                 When omitted, data is stored directly in `baseDir/` (legacy).
+   */
+  constructor(baseDir: string = ".codespar", orgId?: string) {
+    const dir = orgId ? path.join(baseDir, "orgs", orgId) : baseDir;
+    this.dir = path.resolve(dir);
     this.memoryPath = path.join(this.dir, "memory.json");
     this.auditPath = path.join(this.dir, "audit.json");
     this.projectsPath = path.join(this.dir, "projects.json");
