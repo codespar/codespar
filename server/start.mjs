@@ -146,6 +146,7 @@ webhookServer.setAgentSupervisor(supervisor);
 webhookServer.setStorageProvider(storage);
 webhookServer.setApprovalManager(approvalManager);
 webhookServer.setIdentityStore(identityStore);
+webhookServer.setVectorStore(vectorStore);
 
 // Give webhook server ability to dynamically create agents
 webhookServer.setAgentFactory({

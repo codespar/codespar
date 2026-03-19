@@ -22,6 +22,7 @@ import type { StorageProvider, ProjectConfig, ProjectListEntry } from "../storag
 import { FileStorage } from "../storage/file-storage.js";
 import type { ApprovalManager } from "../approval/approval-manager.js";
 import type { IdentityStore } from "../auth/identity-store.js";
+import type { VectorStore } from "../memory/vector-store.js";
 import type { ChannelType } from "../types/normalized-message.js";
 
 export interface WebhookServerConfig {
@@ -56,6 +57,7 @@ export class WebhookServer {
   private approvalManager: ApprovalManager | null = null;
   private agentFactory: AgentFactory | null = null;
   private identityStore: IdentityStore | null = null;
+  private vectorStore: VectorStore | null = null;
   private storageBaseDir: string = ".codespar";
   private orgStorageCache: Map<string, StorageProvider> = new Map();
 
@@ -92,6 +94,11 @@ export class WebhookServer {
   /** Set the identity store for resolving display names in audit entries */
   setIdentityStore(store: IdentityStore): void {
     this.identityStore = store;
+  }
+
+  /** Set the vector store for memory stats endpoint */
+  setVectorStore(store: VectorStore): void {
+    this.vectorStore = store;
   }
 
   /** Set the base directory used for org-scoped file storage */
@@ -379,9 +386,9 @@ export class WebhookServer {
         const { id } = request.params;
         const { action } = request.body as { action?: string };
 
-        if (!action || !["suspend", "resume", "restart"].includes(action)) {
+        if (!action || !["suspend", "resume", "restart", "set_autonomy"].includes(action)) {
           return reply.status(400).send({
-            error: "action must be 'suspend', 'resume', or 'restart'",
+            error: "action must be 'suspend', 'resume', 'restart', or 'set_autonomy'",
           });
         }
 
@@ -393,6 +400,41 @@ export class WebhookServer {
         const agentStatus = statuses.find((s) => s.id === id);
         if (!agentStatus) {
           return reply.status(404).send({ error: "Agent not found" });
+        }
+
+        if (action === "set_autonomy") {
+          const level = (request.body as { level?: number }).level;
+          if (typeof level !== "number" || level < 0 || level > 5) {
+            return reply.status(400).send({ error: "level must be 0-5" });
+          }
+
+          // Update agent autonomy level in memory
+          (agentStatus as unknown as Record<string, unknown>).autonomyLevel = level;
+
+          // Persist via storage
+          if (this.storageProvider) {
+            await this.storageProvider.setMemory(id, "autonomyLevel", level);
+            await this.storageProvider.appendAudit({
+              actorType: "user",
+              actorId: "dashboard",
+              action: "agent.set_autonomy",
+              result: "success",
+              metadata: {
+                agentId: id,
+                level,
+                detail: `Autonomy set to L${level} via dashboard`,
+              },
+            });
+          }
+
+          const labels = ["Passive", "Notify", "Suggest", "Auto-Low", "Auto-Med", "Full Auto"];
+          return {
+            success: true,
+            action: "set_autonomy",
+            agentId: id,
+            level,
+            label: labels[level] ?? "Unknown",
+          };
         }
 
         if (action === "restart") {
@@ -427,6 +469,38 @@ export class WebhookServer {
         }
 
         return { success: true, action, agentId: id, newState };
+      }
+    );
+
+    // ── Memory stats (vector store) ──
+    this.app.get("/api/memory", async (_request, _reply) => {
+      if (!this.vectorStore) {
+        return { total: 0, byCategory: {} };
+      }
+      return this.vectorStore.getStats();
+    });
+
+    // ── Identity lookup (by channel type + channel user ID) ──
+    this.app.get<{ Querystring: { channelType?: string; channelUserId?: string } }>(
+      "/api/identity",
+      async (request, _reply) => {
+        const channelType = request.query.channelType as ChannelType | undefined;
+        const channelUserId = request.query.channelUserId;
+
+        if (!channelType || !channelUserId || !this.identityStore) {
+          return null;
+        }
+
+        const identity = this.identityStore.resolve(channelType, channelUserId);
+        if (!identity) return null;
+
+        return {
+          displayName: identity.displayName,
+          role: identity.role,
+          channels: Array.from(identity.channelIdentities.entries()).map(
+            ([type, id]) => ({ type, id }),
+          ),
+        };
       }
     );
 
@@ -596,6 +670,8 @@ export class WebhookServer {
               risk: e.metadata?.["risk"] ?? "low",
               project: e.metadata?.["project"] ?? "unknown",
               hash: e.metadata?.["hash"] ?? "",
+              classifiedBy: e.metadata?.["classifiedBy"] ?? undefined,
+              confidence: e.metadata?.["confidence"] ?? undefined,
             };
           }),
           total: filtered.length,

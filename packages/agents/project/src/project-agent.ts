@@ -149,6 +149,8 @@ export class ProjectAgent implements Agent {
           channel: message.channelType,
           channelId: message.channelId,
           risk: intent.risk,
+          classifiedBy: intent.confidence < 1.0 ? "nlu" : "regex",
+          confidence: intent.confidence,
         },
       });
     }
