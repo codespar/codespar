@@ -32,11 +32,9 @@ const COMMANDS_HELP = `Available commands:
   status [build|agent|all]  — Query current status
   help                      — Show this help
   logs [n]                  — Show recent activity
-  link <repo-url>           — Link a GitHub repo (maintainer+)
-  unlink                    — Remove current project link (maintainer+)
-
-Coming soon:
-  instruct [task]           — Instruct agent to execute
+  link <repo-url>           — Link a GitHub repo
+  unlink                    — Remove current project link
+  instruct [task]           — Execute a coding task
   fix [issue]               — Investigate and propose fix
   review PR #<number>       — Review a pull request
   deploy [env]              — Trigger deployment

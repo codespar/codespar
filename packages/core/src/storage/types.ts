@@ -32,6 +32,13 @@ export interface ProjectConfig {
   webhookConfigured: boolean;
 }
 
+export interface ProjectListEntry {
+  id: string;
+  agentId: string;
+  repo: string;
+  createdAt: string;
+}
+
 export interface StorageProvider {
   // Agent memory
   getMemory(agentId: string, key: string): Promise<unknown | null>;
@@ -42,6 +49,11 @@ export interface StorageProvider {
   getProjectConfig(agentId: string): Promise<ProjectConfig | null>;
   setProjectConfig(agentId: string, config: ProjectConfig): Promise<void>;
   deleteProjectConfig(agentId: string): Promise<void>;
+
+  // Projects list
+  getProjectsList(): Promise<ProjectListEntry[]>;
+  addProject(project: Omit<ProjectListEntry, "createdAt">): Promise<void>;
+  removeProject(id: string): Promise<void>;
 
   // Audit log
   appendAudit(

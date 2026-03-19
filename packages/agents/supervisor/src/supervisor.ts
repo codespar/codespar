@@ -106,6 +106,18 @@ export class AgentSupervisor {
     return undefined;
   }
 
+  /** Remove an agent: shut it down, unregister from router */
+  async removeAgent(projectId: string): Promise<boolean> {
+    const agent = this.agents.get(projectId);
+    if (!agent) return false;
+    console.log(`[supervisor] Removing agent ${agent.config.id} (project: ${projectId})`);
+    await agent.shutdown();
+    this.router.unregisterAgent(projectId);
+    this.agents.delete(projectId);
+    console.log(`[supervisor] Agent ${agent.config.id} removed`);
+    return true;
+  }
+
   /** Re-initialize an agent (shutdown + initialize) */
   async restartAgent(agentId: string): Promise<boolean> {
     const agent = this.getAgentById(agentId);

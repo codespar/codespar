@@ -29,6 +29,7 @@ export type {
   AgentMemory,
   AuditEntry,
   ProjectConfig,
+  ProjectListEntry,
   StorageProvider,
 } from "./storage/index.js";
 
@@ -65,6 +66,7 @@ export type {
   WebhookServerConfig,
   CIEventHandler,
   AgentStatusProvider,
+  AgentFactory,
 } from "./server/webhook-server.js";
 export { WebhookServer } from "./server/webhook-server.js";
 

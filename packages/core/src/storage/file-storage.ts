@@ -12,7 +12,7 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { randomUUID } from "node:crypto";
-import type { AgentMemory, AuditEntry, ProjectConfig, StorageProvider } from "./types.js";
+import type { AgentMemory, AuditEntry, ProjectConfig, ProjectListEntry, StorageProvider } from "./types.js";
 
 /** Serializable shape stored in memory.json */
 interface MemoryFile {
@@ -36,12 +36,14 @@ export class FileStorage implements StorageProvider {
   private readonly memoryPath: string;
   private readonly auditPath: string;
   private readonly projectsPath: string;
+  private readonly projectsListPath: string;
 
   constructor(baseDir: string = ".codespar") {
     this.dir = path.resolve(baseDir);
     this.memoryPath = path.join(this.dir, "memory.json");
     this.auditPath = path.join(this.dir, "audit.json");
     this.projectsPath = path.join(this.dir, "projects.json");
+    this.projectsListPath = path.join(this.dir, "projects-list.json");
   }
 
   // ── Agent Memory ───────────────────────────────────────────────
@@ -97,6 +99,26 @@ export class FileStorage implements StorageProvider {
     const data = await this.readProjectsFile();
     delete data[agentId];
     await this.writeFile(this.projectsPath, data);
+  }
+
+  // ── Projects List ────────────────────────────────────────────
+
+  async getProjectsList(): Promise<ProjectListEntry[]> {
+    return this.readProjectsListFile();
+  }
+
+  async addProject(project: Omit<ProjectListEntry, "createdAt">): Promise<void> {
+    const list = await this.readProjectsListFile();
+    const existing = list.find((p) => p.id === project.id);
+    if (existing) return; // idempotent
+    list.push({ ...project, createdAt: new Date().toISOString() });
+    await this.writeFile(this.projectsListPath, list);
+  }
+
+  async removeProject(id: string): Promise<void> {
+    const list = await this.readProjectsListFile();
+    const filtered = list.filter((p) => p.id !== id);
+    await this.writeFile(this.projectsListPath, filtered);
   }
 
   // ── Audit Log ──────────────────────────────────────────────────
@@ -156,6 +178,15 @@ export class FileStorage implements StorageProvider {
       return JSON.parse(raw) as ProjectsFile;
     } catch {
       return {};
+    }
+  }
+
+  private async readProjectsListFile(): Promise<ProjectListEntry[]> {
+    try {
+      const raw = await fs.readFile(this.projectsListPath, "utf-8");
+      return JSON.parse(raw) as ProjectListEntry[];
+    } catch {
+      return [];
     }
   }
 

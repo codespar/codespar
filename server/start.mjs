@@ -94,10 +94,27 @@ coordinator.registerProject("default", projectId, agentId);
 coordinator.setProjectAgent("default", agent);
 await supervisor.spawnAgent("_coordinator", coordinator);
 
-// 5. Start supervisor
+// 5. Restore saved projects
+const savedProjects = await storage.getProjectsList();
+for (const proj of savedProjects) {
+  if (proj.agentId === agentId) continue; // skip default
+  try {
+    const restoredAgent = new ProjectAgent(
+      { id: proj.agentId, type: "project", projectId: proj.id, autonomyLevel: 1 },
+      storage,
+      approvalManager
+    );
+    await supervisor.spawnAgent(proj.id, restoredAgent);
+    console.log(`[server] Restored project: ${proj.repo} → ${proj.agentId}`);
+  } catch (err) {
+    console.error(`[server] Failed to restore ${proj.repo}:`, err.message);
+  }
+}
+
+// 6. Start supervisor
 await supervisor.start();
 
-// 6. Start webhook server
+// 7. Start webhook server
 const webhookServer = new WebhookServer({ port });
 
 webhookServer.onCIEvent(async (event) => {
@@ -105,16 +122,38 @@ webhookServer.onCIEvent(async (event) => {
   console.log(`[server] CI event: ${event.type} \u2014 ${event.status}`);
 });
 
-webhookServer.setAgentCount(2);
+webhookServer.setAgentCount(supervisor.getAgentStatuses().length);
 webhookServer.setAgentSupervisor(supervisor);
 webhookServer.setStorageProvider(storage);
 webhookServer.setApprovalManager(approvalManager);
+
+// Give webhook server ability to dynamically create agents
+webhookServer.setAgentFactory({
+  async createAgent(newProjectId, newAgentId, repo) {
+    const newAgent = new ProjectAgent(
+      { id: newAgentId, type: "project", projectId: newProjectId, autonomyLevel: 1 },
+      storage,
+      approvalManager
+    );
+    await supervisor.spawnAgent(newProjectId, newAgent);
+    // Link repo config
+    await storage.setProjectConfig(newAgentId, {
+      repoUrl: `https://github.com/${repo}`,
+      repoOwner: repo.split("/")[0],
+      repoName: repo.split("/")[1],
+      linkedAt: new Date().toISOString(),
+      linkedBy: "dashboard",
+      webhookConfigured: false,
+    });
+  }
+});
+
 await webhookServer.start();
 
 console.log(`[server] Webhook server on port ${port}`);
 console.log("[server] Ready.\n");
 
-// 7. Graceful shutdown
+// 8. Graceful shutdown
 const shutdown = async () => {
   console.log("\n[server] Shutting down...");
   await webhookServer.stop();

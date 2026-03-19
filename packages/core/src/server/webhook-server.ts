@@ -16,7 +16,7 @@ import cors from "@fastify/cors";
 import { parseGitHubWebhook, type CIEvent } from "../webhooks/github-handler.js";
 import type { AgentStatus, AgentState } from "../types/agent.js";
 import type { ChannelAdapter } from "../types/channel-adapter.js";
-import type { StorageProvider, ProjectConfig } from "../storage/types.js";
+import type { StorageProvider, ProjectConfig, ProjectListEntry } from "../storage/types.js";
 import type { ApprovalManager } from "../approval/approval-manager.js";
 
 export interface WebhookServerConfig {
@@ -31,6 +31,12 @@ export interface AgentStatusProvider {
   getAgentStatuses(): AgentStatus[];
   getAdapters?(): ChannelAdapter[];
   restartAgent?(agentId: string): Promise<boolean>;
+  removeAgent?(projectId: string): Promise<boolean>;
+}
+
+/** Interface for dynamically creating and removing agents */
+export interface AgentFactory {
+  createAgent(projectId: string, agentId: string, repo: string): Promise<void>;
 }
 
 export class WebhookServer {
@@ -43,6 +49,7 @@ export class WebhookServer {
   private agentSupervisor: AgentStatusProvider | null = null;
   private storageProvider: StorageProvider | null = null;
   private approvalManager: ApprovalManager | null = null;
+  private agentFactory: AgentFactory | null = null;
 
   constructor(config?: WebhookServerConfig) {
     this.port = config?.port ?? parseInt(process.env["PORT"] ?? "3000", 10);
@@ -67,6 +74,11 @@ export class WebhookServer {
   /** Set the approval manager for voting endpoints */
   setApprovalManager(manager: ApprovalManager): void {
     this.approvalManager = manager;
+  }
+
+  /** Set the agent factory for dynamically creating/removing agents */
+  setAgentFactory(factory: AgentFactory): void {
+    this.agentFactory = factory;
   }
 
   /** Register a handler that will be called for every parsed CI event */
@@ -228,6 +240,94 @@ export class WebhookServer {
         await this.storageProvider.setProjectConfig(agentId, config);
 
         return { success: true, config };
+      }
+    );
+
+    // ── Multi-project management ──
+
+    // Create a new project (spawns a new Project Agent)
+    this.app.post<{ Body: { repo: string; name?: string } }>(
+      "/api/projects",
+      async (request, reply) => {
+        const { repo, name } = request.body as { repo?: string; name?: string };
+
+        if (!repo || !repo.includes("/")) {
+          return reply.status(400).send({ error: "repo is required in 'owner/repo' format" });
+        }
+
+        if (!this.storageProvider) {
+          return reply.status(500).send({ error: "Storage not configured" });
+        }
+
+        if (!this.agentFactory) {
+          return reply.status(500).send({ error: "Agent factory not configured" });
+        }
+
+        const [owner, repoName] = repo.split("/");
+        const projectId = name ?? `${owner}-${repoName}`;
+        const agentId = `agent-${projectId}`;
+
+        // Check if project already exists
+        const existingProjects = await this.storageProvider.getProjectsList();
+        if (existingProjects.some((p) => p.id === projectId)) {
+          return reply.status(409).send({ error: `Project '${projectId}' already exists` });
+        }
+
+        try {
+          await this.agentFactory.createAgent(projectId, agentId, repo);
+          await this.storageProvider.addProject({ id: projectId, agentId, repo });
+
+          const port = this.port;
+          return {
+            id: projectId,
+            agentId,
+            repo,
+            webhookUrl: `http://localhost:${port}/webhooks/github`,
+          };
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          return reply.status(500).send({ error: `Failed to create project: ${msg}` });
+        }
+      }
+    );
+
+    // List all projects with their agents
+    this.app.get("/api/projects", async (_request, _reply) => {
+      if (!this.storageProvider) {
+        return { projects: [] };
+      }
+
+      const projects = await this.storageProvider.getProjectsList();
+      return { projects };
+    });
+
+    // Remove a project (shuts down its agent)
+    this.app.delete<{ Params: { id: string } }>(
+      "/api/projects/:id",
+      async (request, reply) => {
+        const { id } = request.params;
+
+        if (!this.storageProvider) {
+          return reply.status(500).send({ error: "Storage not configured" });
+        }
+
+        const projects = await this.storageProvider.getProjectsList();
+        const project = projects.find((p) => p.id === id);
+
+        if (!project) {
+          return reply.status(404).send({ error: `Project '${id}' not found` });
+        }
+
+        // Shut down the agent via the supervisor
+        if (this.agentSupervisor?.removeAgent) {
+          await this.agentSupervisor.removeAgent(id);
+        }
+
+        // Remove project config and list entry
+        await this.storageProvider.deleteProjectConfig(project.agentId);
+        await this.storageProvider.removeProject(id);
+
+        return { success: true, removed: id };
       }
     );
 
