@@ -67,36 +67,24 @@ export class SlackAdapter implements ChannelAdapter {
     const authResult = await this.app.client.auth.test({ token });
     this.botUserId = (authResult.user_id as string) || null;
 
-    // Register the internal message listener
+    // DMs only — handle direct messages to the bot
     this.app.message(async ({ message, say }) => {
-      // Only handle standard user messages (not bot messages, edits, etc.)
       const msg = message as SlackMessageEvent;
       if (msg.subtype) return;
       if (!msg.text) return;
 
-      // Only process messages that mention the bot or are DMs
+      // Only process DMs (channel @mentions handled by app_mention event)
       const isDM = msg.channel_type === "im";
-      const mentionPattern = this.botUserId ? `<@${this.botUserId}>` : null;
-      const isMentioningBot = mentionPattern
-        ? msg.text.includes(mentionPattern)
-        : false;
-
-      if (!isDM && !isMentioningBot) return;
-
-      // Strip the bot mention from the text
-      let cleanText = msg.text;
-      if (mentionPattern) {
-        cleanText = cleanText.replace(new RegExp(mentionPattern, "g"), "").trim();
-      }
+      if (!isDM) return;
 
       const normalized: NormalizedMessage = {
         id: randomUUID(),
         channelType: "slack",
         channelId: msg.channel,
         channelUserId: msg.user ?? "unknown",
-        isDM,
-        isMentioningBot: isDM || isMentioningBot,
-        text: cleanText,
+        isDM: true,
+        isMentioningBot: true,
+        text: msg.text.trim(),
         threadId: msg.thread_ts,
         timestamp: new Date(parseFloat(msg.ts) * 1000),
       };
@@ -104,12 +92,11 @@ export class SlackAdapter implements ChannelAdapter {
       if (this.messageHandler) {
         await this.messageHandler(normalized);
       } else {
-        // Fallback: respond directly if handler not yet wired
         await say(`[codespar] Agent initializing. Try again in a moment.`);
       }
     });
 
-    // Also listen for app_mention events explicitly
+    // Channel @mentions — handle @CodeSpar in channels
     this.app.event("app_mention", async ({ event, say }) => {
       if (!this.messageHandler) {
         await say(`[codespar] Agent initializing. Try again in a moment.`);
