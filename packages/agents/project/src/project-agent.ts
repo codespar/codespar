@@ -289,12 +289,7 @@ export class ProjectAgent implements Agent {
     }
 
     const limit = intent.params.count ? parseInt(intent.params.count, 10) : 10;
-    const entries = await this.storage.queryAudit(
-      // Query by user actor IDs — show all activity for this agent
-      // queryAudit filters by actorId, so we query broadly using a known user
-      "local-user",
-      limit
-    );
+    const entries = await this.storage.queryAudit("", limit);
 
     if (entries.length === 0) {
       return {
