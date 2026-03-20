@@ -79,3 +79,7 @@ export type { ExecutionRequest, ExecutionResult } from "./execution/index.js";
 // Memory (Vector Store)
 export { VectorStore } from "./memory/index.js";
 export type { MemoryEntry, SearchResult } from "./memory/index.js";
+
+// AI (Smart Responder)
+export { generateSmartResponse } from "./ai/index.js";
+export type { AgentContext } from "./ai/index.js";

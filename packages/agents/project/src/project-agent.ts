@@ -23,7 +23,8 @@ import type {
   CIEvent,
 } from "@codespar/core";
 
-import { ApprovalManager, VectorStore, IdentityStore } from "@codespar/core";
+import { ApprovalManager, VectorStore, IdentityStore, generateSmartResponse } from "@codespar/core";
+import type { AgentContext } from "@codespar/core";
 import { TaskAgent } from "@codespar/agent-task";
 import { DeployAgent } from "@codespar/agent-deploy";
 import { ReviewAgent } from "@codespar/agent-review";
@@ -177,9 +178,31 @@ export class ProjectAgent implements Agent {
         response = await this.delegateToReviewAgent(message, intent);
         break;
 
-      case "context":
+      case "context": {
+        // If the original question is complex (long text, classified by NLU),
+        // try a smart response instead of just showing memory stats.
+        if (intent.rawText.length > 30 && intent.confidence < 1.0) {
+          const ctx = await this.buildAgentContext();
+          const smartResponse = await generateSmartResponse(intent.rawText, ctx);
+          if (smartResponse) {
+            response = {
+              text: `[${this.config.id}] ${smartResponse}`,
+            };
+            // Store smart conversation in vector memory
+            if (this.vectorStore) {
+              await this.vectorStore.add({
+                agentId: this.config.id,
+                content: `Q: ${intent.rawText}\nA: ${smartResponse.slice(0, 200)}`,
+                category: "conversation",
+                metadata: { type: "smart_response" },
+              });
+            }
+            break;
+          }
+        }
         response = this.handleMemoryStats();
         break;
+      }
 
       case "instruct":
       case "fix": {
@@ -348,11 +371,31 @@ export class ProjectAgent implements Agent {
         break;
 
       case "unknown":
-      default:
+      default: {
+        // Try smart response with Claude Sonnet for open-ended questions
+        const ctx = await this.buildAgentContext();
+        const smartResponse = await generateSmartResponse(intent.rawText, ctx);
+        if (smartResponse) {
+          response = {
+            text: `[${this.config.id}] ${smartResponse}`,
+          };
+          // Store smart conversation in vector memory
+          if (this.vectorStore) {
+            await this.vectorStore.add({
+              agentId: this.config.id,
+              content: `Q: ${intent.rawText}\nA: ${smartResponse.slice(0, 200)}`,
+              category: "conversation",
+              metadata: { type: "smart_response" },
+            });
+          }
+          break;
+        }
+        // Fallback to "unknown command"
         response = {
           text: `[${this.config.id}] Unknown command: "${intent.rawText}"\n  Type "help" for available commands.`,
         };
         break;
+      }
     }
 
     // Store interaction in vector memory for future semantic search
@@ -532,6 +575,45 @@ export class ProjectAgent implements Agent {
 
     return {
       text: `[${this.config.id}] Memory: ${stats.total} entries\n  ${parts.join(" | ")}`,
+    };
+  }
+
+  /**
+   * Build context about this agent's current state for the smart responder.
+   * Gathers status, recent audit, memory stats, and project info.
+   */
+  private async buildAgentContext(): Promise<AgentContext> {
+    const uptimeMs = Date.now() - this.startedAt.getTime();
+
+    const recentAudit = this.storage
+      ? (await this.storage.queryAudit("", 10)).map((e) => ({
+          action: e.action,
+          detail: String(e.metadata?.detail || e.metadata?.rawText || ""),
+          timestamp: e.timestamp.toISOString(),
+        }))
+      : [];
+
+    const memoryStats = this.vectorStore?.getStats() ?? {
+      total: 0,
+      byCategory: {},
+    };
+
+    let repoUrl: string | undefined;
+    if (this.storage) {
+      const config = await this.storage.getProjectConfig(this.config.id);
+      if (config) repoUrl = config.repoUrl;
+    }
+
+    return {
+      agentId: this.config.id,
+      projectId: this.config.projectId || "unknown",
+      repoUrl,
+      autonomyLevel: this.config.autonomyLevel,
+      tasksHandled: this.tasksHandled,
+      uptimeMinutes: Math.floor(uptimeMs / 60000),
+      recentAudit,
+      memoryStats,
+      linkedChannels: [],
     };
   }
 
