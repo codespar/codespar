@@ -66,8 +66,11 @@ export async function parseWithNLU(
     const data = (await res.json()) as {
       content?: Array<{ text?: string }>;
     };
-    const content = data.content?.[0]?.text;
+    let content = data.content?.[0]?.text;
     if (!content) return null;
+
+    // Strip markdown code fences if present (Haiku sometimes wraps in ```json```)
+    content = content.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "").trim();
 
     const parsed = JSON.parse(content) as {
       intent: string;
