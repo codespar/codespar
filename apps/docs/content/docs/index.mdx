@@ -19,7 +19,54 @@ CodeSpar is an open source, multi-agent platform that deploys autonomous AI codi
 
 ## How It Works
 
-CodeSpar follows a persistent + ephemeral agent architecture:
+### 1. You talk to your agent in any channel
+
+Just `@mention` your agent in Slack, WhatsApp, Discord, or Telegram — same syntax everywhere:
+
+```
+@codespar instruct add a health check endpoint at /api/health
+```
+
+### 2. The Dev Agent reads your code and creates a PR
+
+The agent reads your actual codebase via the GitHub API, sends the relevant files to Claude, and creates a pull request with the changes:
+
+```
+[agent-default] Task completed: task-1773970
+  Instruction: add a health check endpoint at /api/health
+  Duration: 12.3s
+
+  Changes applied to 1 file(s):
+    - app/api/health/route.ts
+
+  PR #1 created: https://github.com/your-org/your-repo/pull/1
+```
+
+### 3. The Review Agent analyzes the PR
+
+Automatically (or on demand), the Review Agent fetches the PR diff, classifies risk, and posts a detailed code review:
+
+```
+@codespar review PR #1
+```
+
+### 4. Your team approves from any channel
+
+A developer approves from WhatsApp what was requested in Slack. Cross-channel, token-based approval with quorum:
+
+```
+@codespar approve dp-abc123
+```
+
+### 5. Everything is audited
+
+Every action — from commands to approvals to deployments — is logged in an immutable, hash-chained audit trail.
+
+---
+
+### Architecture
+
+Under the hood, CodeSpar follows a persistent + ephemeral agent architecture:
 
 ```
 ┌─────────────────────────────────────────────────┐
@@ -36,30 +83,20 @@ CodeSpar follows a persistent + ephemeral agent architecture:
        │               │
        ▼               ▼
   ┌─────────┐    ┌─────────┐
-  │  Task   │    │ Review  │
+  │Dev/Task │    │ Review  │
   │  Agent  │    │  Agent  │
   └─────────┘    └─────────┘
   (ephemeral)    (ephemeral)
 ```
 
-### Project Agent (Persistent)
+- **Project Agent** (persistent) — your team's always-on interface. Monitors CI/CD, handles `@mention` commands, spawns ephemeral agents.
+- **Dev Agent** (ephemeral) — reads your codebase via GitHub API, sends context to Claude, creates branches and PRs with real code changes. [Learn more](/docs/agents/dev-agent)
+- **Review Agent** (ephemeral) — fetches PR diffs, classifies risk (low/medium/high), auto-approves low-risk at L3+. [Learn more](/docs/agents/review-agent)
+- **Deploy Agent** (ephemeral) — approval workflows with quorum, cross-channel voting, staging and production. [Learn more](/docs/agents/deploy-agent)
+- **Incident Agent** (ephemeral) — investigates build failures, correlates with recent changes, proposes fixes. [Learn more](/docs/agents/incident-agent)
+- **Coordinator** (persistent) — cross-project orchestration, cascading deploys, status aggregation. [Learn more](/docs/agents/coordinator-agent)
 
-Every linked repository gets a **Project Agent** that runs continuously. It monitors your CI/CD pipeline, listens for `@mention` commands in your messaging channels, and spawns ephemeral agents as needed. The Project Agent is your team's always-on interface to CodeSpar.
-
-### Ephemeral Agents
-
-When a task requires specialized work, the Project Agent spawns short-lived agents:
-
-| Agent | Purpose |
-|-------|---------|
-| **Task Agent** | Executes coding tasks inside sandboxed Docker containers — writes code, runs tests, creates PRs |
-| **Review Agent** | Analyzes pull requests for code quality, security issues, and style consistency |
-| **Deploy Agent** | Orchestrates deployments with approval workflows and health monitoring |
-| **Incident Agent** | Investigates production errors, performs root cause analysis, and proposes fixes |
-
-### Coordinator (Persistent)
-
-The **Coordinator** manages cross-project concerns — cascading deploys, shared dependency updates, and multi-repo orchestration.
+The agent also understands natural language in any language. Ask in Portuguese, Spanish, or English — it uses Claude Haiku for intent classification and Claude Sonnet for open-ended questions. [Learn more](/docs/commands/natural-language)
 
 ## Autonomy Levels
 
