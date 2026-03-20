@@ -145,7 +145,8 @@ export class ProjectAgent implements Agent {
         metadata: {
           agentId: this.config.id,
           rawText: intent.rawText,
-          detail: `${intent.type}: ${intent.rawText}`,
+          detail: intent.rawText,
+          project: this.config.projectId || "unknown",
           channel: message.channelType,
           channelId: message.channelId,
           risk: intent.risk,

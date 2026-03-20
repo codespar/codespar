@@ -133,16 +133,32 @@ export class FileStorage implements StorageProvider {
   async appendAudit(
     entry: Omit<AuditEntry, "id" | "timestamp">
   ): Promise<AuditEntry> {
+    const data = await this.readAuditFile();
+
+    // Generate hash chain: hash of previous entry + current data
+    const prevHash = data.entries.length > 0
+      ? (data.entries[data.entries.length - 1] as Record<string, unknown>).hash as string || "0000"
+      : "0000";
+    const entryId = randomUUID();
+    const hashInput = `${prevHash}:${entryId}:${entry.action}:${entry.actorId}`;
+    // Simple hash: first 12 chars of hex
+    let hash = 0;
+    for (let i = 0; i < hashInput.length; i++) {
+      hash = ((hash << 5) - hash + hashInput.charCodeAt(i)) | 0;
+    }
+    const hashHex = Math.abs(hash).toString(16).padStart(8, "0").slice(0, 8);
+    const chainHash = `${prevHash.slice(0, 4)}...${hashHex}`;
+
     const full: AuditEntry = {
       ...entry,
-      id: randomUUID(),
+      id: entryId,
       timestamp: new Date(),
     };
 
-    const data = await this.readAuditFile();
     data.entries.push({
       ...full,
       timestamp: full.timestamp.toISOString(),
+      hash: chainHash,
     });
     try {
       await this.writeFile(this.auditPath, data);
