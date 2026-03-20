@@ -16,11 +16,12 @@ export interface AgentMemory {
 export interface AuditEntry {
   id: string;
   timestamp: Date;
-  actorType: "user" | "agent";
+  actorType: "user" | "agent" | "system";
   actorId: string;
   action: string;
-  result: "success" | "failure" | "denied";
+  result: "success" | "failure" | "denied" | "pending" | "approved" | "error";
   metadata?: Record<string, unknown>;
+  hash?: string;
 }
 
 export interface ProjectConfig {
