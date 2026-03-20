@@ -1,0 +1,290 @@
+---
+title: Incident Agent
+description: The ephemeral agent that investigates CI failures and production errors — correlating errors with recent changes and suggesting fixes using Claude.
+---
+
+# Incident Agent
+
+The Incident Agent is an **automated investigator** that activates when things break. It's spawned automatically when a CI build fails or a production error is detected, and it correlates the failure with recent code changes to identify the likely cause and suggest a fix.
+
+## Characteristics
+
+| Property | Value |
+|----------|-------|
+| **Lifecycle** | Ephemeral — spawned per incident, terminates after investigation |
+| **Spawned by** | Project Agent, on CI failure events or manual `investigate` commands |
+| **AI Model** | Claude Sonnet (via ClaudeBridge) |
+| **Color** | Critical Red (`#EF4444`) |
+
+## When It Activates
+
+The Incident Agent is spawned in two scenarios:
+
+### 1. CI Build Failure (Automatic)
+
+When the Project Agent receives a `workflow_run` webhook event with `conclusion: "failure"`, it automatically spawns an Incident Agent:
+
+```typescript
+// In Project Agent
+async handleCIEvent(event: WorkflowRunEvent): Promise<void> {
+  if (event.conclusion === "failure") {
+    const incident = await this.supervisor.spawnAgent("incident", {
+      projectId: this.projectId,
+      context: {
+        workflowName: event.workflow_run.name,
+        branch: event.workflow_run.head_branch,
+        commit: event.workflow_run.head_sha,
+        logsUrl: event.workflow_run.logs_url,
+      },
+    });
+
+    const report = await incident.investigate();
+    await this.notifyChannel(report);
+  }
+}
+```
+
+### 2. Manual Investigation (User-Triggered)
+
+A team member can manually request an investigation:
+
+```
+@codespar investigate the build failure on main
+@codespar why did CI fail on PR #45?
+```
+
+## Investigation Flow
+
+```
+CI Build Failure
+       │
+       ▼
+┌─────────────────────┐
+│ Incident Agent       │
+│ spawned              │
+└──────────┬──────────┘
+           │
+           ▼
+┌─────────────────────┐
+│ 1. Fetch error logs  │  GitHub Actions logs, error output
+└──────────┬──────────┘
+           │
+           ▼
+┌─────────────────────┐
+│ 2. Get recent        │  Commits since last successful build
+│    changes           │
+└──────────┬──────────┘
+           │
+           ▼
+┌─────────────────────┐
+│ 3. Correlate         │  Match error patterns with changed files
+└──────────┬──────────┘
+           │
+           ▼
+┌─────────────────────┐
+│ 4. Analyze with      │  Send context to Claude for root cause
+│    Claude            │
+└──────────┬──────────┘
+           │
+           ▼
+┌─────────────────────┐
+│ 5. Generate report   │  Structured investigation report
+└─────────────────────┘
+```
+
+### Step 1: Fetch Error Logs
+
+The agent retrieves build logs from GitHub Actions:
+
+```typescript
+async fetchErrorLogs(context: IncidentContext): Promise<string> {
+  const logs = await this.github.getWorkflowRunLogs(
+    this.repo.owner,
+    this.repo.name,
+    context.runId
+  );
+
+  // Extract the relevant failure section
+  return extractFailureSection(logs);
+}
+```
+
+### Step 2: Get Recent Changes
+
+The agent fetches commits between the last successful build and the failed one:
+
+```typescript
+async getRecentChanges(context: IncidentContext): Promise<Commit[]> {
+  const lastSuccess = await this.github.getLastSuccessfulRun(
+    this.repo.owner,
+    this.repo.name,
+    context.workflowName,
+    context.branch
+  );
+
+  return this.github.compareCommits(
+    this.repo.owner,
+    this.repo.name,
+    lastSuccess.head_sha,
+    context.commit
+  );
+}
+```
+
+### Step 3: Correlate Errors with Changes
+
+The agent matches error patterns in the logs with files modified in recent commits:
+
+```typescript
+async correlate(
+  error: string,
+  changes: Commit[]
+): Promise<CorrelationResult> {
+  // Extract file paths and line numbers from error stack traces
+  const errorLocations = parseStackTrace(error);
+
+  // Find which recent commits touched those files
+  const suspectedCommits = changes.filter((commit) =>
+    commit.files.some((file) =>
+      errorLocations.some((loc) => loc.file === file.filename)
+    )
+  );
+
+  return {
+    errorLocations,
+    suspectedCommits,
+    confidence: suspectedCommits.length > 0 ? "high" : "low",
+  };
+}
+```
+
+### Step 4: Claude Analysis
+
+All gathered context is sent to Claude for root cause analysis:
+
+```typescript
+async analyzeWithClaude(context: FullIncidentContext): Promise<Analysis> {
+  return this.claudeBridge.analyze({
+    system: `You are a senior engineer investigating a build failure.
+             Analyze the error logs, recent code changes, and
+             correlation data to determine the root cause.
+             Be specific about which change likely caused the failure
+             and how to fix it.`,
+    content: {
+      error: context.errorLogs,
+      recentChanges: context.changes,
+      correlation: context.correlation,
+      workflowName: context.workflowName,
+      branch: context.branch,
+    },
+  });
+}
+```
+
+### Step 5: Generate Investigation Report
+
+The final output is a structured report:
+
+```typescript
+interface InvestigationReport {
+  /** The error message or failure description */
+  error: string;
+
+  /** Commits between last success and this failure */
+  recentChanges: Array<{
+    sha: string;
+    author: string;
+    message: string;
+    files: string[];
+  }>;
+
+  /** Most likely cause based on correlation + Claude analysis */
+  suspectedCause: string;
+
+  /** Recommended fix with code references */
+  suggestedFix: string;
+
+  /** Severity assessment */
+  severity: "low" | "medium" | "high" | "critical";
+}
+```
+
+## Example Investigation
+
+```
+CI: ❌ Build failed on main (workflow: "test-and-build")
+
+CodeSpar: 🔍 Investigating build failure...
+
+          📋 Investigation Report
+
+          ❌ Error:
+          TypeError: Cannot read property 'id' of undefined
+            at UserService.getProfile (src/services/user.ts:34)
+            at UserController.handle (src/controllers/user.ts:18)
+
+          📝 Recent Changes (since last passing build):
+          • abc1234 — @maria: "Refactor user service to use new DB schema"
+            Files: src/services/user.ts, src/models/user.ts
+          • def5678 — @joao: "Update API docs"
+            Files: docs/api.md
+
+          🎯 Suspected Cause:
+          Commit abc1234 by @maria changed the user query in
+          src/services/user.ts:30 to use `findOne()` instead of
+          `findById()`. The new query returns `null` when the user
+          doesn't exist, but line 34 accesses `.id` without a null
+          check.
+
+          🔧 Suggested Fix:
+          Add a null check in src/services/user.ts:34:
+          ```typescript
+          const user = await this.db.findOne({ email });
+          if (!user) {
+            throw new NotFoundError("User not found");
+          }
+          return user.id;
+          ```
+
+          ⚡ Severity: medium
+          (Test suite failure, no production impact)
+```
+
+## Severity Classification
+
+| Severity | Criteria | Example |
+|----------|----------|---------|
+| **Low** | Linter warnings, style check failures | ESLint errors, formatting issues |
+| **Medium** | Test failures, build errors | Unit test regression, compilation error |
+| **High** | Integration test failures, staging issues | API contract broken, database test failing |
+| **Critical** | Production-impacting errors | Runtime crash, data corruption, security flaw |
+
+## Interaction with Other Agents
+
+The Incident Agent can recommend follow-up actions that the Project Agent coordinates:
+
+```
+CodeSpar: 🔧 Suggested Fix available.
+
+          Options:
+          1. @codespar fix the null check in user.ts
+             (spawns Task Agent to implement the fix)
+          2. @codespar revert abc1234
+             (reverts the problematic commit)
+          3. Manually fix and push
+
+User: @codespar fix the null check in user.ts
+CodeSpar: 🔍 Task Agent spawned. Working on the fix...
+          ✅ PR #93 created: "Add null check in UserService.getProfile"
+```
+
+## Configuration
+
+The Incident Agent uses the same AI configuration as the Task Agent:
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `ANTHROPIC_API_KEY` | Yes | — | Anthropic API key for Claude analysis |
+| `GITHUB_TOKEN` | Yes | — | GitHub token for fetching logs and commits |
+
+No additional environment variables are required. The Incident Agent inherits its project context from the Project Agent that spawned it.

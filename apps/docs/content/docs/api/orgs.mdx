@@ -1,0 +1,251 @@
+---
+title: Organization API
+description: API endpoints for managing organizations in multi-tenant CodeSpar deployments, including creating orgs, listing orgs, and viewing org details with projects.
+---
+
+# Organization API
+
+CodeSpar supports multi-tenant deployments where multiple organizations share a single instance. Each organization has isolated projects, agents, and audit trails.
+
+## List Organizations
+
+Retrieve all organizations.
+
+```
+GET /api/orgs
+```
+
+### Request
+
+```bash
+curl http://localhost:3000/api/orgs
+```
+
+### Response
+
+```json
+[
+  {
+    "id": "org-acme-corp",
+    "name": "Acme Corp",
+    "slug": "acme-corp",
+    "projectCount": 3,
+    "memberCount": 12,
+    "createdAt": "2024-01-10T10:00:00Z"
+  },
+  {
+    "id": "org-globex",
+    "name": "Globex Inc",
+    "slug": "globex",
+    "projectCount": 1,
+    "memberCount": 5,
+    "createdAt": "2024-01-12T14:00:00Z"
+  }
+]
+```
+
+### Response Schema
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `id` | string | Unique organization identifier |
+| `name` | string | Display name |
+| `slug` | string | URL-safe slug |
+| `projectCount` | number | Number of projects in this org |
+| `memberCount` | number | Number of members |
+| `createdAt` | string | ISO 8601 creation timestamp |
+
+---
+
+## Create Organization
+
+Create a new organization.
+
+```
+POST /api/orgs
+```
+
+### Request Body
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `name` | string | Yes | Organization display name |
+| `slug` | string | No | URL-safe slug (auto-generated from name if omitted) |
+
+### Request
+
+```bash
+curl -X POST http://localhost:3000/api/orgs \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "Acme Corp",
+    "slug": "acme-corp"
+  }'
+```
+
+### Response
+
+```json
+{
+  "id": "org-acme-corp",
+  "name": "Acme Corp",
+  "slug": "acme-corp",
+  "projectCount": 0,
+  "memberCount": 0,
+  "createdAt": "2024-01-10T10:00:00Z",
+  "storageDir": ".codespar/orgs/org-acme-corp/"
+}
+```
+
+### Error Responses
+
+**Duplicate slug:**
+
+```json
+{
+  "error": "Organization with slug 'acme-corp' already exists",
+  "code": "ORG_ALREADY_EXISTS",
+  "status": 409
+}
+```
+
+**Missing name:**
+
+```json
+{
+  "error": "Organization name is required",
+  "code": "MISSING_FIELD",
+  "status": 400
+}
+```
+
+---
+
+## Get Organization Details
+
+Retrieve an organization's details including its projects.
+
+```
+GET /api/orgs/:id
+```
+
+### Request
+
+```bash
+curl http://localhost:3000/api/orgs/org-acme-corp
+```
+
+### Response
+
+```json
+{
+  "id": "org-acme-corp",
+  "name": "Acme Corp",
+  "slug": "acme-corp",
+  "projectCount": 3,
+  "memberCount": 12,
+  "createdAt": "2024-01-10T10:00:00Z",
+  "projects": [
+    {
+      "id": "proj-001",
+      "name": "codespar",
+      "repo": "acme/codespar",
+      "agentId": "agent-proj-abc123",
+      "agentStatus": "ACTIVE",
+      "autonomyLevel": 2,
+      "createdAt": "2024-01-15T13:30:00Z"
+    },
+    {
+      "id": "proj-002",
+      "name": "frontend",
+      "repo": "acme/frontend",
+      "agentId": "agent-proj-def456",
+      "agentStatus": "IDLE",
+      "autonomyLevel": 1,
+      "createdAt": "2024-01-16T09:00:00Z"
+    },
+    {
+      "id": "proj-003",
+      "name": "api-service",
+      "repo": "acme/api-service",
+      "agentId": "agent-proj-ghi789",
+      "agentStatus": "ACTIVE",
+      "autonomyLevel": 3,
+      "createdAt": "2024-01-17T10:00:00Z"
+    }
+  ],
+  "members": [
+    {
+      "identityId": "identity-001",
+      "displayName": "John Silva",
+      "role": "owner",
+      "joinedAt": "2024-01-10T10:00:00Z"
+    },
+    {
+      "identityId": "identity-002",
+      "displayName": "Alice Chen",
+      "role": "maintainer",
+      "joinedAt": "2024-01-11T09:00:00Z"
+    }
+  ]
+}
+```
+
+### Response Schema (Details)
+
+Includes all fields from the list response, plus:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `projects` | object[] | Array of projects in this org |
+| `projects[].id` | string | Project identifier |
+| `projects[].name` | string | Project display name |
+| `projects[].repo` | string | Linked GitHub repo |
+| `projects[].agentId` | string | Associated agent identifier |
+| `projects[].agentStatus` | string | Agent status: `ACTIVE`, `IDLE`, `SUSPENDED` |
+| `projects[].autonomyLevel` | number | Agent autonomy level (0–5) |
+| `projects[].createdAt` | string | ISO 8601 creation timestamp |
+| `members` | object[] | Array of org members |
+| `members[].identityId` | string | Member identity ID |
+| `members[].displayName` | string | Member display name |
+| `members[].role` | string | RBAC role within this org |
+| `members[].joinedAt` | string | When the member joined |
+
+### Error Response
+
+```json
+{
+  "error": "Organization not found",
+  "code": "ORG_NOT_FOUND",
+  "status": 404
+}
+```
+
+## File Storage Structure
+
+Each organization gets an isolated directory under the CodeSpar storage root:
+
+```
+.codespar/
+  orgs/
+    org-acme-corp/
+      projects/
+        proj-001/
+          context/        # Vector store data
+          audit/          # Audit log entries
+          config.json     # Project configuration
+        proj-002/
+          ...
+      members.json        # Organization members
+      config.json         # Organization configuration
+    org-globex/
+      ...
+```
+
+This ensures complete data isolation between organizations.
+
+## Next Steps
+
+- [Multi-Tenant Guide](/docs/guides/multi-tenant) — Setting up organizations
+- [Project API](/docs/api/projects) — Managing projects within orgs
+- [Security](/docs/configuration/security) — RBAC roles per organization

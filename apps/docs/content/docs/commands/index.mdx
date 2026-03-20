@@ -1,0 +1,544 @@
+---
+title: Command Reference
+description: Complete reference for all 17 CodeSpar agent commands, including syntax, risk levels, and usage examples.
+---
+
+# Command Reference
+
+CodeSpar agents respond to commands via `@codespar <command>` in any connected channel (WhatsApp, Slack, Discord, Telegram). Commands can also be sent through natural language — see [Natural Language Understanding](/docs/commands/natural-language) for details.
+
+## Command Syntax
+
+All commands follow the pattern:
+
+```
+@codespar <command> [arguments]
+```
+
+The `@codespar` mention prefix is required in group chats. In direct messages, you can omit it.
+
+## Risk Levels
+
+Every command has an assigned risk level that determines whether it requires approval at a given [autonomy level](/docs/commands/autonomy):
+
+| Risk Level | Color | Meaning |
+|------------|-------|---------|
+| **low** | 🟢 Green | Read-only or informational. Never requires approval. |
+| **medium** | 🟡 Amber | Modifies state or triggers work. May require approval depending on autonomy level. |
+| **high** | 🟠 Orange | Deploys or changes infrastructure. Requires approval at L0–L2. |
+| **critical** | 🔴 Red | Destructive or irreversible. Always requires approval (except L5 for non-production). |
+
+## All Commands
+
+| Command | Syntax | Risk | Description |
+|---------|--------|------|-------------|
+| `status` | `status [build\|agent\|all]` | low | Query current status of builds, agents, or both |
+| `help` | `help` | low | Show available commands and usage |
+| `logs` | `logs [n]` | low | Show recent activity log (default: 10 entries) |
+| `instruct` | `instruct <task>` | medium | Execute a coding task via Task Agent |
+| `fix` | `fix <issue>` | medium | Investigate an issue and propose a fix |
+| `review` | `review PR #<n>` | low | Review a specific pull request |
+| `prs` | `prs [open\|closed\|all]` | low | List pull requests for the linked repo |
+| `deploy` | `deploy [staging\|production]` | high | Trigger a deployment pipeline |
+| `rollback` | `rollback [staging\|production]` | critical | Rollback the last deployment |
+| `approve` | `approve [token]` | medium | Approve a pending action |
+| `autonomy` | `autonomy L<0-5>` | medium | Set the agent autonomy level |
+| `link` | `link <repo-url>` | medium | Link a GitHub repository to this project |
+| `unlink` | `unlink` | medium | Remove the current project link |
+| `context` / `memory` | `context` or `memory` | low | Show agent memory and vector store stats |
+| `whoami` | `whoami` | low | Show your identity and connected channels |
+| `register` | `register <name>` | low | Register or update your display name |
+| `kill` | `kill` | critical | Emergency kill switch — stops all agent activity |
+
+---
+
+## Command Details and Examples
+
+### status
+
+Query the current status of the linked project, builds, and agents.
+
+```
+@codespar status
+```
+
+**Example output:**
+
+```
+📊 Project Status
+─────────────────
+Project: codespar/codespar
+Branch: main
+Last build: ✅ passed (3m ago)
+Active agents: 1 (Project Agent)
+Autonomy: L1 (Notify)
+```
+
+With arguments:
+
+```
+@codespar status build
+```
+
+```
+🔨 Build Status
+─────────────────
+Last commit: abc1234 — "fix: resolve auth token refresh"
+CI: GitHub Actions
+Status: ✅ passed
+Duration: 2m 34s
+Triggered: 8 minutes ago
+```
+
+```
+@codespar status agent
+```
+
+```
+🤖 Agent Status
+─────────────────
+Project Agent: ACTIVE (uptime: 4h 22m)
+Task Agents: 0 running
+Review Agents: 0 running
+Deploy Agents: 0 running
+Incident Agents: 0 running
+Coordinator: IDLE
+```
+
+---
+
+### help
+
+Display all available commands with brief descriptions.
+
+```
+@codespar help
+```
+
+**Example output:**
+
+```
+📖 CodeSpar Commands
+─────────────────
+status [build|agent|all] — Query current status
+help — Show this message
+logs [n] — Show recent activity
+instruct <task> — Execute a coding task
+fix <issue> — Investigate and fix an issue
+review PR #<n> — Review a pull request
+prs [open|closed|all] — List pull requests
+deploy [staging|production] — Trigger deployment
+rollback [staging|production] — Rollback last deploy
+approve [token] — Approve pending action
+autonomy L<0-5> — Set autonomy level
+link <repo-url> — Link GitHub repo
+unlink — Remove project link
+context — Show agent memory stats
+whoami — Show your identity
+register <name> — Register display name
+kill — Emergency stop
+```
+
+---
+
+### logs
+
+Show recent activity entries from the audit log.
+
+```
+@codespar logs
+```
+
+Shows the last 10 entries by default. Pass a number to customize:
+
+```
+@codespar logs 25
+```
+
+**Example output:**
+
+```
+📋 Recent Activity (last 10)
+─────────────────
+[14:32] ✅ Build passed — main@abc1234
+[14:30] 🔨 Build started — main@abc1234
+[14:28] 📝 PR #42 reviewed — 2 suggestions
+[14:15] 🚀 Deploy to staging — completed
+[14:10] ✅ Approval received — deploy staging (by @john)
+[14:05] ⏳ Approval requested — deploy staging
+[13:50] 🔧 Task completed — "add rate limiting"
+[13:45] 📋 Task started — "add rate limiting"
+[13:30] 🔗 Repo linked — codespar/codespar
+[13:28] 👤 User registered — John (slack:U1234)
+```
+
+---
+
+### instruct
+
+Tell the Task Agent to execute a coding task. The agent clones the repo, makes changes in a Docker container, and opens a PR.
+
+```
+@codespar instruct add input validation to the /api/users endpoint
+```
+
+**Example output:**
+
+```
+🔧 Task Agent Started
+─────────────────
+Task: "add input validation to the /api/users endpoint"
+Agent: task-abc123
+Status: ACTIVE
+
+I'll analyze the endpoint and implement validation.
+Stand by for updates...
+```
+
+After completion:
+
+```
+✅ Task Completed
+─────────────────
+PR #47 opened: "feat: add input validation to /api/users"
+Files changed: 3
+Lines: +45 / -2
+Branch: codespar/add-input-validation
+
+Changes:
+• Added zod schema for user input
+• Added validation middleware
+• Added tests for invalid payloads
+```
+
+---
+
+### fix
+
+Investigate an issue and propose (or apply) a fix.
+
+```
+@codespar fix the auth token refresh is failing with 401 errors
+```
+
+**Example output:**
+
+```
+🔍 Investigating Issue
+─────────────────
+Issue: "auth token refresh failing with 401 errors"
+Agent: task-fix-def456
+
+Analyzing error patterns...
+Found: Token expiry check uses UTC but server returns local time.
+
+📝 Proposed Fix:
+• File: src/auth/token.ts (line 42)
+• Change: Use dayjs.utc() instead of dayjs()
+• Risk: low
+
+PR #48 opened: "fix: use UTC for token expiry comparison"
+```
+
+---
+
+### review
+
+Trigger a code review of a specific pull request.
+
+```
+@codespar review PR #42
+```
+
+**Example output:**
+
+```
+📝 PR Review — #42
+─────────────────
+Title: "feat: add rate limiting middleware"
+Author: @alice
+Files: 4 changed (+120 / -3)
+
+Review Summary:
+✅ Code quality: Good
+⚠️ 2 suggestions:
+  1. [src/middleware/rate-limit.ts:15] Consider using sliding window
+     instead of fixed window for more even distribution.
+  2. [src/middleware/rate-limit.ts:28] Missing error message in
+     RateLimitError — clients will see empty 429 response.
+
+🟡 Verdict: Approve with suggestions
+```
+
+---
+
+### prs
+
+List pull requests for the linked repository.
+
+```
+@codespar prs
+@codespar prs open
+@codespar prs closed
+@codespar prs all
+```
+
+**Example output:**
+
+```
+📋 Open Pull Requests (3)
+─────────────────
+#47 feat: add input validation — @codespar (2h ago)
+#45 fix: resolve memory leak in worker — @alice (1d ago)
+#43 chore: upgrade dependencies — @bob (3d ago)
+```
+
+---
+
+### deploy
+
+Trigger a deployment to staging or production. Production deploys always require approval.
+
+```
+@codespar deploy staging
+```
+
+**Example output:**
+
+```
+🚀 Deploy Requested
+─────────────────
+Target: staging
+Branch: main
+Commit: abc1234
+
+⏳ Waiting for approval...
+Approve with: @codespar approve dp-a1b2c3
+Expires in: 30 minutes
+```
+
+After approval:
+
+```
+✅ Deploy Complete
+─────────────────
+Target: staging
+Duration: 1m 45s
+URL: https://staging.example.com
+Health check: ✅ passing
+```
+
+---
+
+### rollback
+
+Rollback the last deployment. This is a critical-risk command and always requires approval.
+
+```
+@codespar rollback staging
+```
+
+**Example output:**
+
+```
+⚠️ Rollback Requested
+─────────────────
+Target: staging
+Rolling back to: previous deploy (commit def5678)
+
+⏳ Requires approval.
+Approve with: @codespar approve rb-x9y8z7
+```
+
+---
+
+### approve
+
+Approve a pending action. You can approve by referencing the token shown in the approval request, or approve the most recent pending action.
+
+```
+@codespar approve dp-a1b2c3
+```
+
+**Example output:**
+
+```
+✅ Approved
+─────────────────
+Action: deploy staging
+Approved by: John (slack:U1234)
+Executing now...
+```
+
+Without a token (approves the most recent pending action):
+
+```
+@codespar approve
+```
+
+---
+
+### autonomy
+
+Set the agent's autonomy level from L0 (passive) to L5 (full auto). See [Graduated Autonomy](/docs/commands/autonomy) for full details on each level.
+
+```
+@codespar autonomy L3
+```
+
+**Example output:**
+
+```
+🔧 Autonomy Updated
+─────────────────
+Previous: L1 (Notify)
+Current: L3 (Auto-Low)
+
+Auto-executing: status, help, logs, review
+Requires approval: instruct, fix, deploy, rollback
+```
+
+---
+
+### link
+
+Link a GitHub repository to the current project agent.
+
+```
+@codespar link codespar/codespar
+@codespar link https://github.com/codespar/codespar
+```
+
+**Example output:**
+
+```
+🔗 Repository Linked
+─────────────────
+Repo: codespar/codespar
+Branch: main (default)
+Webhook: ✅ configured
+Stars: 1,234
+Last commit: abc1234 (2h ago)
+```
+
+See the [Link a Repository](/docs/guides/link-repository) guide for prerequisites and details.
+
+---
+
+### unlink
+
+Remove the current repository link from the project agent.
+
+```
+@codespar unlink
+```
+
+**Example output:**
+
+```
+🔓 Repository Unlinked
+─────────────────
+Previous: codespar/codespar
+Webhook: removed
+Agent state: reset to IDLE
+```
+
+---
+
+### context / memory
+
+Show the agent's memory statistics, including vector store usage and conversation history.
+
+```
+@codespar context
+@codespar memory
+```
+
+Both commands are aliases and produce the same output.
+
+**Example output:**
+
+```
+🧠 Agent Memory
+─────────────────
+Vector store: 1,247 embeddings
+Storage used: 12.3 MB
+Conversations: 89 messages (last 30 days)
+Project context: 45 files indexed
+Last sync: 15 minutes ago
+```
+
+---
+
+### whoami
+
+Show your resolved identity across all connected channels.
+
+```
+@codespar whoami
+```
+
+**Example output:**
+
+```
+👤 Identity
+─────────────────
+Name: John Silva
+Role: maintainer
+Channels:
+  • Slack: @john (U1234ABCD)
+  • WhatsApp: +55 11 99999-0000
+  • Discord: john#1234
+Registered: 2024-01-15
+```
+
+---
+
+### register
+
+Register or update your display name for cross-channel identity.
+
+```
+@codespar register John Silva
+```
+
+**Example output:**
+
+```
+👤 Registered
+─────────────────
+Name: John Silva
+Channel: slack (U1234ABCD)
+You can now be identified across all channels.
+```
+
+---
+
+### kill
+
+Emergency kill switch. Immediately stops all running agents and pending actions. This is a critical-risk command and always requires approval (except from `emergency_admin` role).
+
+```
+@codespar kill
+```
+
+**Example output:**
+
+```
+🛑 EMERGENCY STOP
+─────────────────
+All agents: STOPPED
+Pending actions: CANCELLED (3 cancelled)
+Deploy in progress: ABORTED
+
+To resume: @codespar status
+Agent will restart in IDLE state.
+```
+
+---
+
+## Next Steps
+
+- [Natural Language Understanding](/docs/commands/natural-language) — Send commands in plain language
+- [Graduated Autonomy](/docs/commands/autonomy) — Control what agents do automatically
+- [Link a Repository](/docs/guides/link-repository) — Connect your GitHub repo

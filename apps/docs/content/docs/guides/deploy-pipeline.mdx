@@ -1,0 +1,364 @@
+---
+title: Deploy Pipeline
+description: How to orchestrate deployments with CodeSpar, including single-project deploys, approval flows, cross-channel approval, cascading deploys, and rollback procedures.
+---
+
+# Deploy Pipeline
+
+CodeSpar orchestrates deployments through its Deploy Agent, with built-in approval flows, cross-channel support, and rollback capabilities. Production deploys always require human approval, regardless of autonomy level.
+
+## Single Project Deploy
+
+### Deploy to Staging
+
+```
+@codespar deploy staging
+```
+
+**Behavior by autonomy level:**
+
+| Level | Behavior |
+|-------|----------|
+| L0–L4 | Approval required before deploy starts |
+| L5 | Auto-deploys to staging (no approval needed) |
+
+**Example flow:**
+
+```
+@alice: @codespar deploy staging
+
+@codespar:
+🚀 Deploy Requested
+─────────────────
+Target: staging
+Branch: main
+Commit: abc1234 — "feat: add rate limiting"
+
+⏳ Waiting for approval...
+Approve with: @codespar approve dp-a1b2c3
+Expires in: 30 minutes
+```
+
+### Deploy to Production
+
+Production deploys always require approval, even at L5:
+
+```
+@codespar deploy production
+```
+
+```
+🚀 Deploy Requested
+─────────────────
+Target: production
+Branch: main
+Commit: abc1234 — "feat: add rate limiting"
+
+⚠️ Production deploy — requires approval (safety guardrail).
+Approve with: @codespar approve dp-x9y8z7
+Expires in: 30 minutes
+```
+
+## Approval Flow
+
+### Standard Approval
+
+```
+@bob: @codespar approve dp-a1b2c3
+
+@codespar:
+✅ Approved
+─────────────────
+Action: deploy staging
+Approved by: Bob (slack:U5678EFGH)
+Executing now...
+```
+
+After deployment completes:
+
+```
+✅ Deploy Complete
+─────────────────
+Target: staging
+Branch: main
+Commit: abc1234
+Duration: 1m 45s
+URL: https://staging.example.com
+Health check: ✅ passing
+```
+
+### Self-Approval Blocking
+
+The person who requested the deploy cannot approve it:
+
+```
+@alice: @codespar deploy production
+@alice: @codespar approve dp-x9y8z7
+
+@codespar:
+❌ Cannot self-approve. Another team member must approve this action.
+```
+
+### Approval Without Token
+
+Approve the most recent pending action (when there is only one):
+
+```
+@bob: @codespar approve
+
+@codespar:
+✅ Approved
+─────────────────
+Action: deploy staging (dp-a1b2c3)
+Approved by: Bob (slack:U5678EFGH)
+Executing now...
+```
+
+### Expired Approvals
+
+Approval tokens expire after 30 minutes:
+
+```
+@bob: @codespar approve dp-a1b2c3
+
+@codespar:
+❌ Approval token expired (requested 45 minutes ago).
+Request the action again: @codespar deploy staging
+```
+
+## Cross-Channel Approval
+
+One of CodeSpar's key features is cross-channel approval: an action requested in one channel can be approved from another.
+
+### Example: Slack to WhatsApp
+
+```
+# In Slack:
+@alice: @codespar deploy production
+@codespar: ⏳ Approval required. Token: dp-x9y8z7
+
+# In WhatsApp (same user identity linked):
+@bob: @codespar approve dp-x9y8z7
+@codespar: ✅ Approved by Bob (whatsapp:5511999990000)
+```
+
+Both channels receive the deployment status updates.
+
+### Requirements for Cross-Channel Approval
+
+1. The approver must have a [linked identity](/docs/guides/multi-channel) across channels
+2. The approver must have sufficient [RBAC permissions](/docs/configuration/security) (operator role or higher)
+3. The approval token must not be expired
+
+## Cascading Deploys
+
+The Coordinator Agent can orchestrate multi-project deployments in sequence.
+
+### Syntax
+
+```
+@codespar deploy gw then front
+```
+
+This tells the Coordinator to:
+1. Deploy the `gw` (gateway) project to staging
+2. Wait for health check to pass
+3. Deploy the `front` (frontend) project to staging
+4. Report overall status
+
+### Example Flow
+
+```
+@alice: @codespar deploy gw then front
+
+@codespar:
+🔗 Cascading Deploy
+─────────────────
+Step 1/2: Deploy gw → staging
+Step 2/2: Deploy front → staging
+
+⏳ Approval required for cascading deploy.
+Approve with: @codespar approve cd-m3n4o5
+```
+
+After approval:
+
+```
+🔗 Cascading Deploy — Progress
+─────────────────
+Step 1/2: Deploy gw → staging
+  Status: ✅ deployed (1m 30s)
+  Health: ✅ passing
+
+Step 2/2: Deploy front → staging
+  Status: 🔄 deploying...
+```
+
+After completion:
+
+```
+🔗 Cascading Deploy — Complete
+─────────────────
+Step 1/2: gw → staging ✅ (1m 30s)
+Step 2/2: front → staging ✅ (2m 10s)
+
+Total duration: 3m 40s
+All services healthy.
+```
+
+### Cascading Deploy Failure
+
+If any step fails, the cascade stops and reports the failure:
+
+```
+🔗 Cascading Deploy — Failed
+─────────────────
+Step 1/2: gw → staging ✅ (1m 30s)
+Step 2/2: front → staging ❌ failed
+
+Error: Health check failed after deploy.
+Suggestion: Rollback front → @codespar rollback staging
+```
+
+## Rollback
+
+Rollback the last deployment to a previous version.
+
+```
+@codespar rollback staging
+```
+
+Rollback is a **critical-risk** action and always requires approval:
+
+```
+⚠️ Rollback Requested
+─────────────────
+Target: staging
+Rolling back to: previous deploy
+  Previous commit: def5678 — "fix: resolve auth issue"
+  Current commit: abc1234 — "feat: add rate limiting"
+
+⏳ Requires approval.
+Approve with: @codespar approve rb-q1w2e3
+```
+
+After approval:
+
+```
+✅ Rollback Complete
+─────────────────
+Target: staging
+Rolled back to: def5678
+Duration: 45s
+Health check: ✅ passing
+```
+
+### Production Rollback
+
+```
+@codespar rollback production
+```
+
+Same flow, but with additional safety messaging:
+
+```
+⚠️ PRODUCTION Rollback Requested
+─────────────────
+Target: production
+Rolling back to: previous deploy (def5678)
+
+This will affect live users. Ensure you have verified the issue.
+
+⏳ Requires approval.
+Approve with: @codespar approve rb-p7q8r9
+```
+
+## Deploy Status
+
+Check the status of a recent deploy:
+
+```
+@codespar status build
+```
+
+```
+🔨 Build Status
+─────────────────
+Last deploy: staging
+Status: ✅ healthy
+Commit: abc1234
+Deployed: 15 minutes ago
+URL: https://staging.example.com
+```
+
+## Audit Trail
+
+All deploy-related actions are logged in the [audit trail](/docs/api/audit):
+
+```bash
+curl "http://localhost:3000/api/audit?risk=high&limit=10"
+```
+
+Example entries:
+
+```json
+[
+  {
+    "action": "deploy",
+    "result": "completed",
+    "metadata": {
+      "target": "staging",
+      "commit": "abc1234",
+      "duration": 105,
+      "approvedBy": "slack:U5678EFGH"
+    }
+  },
+  {
+    "action": "rollback",
+    "result": "completed",
+    "metadata": {
+      "target": "staging",
+      "rolledBackTo": "def5678",
+      "duration": 45
+    }
+  }
+]
+```
+
+## RBAC Permissions
+
+| Role | Can Deploy | Can Rollback | Can Approve |
+|------|-----------|-------------|-------------|
+| `owner` | Yes | Yes | Yes |
+| `maintainer` | Yes | Yes | Yes |
+| `operator` | Yes | No | Yes |
+| `reviewer` | No | No | No |
+| `read-only` | No | No | No |
+| `emergency_admin` | Yes | Yes | Yes |
+
+## Troubleshooting
+
+### Deploy hangs at "waiting for approval"
+
+- Check that the approval token has not expired (30 minutes)
+- Verify the approver has sufficient RBAC permissions
+- Remember: self-approval is blocked by default
+
+### Deploy fails after approval
+
+- Check CodeSpar logs for deployment errors
+- Verify the CI/CD pipeline configuration
+- Check the target environment is reachable
+- Try rollback: `@codespar rollback staging`
+
+### Cascading deploy only deploys first service
+
+- Verify both project names are correct and linked
+- Check that the Coordinator Agent is active: `@codespar status agent`
+- Check logs for errors: `@codespar logs 20`
+
+## Next Steps
+
+- [Graduated Autonomy](/docs/commands/autonomy) — Configure auto-deploy levels
+- [Security](/docs/configuration/security) — RBAC and approval configuration
+- [Multi-Channel Setup](/docs/guides/multi-channel) — Cross-channel approvals

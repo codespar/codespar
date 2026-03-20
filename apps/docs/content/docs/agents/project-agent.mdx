@@ -1,0 +1,264 @@
+---
+title: Project Agent
+description: The persistent, always-on agent that manages each project — handling @mentions, delegating to specialist agents, and monitoring CI/CD events.
+---
+
+# Project Agent
+
+The Project Agent is the **persistent hub** for every CodeSpar project. There is exactly one Project Agent per project, and it runs continuously. It's the first agent to receive every @mention, CI event, and webhook — then it decides what to do: respond directly, delegate to a specialist agent, or auto-execute based on the project's autonomy level.
+
+## Characteristics
+
+| Property | Value |
+|----------|-------|
+| **Lifecycle** | Persistent — runs for the lifetime of the system |
+| **Cardinality** | One per project |
+| **State** | Maintains project context, linked repos, channel mappings |
+| **Color** | Signal Blue (`#3B82F6`) |
+
+## Responsibilities
+
+### 1. Command Parsing and Routing
+
+Every @mention is first received by the Project Agent. It parses the message to determine what the user is asking for and routes accordingly:
+
+```typescript
+async handleMessage(message: NormalizedMessage): Promise<AgentResponse> {
+  const command = parseCommand(message.text);
+
+  switch (command.type) {
+    case "task":
+      return this.delegateToTaskAgent(command);
+    case "review":
+      return this.delegateToReviewAgent(command);
+    case "deploy":
+      return this.delegateToDeployAgent(command);
+    case "status":
+      return this.getProjectStatus();
+    case "link":
+      return this.linkRepository(command);
+    case "config":
+      return this.updateConfiguration(command);
+    default:
+      return this.handleOpenQuestion(message);
+  }
+}
+```
+
+### 2. Delegation to Specialist Agents
+
+When a task requires specialized processing, the Project Agent spawns an ephemeral agent via the supervisor:
+
+```
+@codespar review PR #42
+  → Project Agent spawns Review Agent
+  → Review Agent fetches PR, analyzes code, returns review
+  → Project Agent relays the response to the channel
+
+@codespar fix the login timeout bug
+  → Project Agent spawns Task Agent
+  → Task Agent reads code, generates fix, creates PR
+  → Project Agent relays the result
+
+@codespar deploy staging
+  → Project Agent spawns Deploy Agent
+  → Deploy Agent manages approval flow, triggers deploy
+  → Project Agent relays status updates
+```
+
+### 3. Open Question Detection
+
+Not every message is a clear command. When the Project Agent can't match a message to a known command pattern, it treats it as an **open question** and sends it to Claude Sonnet for a smart, context-aware response:
+
+```
+@codespar why is the build slow lately?
+
+→ No command match
+→ Sends to Claude Sonnet with project context
+→ Returns an intelligent analysis based on recent CI data,
+  commit history, and known issues
+```
+
+This uses the `TASK_MODEL` (default: `claude-sonnet-4-20250514`) to generate responses that are aware of the project's repository, recent activity, and configuration.
+
+### 4. CI/CD Event Handling
+
+The Project Agent monitors GitHub webhook events and reacts based on the project's autonomy level:
+
+#### Workflow Run Events (`workflow_run`)
+
+When a CI build completes:
+
+```typescript
+async handleCIEvent(event: WorkflowRunEvent): Promise<void> {
+  if (event.conclusion === "failure") {
+    // Spawn Incident Agent to investigate
+    const incident = await this.supervisor.spawnAgent("incident", {
+      projectId: this.projectId,
+      context: { event },
+    });
+
+    const report = await incident.investigate();
+    await this.notifyChannel(report);
+  }
+
+  if (event.conclusion === "success") {
+    // At L3+, auto-deploy to staging
+    if (this.shouldAutoExecute("deploy-staging")) {
+      await this.delegateToDeployAgent({ target: "staging" });
+    }
+  }
+}
+```
+
+#### Pull Request Events (`pull_request`)
+
+When a PR is opened or updated:
+
+```typescript
+async handlePREvent(event: PullRequestEvent): Promise<void> {
+  if (event.action === "opened" || event.action === "synchronize") {
+    // At L2+, auto-trigger review
+    if (this.autonomyLevel >= 2) {
+      await this.delegateToReviewAgent({
+        prNumber: event.pull_request.number,
+      });
+    }
+  }
+}
+```
+
+#### Push Events (`push`)
+
+When code is pushed to a monitored branch:
+
+```typescript
+async handlePushEvent(event: PushEvent): Promise<void> {
+  // Notify the channel about the push
+  const summary = formatPushSummary(event);
+  await this.notifyChannel(summary);
+}
+```
+
+### 5. Auto-Execution Logic
+
+The Project Agent uses a `shouldAutoExecute` method to determine whether an action can be performed automatically or requires human approval:
+
+```typescript
+shouldAutoExecute(action: string): boolean {
+  const riskLevel = getRiskLevel(action);
+
+  // Safety guardrail: NEVER auto-execute high-risk actions
+  if (riskLevel === "critical") return false;
+
+  switch (this.autonomyLevel) {
+    case 0: // Passive
+    case 1: // Notify
+      return false;
+
+    case 2: // Suggest
+      return false; // Proposes but doesn't execute
+
+    case 3: // Auto-Low
+      return riskLevel === "low";
+
+    case 4: // Auto-Med
+      return riskLevel === "low" || riskLevel === "medium";
+
+    case 5: // Full Auto
+      return riskLevel !== "critical";
+
+    default:
+      return false;
+  }
+}
+```
+
+Risk classification examples:
+
+| Action | Risk Level |
+|--------|-----------|
+| Format code, lint fixes | Low |
+| Bug fix PR, code review | Medium |
+| Deploy to staging | Medium |
+| Deploy to production | **Critical** (never auto-execute) |
+| Data migration | **Critical** |
+| Security config changes | **Critical** |
+
+## Project Linking
+
+Before a Project Agent can interact with a repository, the project must be linked:
+
+```
+@codespar link github:myorg/myrepo
+```
+
+This does several things:
+
+1. Stores the GitHub repository reference in the project configuration
+2. Configures the GitHub App/token for API access
+3. Sets up webhook endpoints for CI events (auto-configuration)
+4. Enables code-aware features (Task Agent can read/write code, Review Agent can fetch PRs)
+
+### Auto-Webhook Configuration
+
+When a project is linked, the Project Agent automatically configures GitHub webhooks to receive events:
+
+```typescript
+async linkRepository(repo: string): Promise<void> {
+  // Parse "github:org/repo" format
+  const { owner, name } = parseRepoReference(repo);
+
+  // Store the link
+  await this.config.setRepository({ provider: "github", owner, name });
+
+  // Configure webhooks for CI events
+  await this.githubClient.createWebhook({
+    owner,
+    repo: name,
+    url: `${this.baseUrl}/webhook/github/${this.projectId}`,
+    events: ["workflow_run", "pull_request", "push"],
+  });
+
+  // Verify access
+  const repoInfo = await this.githubClient.getRepository(owner, name);
+  return {
+    message: `Linked to ${repoInfo.full_name}. Webhooks configured.`,
+  };
+}
+```
+
+## Common Commands
+
+| Command | Example | Action |
+|---------|---------|--------|
+| `status` | `@codespar status` | Show project health, CI status, recent deploys |
+| `link` | `@codespar link github:org/repo` | Link a GitHub repository |
+| `review` | `@codespar review PR #42` | Delegate to Review Agent |
+| `fix` | `@codespar fix the auth bug` | Delegate to Task Agent |
+| `deploy` | `@codespar deploy staging` | Delegate to Deploy Agent |
+| `config` | `@codespar config autonomy L3` | Update project settings |
+| `help` | `@codespar help` | Show available commands |
+
+## Configuration
+
+The Project Agent's behavior is configurable per project:
+
+```typescript
+interface ProjectConfig {
+  /** GitHub repository (owner/name) */
+  repository: { provider: string; owner: string; name: string };
+
+  /** Autonomy level (L0–L5) */
+  autonomyLevel: AutonomyLevel;
+
+  /** Channels this project is linked to */
+  channels: ChannelLink[];
+
+  /** Default branch to monitor */
+  defaultBranch: string;
+
+  /** Environments available for deployment */
+  environments: string[];
+}
+```

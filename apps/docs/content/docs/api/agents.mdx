@@ -1,0 +1,302 @@
+---
+title: Agent API
+description: API endpoints for listing agents, retrieving agent details, and performing agent actions like suspend, resume, restart, and set autonomy level.
+---
+
+# Agent API
+
+Manage the lifecycle of CodeSpar agents. Each project has a persistent Project Agent and may spawn ephemeral agents (Task, Review, Deploy, Incident) as needed.
+
+## List All Agents
+
+Retrieve all agents in the current context.
+
+```
+GET /api/agents
+```
+
+### Request
+
+```bash
+curl http://localhost:3000/api/agents
+```
+
+With multi-tenant scoping:
+
+```bash
+curl http://localhost:3000/api/agents \
+  -H "x-org-id: org-acme-corp"
+```
+
+### Response
+
+```json
+[
+  {
+    "id": "agent-proj-abc123",
+    "type": "project",
+    "status": "ACTIVE",
+    "autonomyLevel": 1,
+    "projectId": "proj-001",
+    "uptime": 15840,
+    "lastActivity": "2024-01-15T14:32:00Z",
+    "channels": ["slack", "whatsapp"]
+  },
+  {
+    "id": "agent-task-def456",
+    "type": "task",
+    "status": "ACTIVE",
+    "autonomyLevel": 1,
+    "projectId": "proj-001",
+    "uptime": 120,
+    "lastActivity": "2024-01-15T14:30:00Z",
+    "task": "add input validation to /api/users"
+  },
+  {
+    "id": "agent-coord-ghi789",
+    "type": "coordinator",
+    "status": "IDLE",
+    "autonomyLevel": 1,
+    "uptime": 86400,
+    "lastActivity": "2024-01-15T10:00:00Z"
+  }
+]
+```
+
+### Response Schema
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `id` | string | Unique agent identifier |
+| `type` | string | Agent type: `project`, `task`, `review`, `deploy`, `incident`, `coordinator` |
+| `status` | string | Current state: `ACTIVE`, `IDLE`, `SUSPENDED`, `ERROR` |
+| `autonomyLevel` | number | Current autonomy level (0–5) |
+| `projectId` | string | Linked project ID (if applicable) |
+| `uptime` | number | Seconds since agent started |
+| `lastActivity` | string | ISO 8601 timestamp of last activity |
+| `channels` | string[] | Connected channels (project agents only) |
+| `task` | string | Current task description (task agents only) |
+
+---
+
+## Get Agent Details
+
+Retrieve detailed information about a specific agent.
+
+```
+GET /api/agents/:id
+```
+
+### Request
+
+```bash
+curl http://localhost:3000/api/agents/agent-proj-abc123
+```
+
+### Response
+
+```json
+{
+  "id": "agent-proj-abc123",
+  "type": "project",
+  "status": "ACTIVE",
+  "autonomyLevel": 1,
+  "projectId": "proj-001",
+  "project": {
+    "id": "proj-001",
+    "name": "codespar",
+    "repo": "codespar/codespar",
+    "defaultBranch": "main"
+  },
+  "uptime": 15840,
+  "lastActivity": "2024-01-15T14:32:00Z",
+  "channels": ["slack", "whatsapp"],
+  "stats": {
+    "messagesProcessed": 247,
+    "tasksCompleted": 12,
+    "reviewsPerformed": 34,
+    "deploysTriggered": 5,
+    "incidentsHandled": 2
+  },
+  "memory": {
+    "embeddings": 1247,
+    "storageMB": 12.3
+  }
+}
+```
+
+### Response Schema
+
+Includes all fields from the list endpoint, plus:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `project` | object | Linked project details |
+| `project.id` | string | Project identifier |
+| `project.name` | string | Project display name |
+| `project.repo` | string | GitHub repo (owner/name) |
+| `project.defaultBranch` | string | Default branch name |
+| `stats` | object | Aggregate statistics |
+| `stats.messagesProcessed` | number | Total messages handled |
+| `stats.tasksCompleted` | number | Coding tasks completed |
+| `stats.reviewsPerformed` | number | PRs reviewed |
+| `stats.deploysTriggered` | number | Deployments triggered |
+| `stats.incidentsHandled` | number | Incidents investigated |
+| `memory` | object | Memory/vector store usage |
+| `memory.embeddings` | number | Number of stored embeddings |
+| `memory.storageMB` | number | Storage used in megabytes |
+
+### Error Response
+
+```json
+{
+  "error": "Agent not found",
+  "code": "AGENT_NOT_FOUND",
+  "status": 404
+}
+```
+
+---
+
+## Perform Agent Action
+
+Execute an action on a specific agent: suspend, resume, restart, or change autonomy level.
+
+```
+POST /api/agents/:id/action
+```
+
+### Request Body
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `action` | string | Yes | One of: `suspend`, `resume`, `restart`, `set_autonomy` |
+| `params` | object | Depends | Additional parameters (required for `set_autonomy`) |
+| `params.level` | number | For `set_autonomy` | Autonomy level (0–5) |
+
+### Suspend an Agent
+
+Pause all agent activity. The agent stops processing messages and events but retains its state.
+
+```bash
+curl -X POST http://localhost:3000/api/agents/agent-proj-abc123/action \
+  -H "Content-Type: application/json" \
+  -d '{"action": "suspend"}'
+```
+
+**Response:**
+
+```json
+{
+  "id": "agent-proj-abc123",
+  "action": "suspend",
+  "previousStatus": "ACTIVE",
+  "currentStatus": "SUSPENDED",
+  "timestamp": "2024-01-15T14:35:00Z"
+}
+```
+
+### Resume an Agent
+
+Resume a suspended agent. It will begin processing queued messages and events.
+
+```bash
+curl -X POST http://localhost:3000/api/agents/agent-proj-abc123/action \
+  -H "Content-Type: application/json" \
+  -d '{"action": "resume"}'
+```
+
+**Response:**
+
+```json
+{
+  "id": "agent-proj-abc123",
+  "action": "resume",
+  "previousStatus": "SUSPENDED",
+  "currentStatus": "ACTIVE",
+  "timestamp": "2024-01-15T14:36:00Z"
+}
+```
+
+### Restart an Agent
+
+Stop and restart an agent. This clears in-flight tasks and reloads configuration.
+
+```bash
+curl -X POST http://localhost:3000/api/agents/agent-proj-abc123/action \
+  -H "Content-Type: application/json" \
+  -d '{"action": "restart"}'
+```
+
+**Response:**
+
+```json
+{
+  "id": "agent-proj-abc123",
+  "action": "restart",
+  "previousStatus": "ACTIVE",
+  "currentStatus": "ACTIVE",
+  "uptime": 0,
+  "timestamp": "2024-01-15T14:37:00Z"
+}
+```
+
+### Set Autonomy Level
+
+Change the agent's autonomy level. See [Graduated Autonomy](/docs/commands/autonomy) for details on each level.
+
+```bash
+curl -X POST http://localhost:3000/api/agents/agent-proj-abc123/action \
+  -H "Content-Type: application/json" \
+  -d '{"action": "set_autonomy", "params": {"level": 3}}'
+```
+
+**Response:**
+
+```json
+{
+  "id": "agent-proj-abc123",
+  "action": "set_autonomy",
+  "previousLevel": 1,
+  "currentLevel": 3,
+  "timestamp": "2024-01-15T14:38:00Z"
+}
+```
+
+### Error Responses
+
+**Invalid action:**
+
+```json
+{
+  "error": "Invalid action. Must be one of: suspend, resume, restart, set_autonomy",
+  "code": "INVALID_ACTION",
+  "status": 400
+}
+```
+
+**Invalid autonomy level:**
+
+```json
+{
+  "error": "Autonomy level must be between 0 and 5",
+  "code": "INVALID_AUTONOMY_LEVEL",
+  "status": 400
+}
+```
+
+**Agent not found:**
+
+```json
+{
+  "error": "Agent not found",
+  "code": "AGENT_NOT_FOUND",
+  "status": 404
+}
+```
+
+## Next Steps
+
+- [Audit API](/docs/api/audit) — Query the audit trail
+- [Project API](/docs/api/projects) — Manage project links
+- [Graduated Autonomy](/docs/commands/autonomy) — Understand autonomy levels

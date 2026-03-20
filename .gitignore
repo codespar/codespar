@@ -6,3 +6,8 @@ dist/
 .env.local
 .DS_Store
 .codespar/
+
+# Docs app build artifacts
+apps/docs/.next/
+apps/docs/.source/
+apps/docs/node_modules/

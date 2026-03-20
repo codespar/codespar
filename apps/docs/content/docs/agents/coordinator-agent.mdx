@@ -1,0 +1,318 @@
+---
+title: Coordinator Agent
+description: The persistent agent for cross-project orchestration — aggregating status, cascading deploys, and routing commands across multiple projects.
+---
+
+# Coordinator Agent
+
+The Coordinator Agent is the **cross-project orchestrator**. While Project Agents manage individual repositories, the Coordinator works across all projects — aggregating status, orchestrating cascading deploys, and routing commands to the right project based on aliases or context.
+
+## Characteristics
+
+| Property | Value |
+|----------|-------|
+| **Lifecycle** | Persistent — runs for the lifetime of the system |
+| **Cardinality** | One per CodeSpar instance |
+| **Color** | Slate (`#6B7280`) |
+
+## When to Use the Coordinator
+
+The Coordinator is useful when you manage multiple interconnected projects and need to:
+
+- Get a unified view of all projects' health
+- Deploy multiple services in a specific order
+- Route a command to a project by alias without switching channels
+- Orchestrate operations that span multiple repositories
+
+## Project Registry
+
+The Coordinator maintains a registry of all projects and their aliases:
+
+```typescript
+interface ProjectRegistry {
+  projects: Map<string, ProjectEntry>;
+}
+
+interface ProjectEntry {
+  /** Unique project ID */
+  id: string;
+
+  /** Display name */
+  name: string;
+
+  /** Short aliases for quick reference */
+  aliases: string[];
+
+  /** Associated Project Agent ID */
+  agentId: string;
+
+  /** GitHub repository */
+  repository: { owner: string; name: string };
+
+  /** Current status */
+  status: AgentStatus;
+}
+```
+
+### Registering Projects
+
+Projects are automatically registered when a Project Agent starts up. You can also set aliases for quick reference:
+
+```
+@codespar alias frontend → myorg/frontend-app
+@codespar alias gw → myorg/api-gateway
+@codespar alias mobile → myorg/mobile-client
+```
+
+Now you can reference projects by alias in any command:
+
+```
+@codespar status frontend
+@codespar deploy gw staging
+@codespar review mobile PR #12
+```
+
+## Cross-Project Status
+
+The Coordinator's most common use case is aggregating status across all projects:
+
+```
+@codespar all status
+```
+
+This queries every Project Agent and returns a unified dashboard:
+
+```
+CodeSpar: 📊 All Projects Status
+
+          ┌─────────────────────────────────────────────┐
+          │ frontend (myorg/frontend-app)                │
+          │ Status: ✅ healthy                           │
+          │ Last deploy: 2h ago (v3.1.0) → production    │
+          │ CI: passing (14/14)                          │
+          │ Open PRs: 2                                  │
+          ├─────────────────────────────────────────────┤
+          │ gw (myorg/api-gateway)                       │
+          │ Status: ⚠️ warning                           │
+          │ Last deploy: 5h ago (v2.8.3) → production    │
+          │ CI: 1 failing (tests/integration.yml)        │
+          │ Open PRs: 5                                  │
+          ├─────────────────────────────────────────────┤
+          │ mobile (myorg/mobile-client)                  │
+          │ Status: ✅ healthy                           │
+          │ Last deploy: 1d ago (v1.4.0) → staging       │
+          │ CI: passing (8/8)                            │
+          │ Open PRs: 0                                  │
+          └─────────────────────────────────────────────┘
+```
+
+### Implementation
+
+```typescript
+async handleAllStatus(): Promise<AgentResponse> {
+  const statuses = await Promise.all(
+    Array.from(this.registry.projects.values()).map(async (project) => {
+      const agent = this.supervisor.getAgent(project.agentId);
+      if (!agent) return { project, status: "offline" };
+      return { project, status: await agent.getStatus() };
+    })
+  );
+
+  return {
+    message: formatMultiProjectStatus(statuses),
+  };
+}
+```
+
+## Cascading Deploys
+
+The Coordinator's most powerful feature is **cascading deploys** — deploying multiple services in a specified order, waiting for each to succeed before proceeding to the next:
+
+```
+@codespar deploy gw then frontend then mobile
+```
+
+### Cascading Deploy Flow
+
+```
+┌──────────────┐     success     ┌──────────────┐     success     ┌──────────────┐
+│ Deploy: gw   │ ───────────────→│Deploy: front │ ───────────────→│Deploy: mobile│
+│ (api-gateway)│                 │ (frontend)   │                 │ (mobile)     │
+└──────┬───────┘                 └──────┬───────┘                 └──────┬───────┘
+       │                                │                                │
+    failure                          failure                          failure
+       │                                │                                │
+       ▼                                ▼                                ▼
+┌──────────────┐                 ┌──────────────┐                 ┌──────────────┐
+│ HALT cascade │                 │ HALT cascade │                 │ Report result│
+│ Notify team  │                 │ Notify team  │                 │              │
+└──────────────┘                 └──────────────┘                 └──────────────┘
+```
+
+### Implementation
+
+```typescript
+async handleCascadingDeploy(
+  chain: string[],
+  environment: string
+): Promise<void> {
+  for (const projectAlias of chain) {
+    const project = this.resolveProject(projectAlias);
+
+    await this.notifyAll(
+      `🔗 Cascading deploy: starting ${project.name} (${chain.indexOf(projectAlias) + 1}/${chain.length})`
+    );
+
+    try {
+      // Delegate to the project's Deploy Agent
+      const result = await this.deployProject(project, environment);
+
+      if (result.status !== "success") {
+        await this.notifyAll(
+          `❌ Cascade halted: ${project.name} deploy failed.\n` +
+          `Remaining: ${chain.slice(chain.indexOf(projectAlias) + 1).join(" → ")}`
+        );
+        return;
+      }
+
+      await this.notifyAll(
+        `✅ ${project.name} deployed successfully.`
+      );
+    } catch (error) {
+      await this.notifyAll(
+        `❌ Cascade halted: ${project.name} encountered an error.\n` +
+        `Error: ${error.message}`
+      );
+      return;
+    }
+  }
+
+  await this.notifyAll(
+    `✅ Cascading deploy complete. All ${chain.length} services deployed.`
+  );
+}
+```
+
+### Example: Cascading Deploy
+
+```
+User: @codespar deploy gw then frontend then mobile to staging
+
+CodeSpar: 🔗 Cascading deploy to staging: gw → frontend → mobile
+
+          🚀 [1/3] Deploying gw (api-gateway)...
+          ✅ gw deployed to staging. Health: passing.
+
+          🚀 [2/3] Deploying frontend...
+          ✅ frontend deployed to staging. Health: passing.
+
+          🚀 [3/3] Deploying mobile...
+          ✅ mobile deployed to staging. Health: passing.
+
+          ✅ Cascading deploy complete (3/3).
+          All services healthy on staging.
+```
+
+### Example: Cascade Failure
+
+```
+User: @codespar deploy gw then frontend then mobile to staging
+
+CodeSpar: 🔗 Cascading deploy to staging: gw → frontend → mobile
+
+          🚀 [1/3] Deploying gw (api-gateway)...
+          ✅ gw deployed to staging. Health: passing.
+
+          🚀 [2/3] Deploying frontend...
+          ❌ frontend deploy failed: health check returned 503.
+
+          ⛔ Cascade halted.
+          Remaining: mobile (not deployed)
+          Action: investigate frontend health, then retry.
+```
+
+## Command Routing
+
+The Coordinator routes commands that target a specific project by alias:
+
+```typescript
+async handleMessage(message: NormalizedMessage): Promise<AgentResponse> {
+  const parsed = parseCoordinatorCommand(message.text);
+
+  switch (parsed.type) {
+    case "all-status":
+      return this.handleAllStatus();
+
+    case "cascading-deploy":
+      return this.handleCascadingDeploy(parsed.chain, parsed.environment);
+
+    case "project-command":
+      // Route to specific project agent
+      const project = this.resolveProject(parsed.projectAlias);
+      const agent = this.supervisor.getAgent(project.agentId);
+      return agent.handleMessage({
+        ...message,
+        text: parsed.command,
+      });
+
+    default:
+      return { message: "Unknown coordinator command. Try: all status, deploy X then Y, or <alias> <command>" };
+  }
+}
+```
+
+### Project Resolution
+
+The `resolveProject` method finds a project by its ID, name, or any registered alias:
+
+```typescript
+resolveProject(reference: string): ProjectEntry {
+  // Try direct ID match
+  const byId = this.registry.projects.get(reference);
+  if (byId) return byId;
+
+  // Try alias match
+  for (const project of this.registry.projects.values()) {
+    if (project.aliases.includes(reference)) return project;
+    if (project.name.toLowerCase() === reference.toLowerCase()) return project;
+  }
+
+  throw new Error(`Project not found: "${reference}". Use "all status" to see registered projects.`);
+}
+```
+
+## Common Commands
+
+| Command | Example | Action |
+|---------|---------|--------|
+| `all status` | `@codespar all status` | Aggregate status from all projects |
+| `deploy ... then ...` | `@codespar deploy gw then front` | Cascading deploy in order |
+| `alias` | `@codespar alias fe → myorg/frontend` | Register a project alias |
+| `<alias> <command>` | `@codespar gw status` | Route command to specific project |
+| `list projects` | `@codespar list projects` | Show all registered projects and aliases |
+
+## Relationship with Project Agents
+
+The Coordinator does not replace Project Agents — it orchestrates them. Each project still has its own persistent Project Agent that handles all project-specific logic. The Coordinator simply provides a cross-cutting view and coordination layer:
+
+```
+┌───────────────────────────────────────────┐
+│            Coordinator Agent               │
+│                                           │
+│  Project Registry:                        │
+│    gw       → Project Agent (api-gw)      │
+│    frontend → Project Agent (frontend)    │
+│    mobile   → Project Agent (mobile)      │
+│                                           │
+│  Cross-project operations:                │
+│    • all status                           │
+│    • cascading deploys                    │
+│    • command routing by alias             │
+└───────────────────────────────────────────┘
+         │              │              │
+         ▼              ▼              ▼
+   Project Agent  Project Agent  Project Agent
+     (gw)         (frontend)      (mobile)
+```
+
+If you only manage a single project, you won't interact with the Coordinator directly — the Project Agent handles everything. The Coordinator becomes valuable when your system grows to multiple interconnected services.

@@ -1,0 +1,320 @@
+---
+title: Deploy Agent
+description: The ephemeral agent that orchestrates deployments — managing approval quorum, cross-channel voting, and environment-specific safety policies.
+---
+
+# Deploy Agent
+
+The Deploy Agent manages the **approval and execution flow** for deployments. It enforces quorum-based approval, supports cross-channel voting (approve from Slack, WhatsApp, or any connected channel), blocks self-approval, and applies strict safety policies — especially for production.
+
+## Characteristics
+
+| Property | Value |
+|----------|-------|
+| **Lifecycle** | Ephemeral — spawned per deploy request, terminates on completion |
+| **Spawned by** | Project Agent, on `deploy` command |
+| **Color** | Alert Amber (`#F59E0B`) |
+
+## Approval Flow
+
+Every deployment goes through an approval flow. The required number of approvals (quorum) depends on the target environment:
+
+```typescript
+interface DeployRequest {
+  projectId: string;
+  environment: "staging" | "production";
+  branch: string;
+  commit: string;
+  requestedBy: string;
+  requestedFrom: ChannelType;
+}
+
+interface ApprovalConfig {
+  staging: { quorum: 1 };     // 1 approval needed
+  production: { quorum: 2 };  // 2 approvals needed
+}
+```
+
+### Quorum Requirements
+
+| Environment | Required Approvals | Auto-Execute Possible? |
+|-------------|-------------------|----------------------|
+| **Staging** | 1 | Yes, at L5 only |
+| **Production** | 2 | **Never** — always requires human approval |
+
+### Flow Diagram
+
+```
+User: @codespar deploy production
+              │
+              ▼
+┌──────────────────────┐
+│ Deploy Agent spawned  │
+└──────────┬───────────┘
+           │
+           ▼
+┌──────────────────────┐
+│ Generate approval     │  Unique token per request
+│ token                 │
+└──────────┬───────────┘
+           │
+           ▼
+┌──────────────────────┐
+│ Broadcast approval    │  "Deploy to production requested.
+│ request               │   Approval needed (2 of 2)."
+└──────────┬───────────┘
+           │
+     ┌─────┴──────┐
+     ▼            ▼
+┌─────────┐  ┌─────────┐
+│ Approve │  │ Approve │   Can come from any channel
+│ (Slack) │  │ (WA)    │
+└────┬────┘  └────┬────┘
+     │            │
+     └─────┬──────┘
+           ▼
+┌──────────────────────┐
+│ Quorum reached (2/2) │
+└──────────┬───────────┘
+           │
+           ▼
+┌──────────────────────┐
+│ Execute deployment    │
+└──────────┬───────────┘
+           │
+           ▼
+┌──────────────────────┐
+│ Health check          │
+└──────────┬───────────┘
+           │
+           ▼
+┌──────────────────────┐
+│ Report result         │  "Deploy complete. Health: passing."
+└──────────────────────┘
+```
+
+## Token-Based Approval System
+
+Each deploy request generates a unique approval token. This token is used to track votes and prevent duplicates:
+
+```typescript
+interface ApprovalToken {
+  /** Unique token ID */
+  id: string;
+
+  /** The deploy request this token belongs to */
+  deployRequestId: string;
+
+  /** Target environment */
+  environment: string;
+
+  /** Who requested the deploy */
+  requestedBy: string;
+
+  /** Current approvals */
+  approvals: Array<{
+    userId: string;
+    channelType: ChannelType;
+    timestamp: Date;
+  }>;
+
+  /** Required number of approvals */
+  quorum: number;
+
+  /** Token expiry (1 hour) */
+  expiresAt: Date;
+
+  /** Current status */
+  status: "pending" | "approved" | "rejected" | "expired";
+}
+```
+
+### Token Lifecycle
+
+1. **Created** when a deploy is requested
+2. **Pending** while waiting for approvals
+3. **Approved** when quorum is reached
+4. **Rejected** if any approver explicitly rejects
+5. **Expired** after 1 hour with insufficient approvals
+
+## Cross-Channel Voting
+
+Because CodeSpar is channel-agnostic, approvals can come from any connected channel. A deploy requested in Slack can be approved from WhatsApp:
+
+```
+Slack:
+  User: @codespar deploy production
+  CodeSpar: 🚀 Deploy to production requested.
+            Branch: main (abc1234)
+            Approval needed: 2 of 2
+            Token: deploy-abc123
+
+WhatsApp:
+  Admin1: @codespar approve deploy-abc123
+  CodeSpar: ✅ 1/2 approvals (Admin1 via WhatsApp)
+
+Discord:
+  Admin2: @CodeSpar approve deploy-abc123
+  CodeSpar: ✅ 2/2 approvals reached. Deploying...
+
+Slack:
+  CodeSpar: ✅ Deploy complete.
+            Environment: production
+            Commit: abc1234
+            Health check: passing
+            Approved by: Admin1 (WhatsApp), Admin2 (Discord)
+```
+
+The response is broadcast back to the channel where the deploy was originally requested.
+
+## Self-Approval Blocking
+
+The person who requests a deploy cannot approve their own request. This enforces the four-eyes principle:
+
+```typescript
+validateApproval(approval: Approval, request: DeployRequest): boolean {
+  // Block self-approval
+  if (approval.userId === request.requestedBy) {
+    throw new Error(
+      "Self-approval is not allowed. Another team member must approve."
+    );
+    return false;
+  }
+
+  // Block duplicate approvals from the same user
+  if (request.approvals.some((a) => a.userId === approval.userId)) {
+    throw new Error("You have already approved this deploy.");
+    return false;
+  }
+
+  return true;
+}
+```
+
+```
+User: @codespar deploy staging
+CodeSpar: 🚀 Deploy to staging requested. 1 approval needed.
+
+User: @codespar approve deploy-xyz789
+CodeSpar: ❌ Self-approval is not allowed.
+          Another team member must approve this deploy.
+```
+
+## Auto-Execution Policy
+
+The Deploy Agent respects the project's autonomy level but with strict constraints:
+
+```typescript
+canAutoExecute(environment: string): boolean {
+  // Production deploys NEVER auto-execute
+  if (environment === "production") return false;
+
+  // Staging auto-executes only at L5 (Full Auto)
+  if (environment === "staging" && this.autonomyLevel === 5) return true;
+
+  return false;
+}
+```
+
+### Auto-Execution Matrix
+
+| Autonomy Level | Staging | Production |
+|----------------|---------|------------|
+| L0–L4 | Requires approval | Requires approval |
+| L5 | **Auto-executes** | **Requires approval** (always) |
+
+Production deploys are the most critical safety guardrail in CodeSpar. They always require human approval, regardless of autonomy level.
+
+## Example Interactions
+
+### Staging Deploy (L5 — Auto-Execute)
+
+```
+User: @codespar deploy staging
+
+CodeSpar: 🚀 Auto-deploying to staging (autonomy L5).
+          Branch: main (abc1234)
+          ...
+          ✅ Deploy complete. Health check: passing.
+          URL: https://staging.myapp.com
+```
+
+### Production Deploy (Full Flow)
+
+```
+User: @codespar deploy production
+
+CodeSpar: 🚀 Deploy to production requested.
+          Branch: main (abc1234)
+          Changes since last deploy: 4 commits, 12 files
+
+          Approval required: 2 of 2
+          Reply with: approve deploy-abc123
+
+Admin1: approve deploy-abc123
+CodeSpar: ✅ 1/2 approvals (Admin1)
+
+Admin2: approve deploy-abc123
+CodeSpar: ✅ 2/2 approvals reached. Deploying...
+
+          Triggering deploy pipeline...
+          Build: passing ✅
+          Tests: passing ✅
+          Health check: passing ✅
+
+          ✅ Deploy to production complete.
+          Version: v2.4.0
+          Commit: abc1234
+          Duration: 3m 42s
+```
+
+### Rejected Deploy
+
+```
+Admin1: reject deploy-abc123 — tests are flaky, let's wait
+
+CodeSpar: ❌ Deploy rejected by Admin1.
+          Reason: "tests are flaky, let's wait"
+          Deploy cancelled.
+```
+
+## Health Checks
+
+After a deploy completes, the Deploy Agent runs health checks against the target environment:
+
+```typescript
+async verifyHealth(environment: string): Promise<HealthResult> {
+  const healthUrl = this.config.healthCheckUrls[environment];
+
+  const response = await fetch(healthUrl, { timeout: 30000 });
+
+  return {
+    status: response.ok ? "healthy" : "unhealthy",
+    statusCode: response.status,
+    responseTime: response.timing,
+  };
+}
+```
+
+If the health check fails, the Deploy Agent reports the failure and — depending on configuration — can trigger a rollback.
+
+## Environment Variables
+
+The Deploy Agent itself doesn't require specific environment variables beyond those needed by the Project Agent and GitHub integration. Deploy targets and health check URLs are configured per project:
+
+```typescript
+interface DeployConfig {
+  environments: {
+    staging: {
+      quorum: 1;
+      healthCheckUrl: "https://staging.myapp.com/health";
+      deployCommand: "deploy:staging";
+    };
+    production: {
+      quorum: 2;
+      healthCheckUrl: "https://myapp.com/health";
+      deployCommand: "deploy:production";
+    };
+  };
+}
+```

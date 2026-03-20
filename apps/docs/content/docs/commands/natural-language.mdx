@@ -1,0 +1,186 @@
+---
+title: Natural Language Understanding
+description: How CodeSpar interprets natural language messages and routes them to the correct command using a tiered NLU pipeline.
+---
+
+# Natural Language Understanding
+
+CodeSpar agents understand natural language in addition to explicit commands. You do not need to memorize command syntax — just describe what you want in plain language, and the agent will figure out the right action.
+
+## NLU Pipeline
+
+CodeSpar uses a three-tier strategy to interpret messages, optimizing for speed and cost:
+
+```
+Message → Regex Match → Claude Haiku NLU → Claude Sonnet Smart Response
+          (fast, free)   (fast, cheap)       (slower, comprehensive)
+```
+
+### Tier 1: Regex Match (instant, free)
+
+The agent first attempts to match the message against a set of regex patterns for each command. This handles explicit commands and common variations with zero latency and zero API cost.
+
+**Examples that match via regex:**
+
+```
+@codespar status          → status intent (exact match)
+@codespar deploy staging  → deploy intent (exact match)
+@codespar review PR #42   → review intent (pattern match)
+@codespar logs 20         → logs intent (pattern match)
+@codespar autonomy L3     → autonomy intent (pattern match)
+```
+
+If a regex matches with high confidence, the command executes immediately without calling any LLM.
+
+### Tier 2: Claude Haiku NLU (fast, cheap)
+
+When regex does not match, the message is sent to Claude Haiku for intent classification. The NLU model returns a structured response with:
+
+- **intent** — the matched command (e.g., `status`, `deploy`, `review`)
+- **confidence** — a score from 0.0 to 1.0
+- **arguments** — extracted parameters (e.g., `{ target: "staging" }`)
+
+**Examples that route through Haiku NLU:**
+
+| Natural Language Input | Detected Intent | Confidence | Arguments |
+|----------------------|-----------------|------------|-----------|
+| "quantos PRs temos?" | `prs` | 0.95 | `{ filter: "open" }` |
+| "can you review the latest PR?" | `review` | 0.92 | `{ target: "latest" }` |
+| "deploy to staging please" | `deploy` | 0.98 | `{ target: "staging" }` |
+| "what's the build status?" | `status` | 0.96 | `{ scope: "build" }` |
+| "fix the failing auth test" | `fix` | 0.94 | `{ issue: "failing auth test" }` |
+| "show me recent logs" | `logs` | 0.91 | `{ count: 10 }` |
+| "who am I?" | `whoami` | 0.97 | `{}` |
+| "link this to our API repo" | `link` | 0.88 | `{}` |
+| "stop everything now" | `kill` | 0.93 | `{}` |
+| "set autonomy to level 2" | `autonomy` | 0.96 | `{ level: 2 }` |
+| "aprovar o deploy" | `approve` | 0.90 | `{}` |
+| "lista os pull requests fechados" | `prs` | 0.92 | `{ filter: "closed" }` |
+
+If the confidence is 1.0 or above the configured threshold, the command executes immediately.
+
+### Tier 3: Claude Sonnet Smart Response (comprehensive)
+
+A message is routed to Claude Sonnet when any of the following conditions are met:
+
+- The message contains a question mark (`?`)
+- The message is longer than 25 characters
+- NLU confidence is below 1.0
+
+Sonnet receives the full project context (linked repo, recent activity, agent state) and generates a thoughtful response. This handles open-ended questions, complex requests, and conversational interactions.
+
+**Examples that route to Sonnet:**
+
+```
+"What's the best approach for implementing rate limiting in our API?"
+"Can you explain why the last 3 builds failed?"
+"How should we structure the database migration for the new user model?"
+"Compare the performance of our staging vs production environments"
+```
+
+## Multilingual Support
+
+CodeSpar's NLU pipeline supports multiple languages out of the box. Claude Haiku and Sonnet natively understand dozens of languages, so you can interact with your agent in whatever language is natural for your team.
+
+### Supported Languages (tested)
+
+| Language | Example | Detected Intent |
+|----------|---------|-----------------|
+| English | "deploy to staging" | `deploy` |
+| Portuguese | "fazer deploy no staging" | `deploy` |
+| Spanish | "desplegar en staging" | `deploy` |
+| Portuguese | "quantos PRs abertos?" | `prs` |
+| Spanish | "cuántos PRs hay abiertos?" | `prs` |
+| Portuguese | "revisar o PR 42" | `review` |
+| English | "what's going on with the build?" | `status` |
+| Portuguese | "qual o status do build?" | `status` |
+
+The regex tier (Tier 1) primarily matches English command syntax. Non-English messages typically route through Haiku NLU (Tier 2) for intent detection.
+
+## Configuration
+
+### Environment Variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `NLU_MODEL` | `claude-haiku-4-5-20251001` | Model used for intent classification (Tier 2) |
+| `SMART_MODEL` | `claude-sonnet-4-20250514` | Model used for open-ended responses (Tier 3) |
+
+You can override the NLU model to use a different provider or version:
+
+```bash
+# Use a specific Haiku version
+NLU_MODEL=claude-haiku-4-5-20251001
+
+# Use Sonnet for NLU (more accurate but slower and more expensive)
+NLU_MODEL=claude-sonnet-4-20250514
+```
+
+### How Intent Routing Works
+
+```
+┌─────────────────────────────────────────────────────────┐
+│                    Incoming Message                      │
+└─────────────┬───────────────────────────────────────────┘
+              │
+              ▼
+┌─────────────────────────┐
+│    Tier 1: Regex Match  │──── Match found ───▶ Execute Command
+│    (instant, free)      │
+└─────────────┬───────────┘
+              │ No match
+              ▼
+┌─────────────────────────┐
+│   Tier 2: Haiku NLU     │──── Confidence ≥ threshold ───▶ Execute Command
+│   (fast, ~$0.001)       │
+└─────────────┬───────────┘
+              │ Low confidence OR open question
+              ▼
+┌─────────────────────────┐
+│  Tier 3: Sonnet Smart   │──── Generate Response ───▶ Reply
+│  (comprehensive, ~$0.01)│
+└─────────────────────────┘
+```
+
+### Open Question Detection
+
+A message is classified as an "open question" when it meets one or more of these criteria:
+
+1. **Contains a question mark** (`?`) — indicates the user is asking, not commanding
+2. **Length exceeds 25 characters** — longer messages tend to be conversational
+3. **NLU confidence below 1.0** — the model is not fully certain about the intent
+
+Open questions bypass command execution entirely and are routed to Claude Sonnet for a contextual, conversational response.
+
+## Cost Optimization
+
+The three-tier pipeline is designed to minimize API costs:
+
+| Tier | Cost per Request | Typical % of Traffic |
+|------|-----------------|---------------------|
+| Regex | $0 | ~40% |
+| Haiku NLU | ~$0.001 | ~35% |
+| Sonnet Smart | ~$0.01 | ~25% |
+
+For teams that primarily use explicit commands, the majority of traffic stays at Tier 1 with zero LLM cost.
+
+## Debugging NLU
+
+If the agent misinterprets a message, you can check what happened:
+
+```
+@codespar logs 5
+```
+
+The activity log includes NLU routing decisions:
+
+```
+[14:32] 📩 Message: "deploy to prod please"
+        NLU: regex miss → haiku → intent:deploy (0.97)
+        Action: deploy requested (target: production)
+```
+
+## Next Steps
+
+- [Command Reference](/docs/commands) — Full list of all 17 commands
+- [Graduated Autonomy](/docs/commands/autonomy) — Control auto-execution behavior

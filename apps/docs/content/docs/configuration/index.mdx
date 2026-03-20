@@ -1,0 +1,192 @@
+---
+title: Configuration
+description: Complete reference for all CodeSpar environment variables, including required keys, server settings, AI models, channel configuration, and database connections.
+---
+
+# Configuration
+
+CodeSpar is configured via environment variables. Set them in a `.env` file at the project root, in your Docker Compose file, or in your deployment platform's environment settings.
+
+## Quick Start
+
+At minimum, you need two environment variables to run CodeSpar:
+
+```bash
+ANTHROPIC_API_KEY=sk-ant-...     # Your Anthropic API key
+GITHUB_TOKEN=ghp_...             # GitHub Personal Access Token
+```
+
+## Complete Environment Variable Reference
+
+### Required
+
+These variables must be set for CodeSpar to start.
+
+| Variable | Example | Description |
+|----------|---------|-------------|
+| `ANTHROPIC_API_KEY` | `sk-ant-api03-...` | Anthropic API key for Claude models. Used for NLU, task execution, code review, and smart responses. |
+| `GITHUB_TOKEN` | `ghp_xxxxxxxxxxxx` | GitHub Personal Access Token with `repo` scope. Required for repository operations, PR management, and webhook configuration. For auto-webhook setup, also needs `admin:repo_hook` scope. |
+
+### Server
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `PORT` | `3000` | HTTP server port. Auto-set to `8080` on Railway. |
+| `PROJECT_NAME` | `codespar` | Default project name, used in agent identification and logging. |
+| `ADMIN_NAME` | `admin` | Display name for the default admin user. |
+| `WEBHOOK_BASE_URL` | — | Public URL for receiving GitHub webhooks (e.g., `https://codespar.example.com`). Required for auto-webhook configuration when linking repos. |
+
+### AI Models
+
+CodeSpar uses multiple Claude models for different tasks. You can override each one independently.
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `TASK_MODEL` | `claude-sonnet-4-20250514` | Model for coding tasks (`instruct`, `fix`). Needs strong code generation capabilities. |
+| `NLU_MODEL` | `claude-haiku-4-5-20251001` | Model for intent classification (natural language understanding). Fast and cheap. |
+| `SMART_MODEL` | `claude-sonnet-4-20250514` | Model for open-ended questions and conversational responses. |
+| `REVIEW_MODEL` | `claude-sonnet-4-20250514` | Model for PR code review. Needs strong code analysis capabilities. |
+
+#### Model Selection Guide
+
+| Use Case | Recommended | Rationale |
+|----------|-------------|-----------|
+| Cost-sensitive | Haiku for all | Lowest cost, acceptable quality |
+| Balanced (default) | Haiku NLU + Sonnet for tasks | Good balance of cost and quality |
+| Quality-first | Sonnet for all | Best code generation and review quality |
+| Maximum quality | Opus for tasks/review | Highest quality, highest cost |
+
+### Channel Configuration
+
+#### WhatsApp (via Evolution API)
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `ENABLE_WHATSAPP` | `false` | Enable the WhatsApp channel |
+| `EVOLUTION_API_URL` | — | Evolution API server URL (e.g., `https://evolution.example.com`) |
+| `EVOLUTION_API_KEY` | — | Evolution API authentication key |
+| `EVOLUTION_INSTANCE` | — | Evolution API instance name |
+| `WHATSAPP_WEBHOOK_PORT` | `8085` | Port for receiving WhatsApp webhook callbacks |
+| `WHATSAPP_BOT_MENTION` | `@codespar` | Mention trigger for the bot in WhatsApp groups |
+
+#### Slack
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `ENABLE_SLACK` | `false` | Enable the Slack channel |
+| `SLACK_BOT_TOKEN` | — | Slack Bot User OAuth Token (`xoxb-...`) |
+| `SLACK_APP_TOKEN` | — | Slack App-Level Token for Socket Mode (`xapp-...`) |
+
+#### Discord
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `ENABLE_DISCORD` | `false` | Enable the Discord channel |
+| `DISCORD_TOKEN` | — | Discord Bot Token |
+
+#### Telegram
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `ENABLE_TELEGRAM` | `false` | Enable the Telegram channel |
+| `TELEGRAM_BOT_TOKEN` | — | Telegram Bot Token from @BotFather |
+
+### Database
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `DATABASE_URL` | — | PostgreSQL connection string (e.g., `postgresql://user:pass@host:5432/codespar`). If not set, file-based storage is used. |
+| `REDIS_URL` | — | Redis connection string (e.g., `redis://host:6379`). Used for caching and pub/sub between channels. If not set, in-memory caching is used. |
+
+## Example .env File
+
+```bash
+# ============================================
+# CodeSpar Configuration
+# ============================================
+
+# Required
+ANTHROPIC_API_KEY=sk-ant-api03-your-key-here
+GITHUB_TOKEN=ghp_your-token-here
+
+# Server
+PORT=3000
+PROJECT_NAME=my-project
+ADMIN_NAME=John
+WEBHOOK_BASE_URL=https://codespar.example.com
+
+# Models (defaults shown — override as needed)
+# TASK_MODEL=claude-sonnet-4-20250514
+# NLU_MODEL=claude-haiku-4-5-20251001
+# SMART_MODEL=claude-sonnet-4-20250514
+# REVIEW_MODEL=claude-sonnet-4-20250514
+
+# Channels — enable the ones you need
+ENABLE_SLACK=true
+SLACK_BOT_TOKEN=xoxb-your-bot-token
+SLACK_APP_TOKEN=xapp-your-app-token
+
+ENABLE_WHATSAPP=true
+EVOLUTION_API_URL=https://evolution.example.com
+EVOLUTION_API_KEY=your-evolution-key
+EVOLUTION_INSTANCE=codespar-prod
+WHATSAPP_WEBHOOK_PORT=8085
+WHATSAPP_BOT_MENTION=@codespar
+
+ENABLE_DISCORD=false
+# DISCORD_TOKEN=
+
+ENABLE_TELEGRAM=false
+# TELEGRAM_BOT_TOKEN=
+
+# Database (optional — file storage used if not set)
+# DATABASE_URL=postgresql://user:pass@localhost:5432/codespar
+# REDIS_URL=redis://localhost:6379
+```
+
+## Storage
+
+When `DATABASE_URL` is not set, CodeSpar uses file-based storage in the `.codespar/` directory:
+
+```
+.codespar/
+  config.json          # Instance configuration
+  agents/              # Agent state files
+  audit/               # Audit log entries (append-only)
+  context/             # Vector store embeddings
+  identities/          # User identity records
+  projects/            # Project configuration and links
+  orgs/                # Organization directories (multi-tenant)
+    org-acme-corp/
+      projects/
+      members.json
+```
+
+This directory should be persisted via a Docker volume mount in containerized deployments.
+
+## Validation
+
+CodeSpar validates configuration on startup and reports missing or invalid variables:
+
+```
+[startup] ✅ ANTHROPIC_API_KEY: configured
+[startup] ✅ GITHUB_TOKEN: configured
+[startup] ✅ PORT: 3000
+[startup] ✅ ENABLE_SLACK: true (connected)
+[startup] ✅ ENABLE_WHATSAPP: true (connected)
+[startup] ⚠️ WEBHOOK_BASE_URL: not set (auto-webhook disabled)
+[startup] ℹ️ DATABASE_URL: not set (using file storage)
+[startup] ℹ️ REDIS_URL: not set (using in-memory cache)
+```
+
+If a required variable is missing, CodeSpar exits with a clear error message:
+
+```
+[startup] ❌ ANTHROPIC_API_KEY is required. Set it in .env or environment.
+```
+
+## Next Steps
+
+- [Docker Configuration](/docs/configuration/docker) — Containerized deployment
+- [Railway Deployment](/docs/configuration/railway) — One-click cloud deployment
+- [Security](/docs/configuration/security) — RBAC, approvals, and audit

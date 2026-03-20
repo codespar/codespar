@@ -1,0 +1,258 @@
+---
+title: Review Agent
+description: The ephemeral agent that analyzes pull requests — fetching diffs, classifying risk, and providing AI-powered code review with optional auto-approve.
+---
+
+# Review Agent
+
+The Review Agent provides **automated code review** for pull requests. It fetches the PR data and diff from GitHub, sends it to Claude Sonnet for analysis, classifies the risk level, and can auto-approve low-risk PRs when the project's autonomy level permits.
+
+## Characteristics
+
+| Property | Value |
+|----------|-------|
+| **Lifecycle** | Ephemeral — spawned per review, terminates on completion |
+| **Spawned by** | Project Agent, on `review` command or PR webhook events |
+| **AI Model** | Claude Sonnet (configurable via `REVIEW_MODEL`) |
+| **Color** | Channel Purple (`#8B5CF6`) |
+
+## How It Works
+
+### Step 1: Fetch PR Data
+
+The Review Agent uses the GitHub API to fetch the pull request metadata and changed files:
+
+```typescript
+async review(prNumber: number): Promise<ReviewResult> {
+  // Fetch PR metadata (title, description, author, base/head branches)
+  const pr = await this.github.getPR(this.repo.owner, this.repo.name, prNumber);
+
+  // Fetch changed files with diffs
+  const files = await this.github.getPRFiles(
+    this.repo.owner,
+    this.repo.name,
+    prNumber
+  );
+
+  // Build review context
+  const context = {
+    pr,
+    files,
+    totalAdditions: files.reduce((sum, f) => sum + f.additions, 0),
+    totalDeletions: files.reduce((sum, f) => sum + f.deletions, 0),
+  };
+
+  // Classify risk
+  const risk = this.classifyRisk(context);
+
+  // Send to Claude for analysis
+  const analysis = await this.analyzeWithClaude(context);
+
+  // Auto-approve if applicable
+  if (this.canAutoApprove(risk)) {
+    await this.approvePR(prNumber, analysis);
+  }
+
+  return { pr, risk, analysis };
+}
+```
+
+### Step 2: Risk Classification
+
+The Review Agent classifies every PR into one of three risk levels based on objective metrics:
+
+```typescript
+classifyRisk(context: ReviewContext): RiskLevel {
+  const { files, totalAdditions, totalDeletions } = context;
+  const totalChanges = totalAdditions + totalDeletions;
+  const fileCount = files.length;
+
+  // High risk indicators
+  if (fileCount > 10) return "high";
+  if (totalChanges > 500) return "high";
+  if (this.hasSensitivePatterns(files)) return "high";
+
+  // Low risk indicators
+  if (fileCount <= 3 && totalChanges < 100) return "low";
+
+  // Everything else
+  return "medium";
+}
+```
+
+#### Risk Level Criteria
+
+| Risk | File Count | Line Changes | Sensitive Patterns | Example |
+|------|-----------|-------------|-------------------|---------|
+| **Low** | 1–3 files | < 100 lines | No | Typo fix, CSS tweak, config update |
+| **Medium** | 4–10 files | 100–500 lines | No | Feature implementation, refactor |
+| **High** | > 10 files | > 500 lines | Yes | Architecture change, migration, security |
+
+#### Sensitive File Patterns
+
+The following patterns automatically escalate risk to **high**:
+
+```typescript
+const SENSITIVE_PATTERNS = [
+  /\.env/,              // Environment files
+  /secret/i,            // Secret/credential references
+  /auth/i,              // Authentication logic
+  /security/i,          // Security configuration
+  /migration/i,         // Database migrations
+  /docker-compose/,     // Infrastructure config
+  /\.github\/workflows/, // CI/CD pipelines
+  /package\.json/,      // Dependency changes
+  /Dockerfile/,         // Container definitions
+];
+```
+
+### Step 3: Claude Analysis
+
+The PR data and diff are sent to Claude Sonnet for a comprehensive code review:
+
+```typescript
+async analyzeWithClaude(context: ReviewContext): Promise<ReviewAnalysis> {
+  const response = await this.claudeBridge.analyze({
+    system: `You are a senior code reviewer. Analyze this pull request
+             and provide actionable feedback. Focus on:
+             - Correctness and potential bugs
+             - Security implications
+             - Performance concerns
+             - Code style and maintainability
+             - Test coverage gaps`,
+    content: formatPRForReview(context),
+  });
+
+  return {
+    summary: response.summary,
+    issues: response.issues,        // Specific problems found
+    suggestions: response.suggestions, // Improvement ideas
+    verdict: response.verdict,       // "approve" | "request_changes" | "comment"
+  };
+}
+```
+
+#### Review Output Structure
+
+```typescript
+interface ReviewAnalysis {
+  /** One-paragraph summary of the changes */
+  summary: string;
+
+  /** Specific issues that should be addressed */
+  issues: Array<{
+    file: string;
+    line: number;
+    severity: "error" | "warning" | "info";
+    message: string;
+  }>;
+
+  /** Suggestions for improvement (non-blocking) */
+  suggestions: Array<{
+    file: string;
+    line: number;
+    message: string;
+  }>;
+
+  /** Overall verdict */
+  verdict: "approve" | "request_changes" | "comment";
+}
+```
+
+### Step 4: Auto-Approve (Conditional)
+
+At autonomy level L3 or higher, the Review Agent can auto-approve low-risk PRs without human intervention:
+
+```typescript
+canAutoApprove(risk: RiskLevel): boolean {
+  // Only auto-approve at L3+ and only for low-risk PRs
+  if (this.autonomyLevel < 3) return false;
+  if (risk !== "low") return false;
+
+  return true;
+}
+
+async approvePR(prNumber: number, analysis: ReviewAnalysis): Promise<void> {
+  await this.github.createReview({
+    owner: this.repo.owner,
+    repo: this.repo.name,
+    pull_number: prNumber,
+    event: "APPROVE",
+    body: `Auto-approved by CodeSpar Review Agent.\n\n${analysis.summary}`,
+  });
+}
+```
+
+#### Auto-Approve Matrix
+
+| Autonomy Level | Low Risk | Medium Risk | High Risk |
+|----------------|----------|-------------|-----------|
+| L0–L2 | Review only | Review only | Review only |
+| L3 | **Auto-approve** | Review only | Review only |
+| L4 | **Auto-approve** | **Auto-approve** | Review only |
+| L5 | **Auto-approve** | **Auto-approve** | Review only |
+
+High-risk PRs are never auto-approved regardless of autonomy level.
+
+## Example Interaction
+
+```
+User: @codespar review PR #42
+
+CodeSpar: 🔍 Reviewing PR #42: "Add retry logic to API client"
+
+          📊 Risk: low (2 files, +47 -12 lines)
+
+          ✅ Summary:
+          Adds exponential backoff retry logic to the HTTP client.
+          Clean implementation with configurable max retries.
+
+          ⚠️ 1 suggestion:
+          • src/http/client.ts:34 — Consider adding jitter to the
+            backoff delay to prevent thundering herd on service recovery.
+
+          Verdict: Approved
+          (Auto-approved: low-risk, autonomy L3)
+```
+
+### Review with Issues
+
+```
+User: @codespar review PR #58
+
+CodeSpar: 🔍 Reviewing PR #58: "Implement user data export"
+
+          📊 Risk: high (12 files, +340 -89 lines, touches auth/)
+
+          ❌ 2 issues found:
+
+          1. src/export/handler.ts:23 [error]
+             SQL query concatenates user input without parameterization.
+             This is a SQL injection vulnerability.
+
+          2. src/export/handler.ts:67 [warning]
+             No rate limiting on the export endpoint.
+             A user could trigger expensive queries repeatedly.
+
+          💡 1 suggestion:
+          • src/export/handler.ts:45 — Consider streaming large
+            exports instead of loading everything into memory.
+
+          Verdict: Changes requested
+          (Manual review required: high-risk PR)
+```
+
+## Environment Variables
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `ANTHROPIC_API_KEY` | Yes | — | Anthropic API key for Claude analysis |
+| `REVIEW_MODEL` | No | `claude-sonnet-4-20250514` | Claude model to use for code review |
+| `GITHUB_TOKEN` | Yes | — | GitHub token for fetching PR data |
+
+## Limitations
+
+- The Review Agent reviews the **diff only**, not the entire codebase. It may miss issues that require broader context.
+- Auto-approve decisions are based on heuristic risk classification. The line/file thresholds are configurable but not context-aware.
+- Binary files and generated code are skipped in the review.
+- Very large PRs (>500 files) are truncated to fit within Claude's context window, with a note indicating the truncation.

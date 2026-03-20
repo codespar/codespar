@@ -1,0 +1,244 @@
+---
+title: Graduated Autonomy
+description: Configure how much independence your CodeSpar agent has with six autonomy levels (L0–L5), from fully passive to fully autonomous.
+---
+
+# Graduated Autonomy
+
+CodeSpar uses a graduated autonomy system that lets you control exactly how much independence your agent has. From L0 (passive — only responds when asked) to L5 (full auto — acts within policy bounds), you choose the level of trust appropriate for your project and team.
+
+## Autonomy Levels
+
+| Level | Name | Behavior | Auto-Executes |
+|-------|------|----------|---------------|
+| **L0** | Passive | Only responds when directly addressed | Nothing |
+| **L1** | Notify | Monitors events and sends alerts, never auto-executes | Nothing (default) |
+| **L2** | Suggest | Proposes actions proactively, waits for approval | Nothing |
+| **L3** | Auto-Low | Auto-executes low-risk commands, notifies after | `status`, `help`, `logs`, `review`, `prs`, `context`, `whoami` |
+| **L4** | Auto-Med | Auto-executes medium-risk commands | + `instruct`, `fix`, `link`, `unlink`, `register`, `autonomy` |
+| **L5** | Full Auto | Fully autonomous within policy bounds | + `deploy staging`, `approve` |
+
+## Level Details
+
+### L0 — Passive
+
+The agent is completely silent unless directly mentioned with `@codespar`. It does not monitor events, does not send alerts, and does not take any action on its own.
+
+**Use case:** Initial setup, sensitive environments, or when you want the agent to be available but invisible.
+
+```
+@codespar autonomy L0
+```
+
+### L1 — Notify (Default)
+
+The agent monitors CI/CD events (builds, PRs, deploys) and sends notifications to connected channels. It never takes action on its own — it only informs.
+
+**What it monitors:**
+- Build failures and successes
+- New pull requests
+- Deploy completions
+- Error spikes
+
+**Example notification:**
+
+```
+⚠️ Build Failed
+─────────────────
+Repo: codespar/codespar
+Branch: feature/auth
+Commit: abc1234 — "add OAuth flow"
+Error: Test suite failed (3 failures)
+
+View: https://github.com/codespar/codespar/actions/runs/123
+```
+
+### L2 — Suggest
+
+In addition to notifications, the agent proactively suggests actions when it detects relevant events. It presents the suggestion with an approval command so you can execute it with one click/message.
+
+**Example suggestion:**
+
+```
+💡 Suggestion
+─────────────────
+Build failed on feature/auth — 3 test failures.
+
+I can investigate and propose a fix.
+To approve: @codespar approve sg-x1y2z3
+```
+
+### L3 — Auto-Low
+
+The agent automatically executes low-risk, read-only commands without asking for approval. It notifies you after execution.
+
+**Auto-executed commands:**
+- `status` — checking build/agent status
+- `help` — showing command list
+- `logs` — viewing activity history
+- `review` — reviewing pull requests
+- `prs` — listing pull requests
+- `context` / `memory` — showing memory stats
+- `whoami` — identity lookup
+
+**Example auto-execution:**
+
+```
+🤖 Auto-Review — PR #42
+─────────────────
+Triggered by: new PR opened
+Title: "feat: add rate limiting"
+Author: @alice
+
+Review Summary:
+✅ Code quality: Good
+⚠️ 1 suggestion: consider sliding window algorithm
+🟢 Verdict: Approve with suggestion
+
+(Auto-executed at L3 autonomy)
+```
+
+### L4 — Auto-Med
+
+Adds medium-risk commands to auto-execution. The agent can now autonomously investigate issues, execute coding tasks, and manage repository links.
+
+**Additional auto-executed commands:**
+- `instruct` — executing coding tasks
+- `fix` — investigating and fixing issues
+- `link` / `unlink` — managing repository connections
+- `register` — identity registration
+- `autonomy` — changing autonomy level (within bounds)
+
+**Example auto-execution:**
+
+```
+🤖 Auto-Fix — Build Failure
+─────────────────
+Triggered by: build failure on main
+Error: TypeError in src/auth/token.ts:42
+
+Investigation: Token expiry uses local time instead of UTC.
+Fix: PR #48 opened — "fix: use UTC for token expiry"
+
+(Auto-executed at L4 autonomy)
+```
+
+### L5 — Full Auto
+
+The agent operates with maximum autonomy within safety policy bounds. It can deploy to staging and auto-approve certain actions.
+
+**Additional auto-executed commands:**
+- `deploy staging` — deploying to staging environments
+- `approve` — approving pending actions (non-production)
+
+**Important:** Even at L5, the safety guardrails still apply. See the [Safety Guardrails](#safety-guardrails) section below.
+
+## Safety Guardrails
+
+Regardless of autonomy level, CodeSpar agents **NEVER** auto-execute the following actions:
+
+| Action | Reason | Required |
+|--------|--------|----------|
+| **Production deploys** | Risk of user-facing impact | Always requires human approval |
+| **Rollbacks** | Destructive, may cause data loss | Always requires human approval |
+| **Data migrations** | Irreversible database changes | Always requires human approval |
+| **Security-sensitive changes** | Credential rotation, permission changes | Always requires human approval |
+| **Infrastructure modifications** | Scaling, network changes | Always requires human approval |
+| **Kill switch** | Emergency stop of all agents | Always requires human approval* |
+
+\* Exception: users with the `emergency_admin` RBAC role can execute `kill` without approval at any autonomy level.
+
+### Risk Matrix
+
+This table shows which commands require approval at each autonomy level:
+
+| Command | Risk | L0 | L1 | L2 | L3 | L4 | L5 |
+|---------|------|----|----|----|----|----|----|
+| `status` | low | manual | manual | manual | **auto** | **auto** | **auto** |
+| `help` | low | manual | manual | manual | **auto** | **auto** | **auto** |
+| `logs` | low | manual | manual | manual | **auto** | **auto** | **auto** |
+| `review` | low | manual | manual | manual | **auto** | **auto** | **auto** |
+| `prs` | low | manual | manual | manual | **auto** | **auto** | **auto** |
+| `context` | low | manual | manual | manual | **auto** | **auto** | **auto** |
+| `whoami` | low | manual | manual | manual | **auto** | **auto** | **auto** |
+| `register` | low | manual | manual | manual | manual | **auto** | **auto** |
+| `instruct` | medium | manual | manual | manual | manual | **auto** | **auto** |
+| `fix` | medium | manual | manual | manual | manual | **auto** | **auto** |
+| `link` | medium | manual | manual | manual | manual | **auto** | **auto** |
+| `unlink` | medium | manual | manual | manual | manual | **auto** | **auto** |
+| `autonomy` | medium | manual | manual | manual | manual | **auto** | **auto** |
+| `approve` | medium | manual | manual | manual | manual | manual | **auto** |
+| `deploy staging` | high | manual | manual | manual | manual | manual | **auto** |
+| `deploy production` | high | **always manual** | **always manual** | **always manual** | **always manual** | **always manual** | **always manual** |
+| `rollback` | critical | **always manual** | **always manual** | **always manual** | **always manual** | **always manual** | **always manual** |
+| `kill` | critical | **always manual** | **always manual** | **always manual** | **always manual** | **always manual** | **always manual** |
+
+## Changing Autonomy Level
+
+### Via Chat Command
+
+```
+@codespar autonomy L3
+```
+
+**Response:**
+
+```
+🔧 Autonomy Updated
+─────────────────
+Previous: L1 (Notify)
+Current: L3 (Auto-Low)
+
+Auto-executing: status, help, logs, review, prs, context, whoami
+Requires approval: instruct, fix, deploy, rollback, kill
+```
+
+### Via API
+
+```bash
+curl -X POST http://localhost:8080/api/agents/agent-123/action \
+  -H "Content-Type: application/json" \
+  -d '{"action": "set_autonomy", "params": {"level": 3}}'
+```
+
+## RBAC Interaction
+
+Autonomy levels interact with [RBAC roles](/docs/configuration/security). A user can only change the autonomy level if their role permits it:
+
+| Role | Can Set Autonomy | Max Level |
+|------|-----------------|-----------|
+| `owner` | Yes | L5 |
+| `maintainer` | Yes | L5 |
+| `operator` | Yes | L4 |
+| `reviewer` | No | — |
+| `read-only` | No | — |
+| `emergency_admin` | Yes | L5 |
+
+If a user with `operator` role tries to set L5:
+
+```
+@codespar autonomy L5
+```
+
+```
+❌ Permission Denied
+─────────────────
+Your role (operator) can set autonomy up to L4.
+Contact a maintainer or owner to set L5.
+```
+
+## Recommendations
+
+| Team Size | Project Stage | Recommended Level | Rationale |
+|-----------|--------------|-------------------|-----------|
+| Solo dev | Early development | L3–L4 | Move fast, auto-review and auto-fix |
+| Small team (2–5) | Active development | L2–L3 | Stay informed, auto-review PRs |
+| Medium team (5–15) | Production | L1–L2 | Notify on events, suggest actions |
+| Large team (15+) | Enterprise | L0–L1 | Maximum control, audit compliance |
+| Any | Incident response | L0 | Full manual control during incidents |
+
+## Next Steps
+
+- [Command Reference](/docs/commands) — Full list of all 17 commands
+- [Security and RBAC](/docs/configuration/security) — Role-based access control details
+- [Deploy Pipeline](/docs/guides/deploy-pipeline) — How deployment approval works

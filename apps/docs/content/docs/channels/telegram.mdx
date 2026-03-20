@@ -1,0 +1,236 @@
+---
+title: Telegram
+description: Connect CodeSpar to Telegram using BotFather for bot creation and long-polling for real-time message handling.
+---
+
+# Telegram Channel
+
+CodeSpar integrates with Telegram via the Bot API using **long-polling** mode. No webhooks or public URLs are required — the bot polls Telegram's servers for new messages, making it simple to deploy behind firewalls or in local environments.
+
+## Prerequisites
+
+- A Telegram account
+- CodeSpar instance running (Docker or local)
+
+## Create a Telegram Bot
+
+### Step 1: Talk to BotFather
+
+1. Open Telegram and search for [@BotFather](https://t.me/BotFather)
+2. Send `/newbot`
+3. Choose a **display name** for the bot (e.g., `CodeSpar`)
+4. Choose a **username** (must end in `bot`, e.g., `codespar_dev_bot`)
+5. BotFather responds with your **bot token** — copy it
+
+```
+BotFather: Done! Congratulations on your new bot.
+           Use this token to access the HTTP API:
+           7123456789:AAF1x2y3z4a5b6c7d8e9f0-AbCdEfGhIjK
+```
+
+### Step 2: Configure Bot Settings (Optional)
+
+While still in BotFather, you can set additional properties:
+
+```
+/setdescription   → "Autonomous AI coding agent for your projects"
+/setabouttext     → "CodeSpar — AI agents deployed where your team works"
+/setuserpic       → Upload the CodeSpar logo
+/setcommands      → Set command hints (see below)
+```
+
+#### Suggested Command Hints
+
+Send `/setcommands` to BotFather and paste:
+
+```
+status - Show project status
+review - Review a pull request
+deploy - Deploy to an environment
+fix - Fix a bug or issue
+help - Show available commands
+```
+
+These appear as autocomplete suggestions when users type `/` in the chat.
+
+## Environment Variables
+
+Add these to your `.env` file:
+
+```bash
+# Enable the Telegram channel
+ENABLE_TELEGRAM=true
+
+# Bot token from BotFather
+TELEGRAM_BOT_TOKEN=7123456789:AAF1x2y3z4a5b6c7d8e9f0-AbCdEfGhIjK
+```
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `ENABLE_TELEGRAM` | Yes | Set to `true` to activate the Telegram channel |
+| `TELEGRAM_BOT_TOKEN` | Yes | The token provided by BotFather |
+
+## How It Works
+
+### Polling Mode
+
+The Telegram adapter uses **long-polling** via the `getUpdates` API method. This means:
+
+- The bot opens a persistent HTTP request to Telegram's servers
+- Telegram holds the connection open until new messages arrive (or timeout)
+- When a message comes in, it's immediately processed and a new poll starts
+- No public URL, webhook, or SSL certificate is needed
+
+This is ideal for development and private deployments. For high-traffic production environments, webhook mode can be enabled as an alternative.
+
+### Message Processing Flow
+
+```
+Telegram Group Chat
+        │
+        ▼
+┌───────────────────┐
+│ getUpdates (poll)  │  Long-polling connection
+└────────┬──────────┘
+         │ New message received
+         ▼
+┌───────────────────┐
+│ Check for mention  │  Is the bot @mentioned or in a DM?
+└────────┬──────────┘
+         │ Yes
+         ▼
+┌───────────────────┐
+│ Normalize message  │  → NormalizedMessage
+└────────┬──────────┘
+         │
+         ▼
+┌───────────────────┐
+│ Route to agent     │  Project Agent handles the command
+└────────┬──────────┘
+         │
+         ▼
+┌───────────────────┐
+│ sendMessage API    │  Response sent back to the chat
+└───────────────────┘
+```
+
+## Mentions in Groups
+
+In Telegram group chats, the bot only responds when explicitly mentioned using its `@username`:
+
+```
+User: @codespar_dev_bot status
+
+CodeSpar: 📊 Project backend-api
+          Status: healthy
+          Last deploy: 45 min ago (v3.2.1)
+          CI: passing (8/8 checks)
+          Open PRs: 3
+```
+
+The adapter detects the bot's username in the message text, strips it, and passes the remaining text as the command.
+
+### Bot Commands in Groups
+
+Telegram also supports the `/command@botname` syntax:
+
+```
+/deploy@codespar_dev_bot staging
+```
+
+Both formats work. The adapter normalizes them to the same command: `deploy staging`.
+
+## Direct Messages
+
+In 1:1 chats with the bot, no mention or `/command` prefix is needed. Every message is treated as a command:
+
+```
+You: review PR #23 on frontend
+CodeSpar: 🔍 Reviewing PR #23 on frontend...
+```
+
+## Reply Threading
+
+Telegram supports reply threading. CodeSpar responds as a reply to the original message, creating a visual thread in the chat:
+
+```
+User: @codespar_dev_bot fix the memory leak in worker.ts
+  └─ CodeSpar: 🔍 Analyzing worker.ts for memory leaks...
+       └─ CodeSpar: Found the issue. The event listener on line 42
+                    is never removed. Created PR #91 with the fix.
+```
+
+## Group Privacy Mode
+
+By default, Telegram bots in **Privacy Mode** only receive:
+- Messages that @mention the bot
+- Messages starting with `/command`
+- Replies to the bot's own messages
+
+This is the recommended setting — the bot ignores general conversation and only processes explicit commands. If you need the bot to see all messages (not recommended), disable Privacy Mode via BotFather:
+
+```
+/setprivacy → Disable
+```
+
+## Capabilities
+
+| Feature | Support |
+|---------|---------|
+| Reply threads | Yes — replies to the original message |
+| Reactions | Yes — emoji reactions (Telegram API v7.0+) |
+| Rich formatting | Yes — Markdown and HTML formatting |
+| File uploads | Yes — documents, images, code files |
+| Message editing | Yes — can edit its own messages |
+| Inline keyboards | Yes — interactive buttons for approvals |
+
+## Example: Deploy Approval via Inline Keyboard
+
+Telegram's inline keyboards allow interactive approve/reject buttons:
+
+```
+User: @codespar_dev_bot deploy production
+
+CodeSpar: 🚀 Deploy to production requested.
+          Branch: main (abc1234)
+          Changes: 4 files, +87 -23
+
+          Approval required (2 needed).
+
+          [✅ Approve]  [❌ Reject]
+
+Admin1 taps [✅ Approve]
+
+CodeSpar: ✅ 1/2 approvals received (Admin1).
+          Waiting for 1 more.
+
+Admin2 taps [✅ Approve]
+
+CodeSpar: ✅ Quorum reached (2/2). Deploying...
+```
+
+## Troubleshooting
+
+### Bot doesn't respond in groups
+
+1. Verify `ENABLE_TELEGRAM=true` is set
+2. Ensure users are @mentioning the bot's exact username
+3. Check if Privacy Mode is enabled (it should be — but then only @mentions work)
+4. Verify the bot was added to the group as a member
+
+### "Unauthorized" errors
+
+The bot token is invalid. Get a new one from BotFather:
+
+```
+/revoke → Revokes current token
+/token  → Shows current token (or generates new one)
+```
+
+### Polling conflicts
+
+If you see `409 Conflict` errors, another instance is polling with the same bot token. Only one process can poll per bot token. Stop the other instance or use a different bot.
+
+### Slow responses
+
+Long-polling adds minimal latency (typically under 1 second). If responses are slow, the bottleneck is likely in agent processing, not the Telegram connection. Check agent logs for task execution times.

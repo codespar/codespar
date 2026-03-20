@@ -1,0 +1,265 @@
+---
+title: Multi-Channel Setup
+description: How to enable multiple messaging channels simultaneously, link user identities across channels, and use cross-channel features like approvals.
+---
+
+# Multi-Channel Setup
+
+CodeSpar agents can operate on multiple messaging channels simultaneously. The same agent responds on WhatsApp, Slack, Discord, and Telegram with a unified experience. Users can start a conversation on one channel and continue on another.
+
+## Overview
+
+```
+                    ┌─────────┐
+        Slack ──────┤         │
+     WhatsApp ──────┤ CodeSpar├────── GitHub
+      Discord ──────┤  Agent  │
+     Telegram ──────┤         │
+                    └─────────┘
+```
+
+All channels connect to the same agent instance. Commands, permissions, and context are shared.
+
+## Enable Multiple Channels
+
+Set the environment variables for each channel you want to enable. All channels can run simultaneously.
+
+### Example: Slack + WhatsApp
+
+```bash
+# Slack
+ENABLE_SLACK=true
+SLACK_BOT_TOKEN=xoxb-your-bot-token
+SLACK_APP_TOKEN=xapp-your-app-token
+
+# WhatsApp
+ENABLE_WHATSAPP=true
+EVOLUTION_API_URL=https://evolution.example.com
+EVOLUTION_API_KEY=your-evolution-key
+EVOLUTION_INSTANCE=codespar
+WHATSAPP_WEBHOOK_PORT=8085
+WHATSAPP_BOT_MENTION=@codespar
+```
+
+### Example: All Four Channels
+
+```bash
+# Slack
+ENABLE_SLACK=true
+SLACK_BOT_TOKEN=xoxb-...
+SLACK_APP_TOKEN=xapp-...
+
+# WhatsApp
+ENABLE_WHATSAPP=true
+EVOLUTION_API_URL=https://evolution.example.com
+EVOLUTION_API_KEY=...
+EVOLUTION_INSTANCE=codespar
+WHATSAPP_WEBHOOK_PORT=8085
+
+# Discord
+ENABLE_DISCORD=true
+DISCORD_TOKEN=your-discord-bot-token
+
+# Telegram
+ENABLE_TELEGRAM=true
+TELEGRAM_BOT_TOKEN=your-telegram-bot-token
+```
+
+### Verify Channel Status
+
+After starting CodeSpar, check that all channels are connected:
+
+```
+@codespar status
+```
+
+Or via the API:
+
+```bash
+curl http://localhost:3000/api/channels
+```
+
+```json
+[
+  { "name": "slack", "enabled": true, "status": "connected" },
+  { "name": "whatsapp", "enabled": true, "status": "connected" },
+  { "name": "discord", "enabled": true, "status": "connected" },
+  { "name": "telegram", "enabled": true, "status": "connected" }
+]
+```
+
+## Identity Linking
+
+By default, CodeSpar treats each channel user as a separate identity. To enable cross-channel features, users need to link their identities.
+
+### Register Your Name
+
+From each channel you use, register with the same display name:
+
+**From Slack:**
+
+```
+@codespar register John Silva
+```
+
+**From WhatsApp:**
+
+```
+@codespar register John Silva
+```
+
+**From Discord:**
+
+```
+@codespar register John Silva
+```
+
+CodeSpar matches identities by display name. When the same name is registered from multiple channels, all channel identities are merged under a single identity record.
+
+### Verify Identity Linking
+
+Check your identity from any channel:
+
+```
+@codespar whoami
+```
+
+```
+👤 Identity
+─────────────────
+Name: John Silva
+Role: maintainer
+Channels:
+  • Slack: @john (U1234ABCD)
+  • WhatsApp: +55 11 99999-0000
+  • Discord: john#1234
+Registered: 2024-01-15
+```
+
+### Verify via API
+
+```bash
+curl "http://localhost:3000/api/identity?channelType=slack&channelUserId=U1234ABCD"
+```
+
+## Cross-Channel Features
+
+Once identities are linked, several cross-channel capabilities become available.
+
+### Cross-Channel Approval
+
+Approve an action from a different channel than where it was requested:
+
+```
+# In Slack:
+@alice: @codespar deploy staging
+
+# In WhatsApp:
+@bob: @codespar approve dp-a1b2c3
+```
+
+Both channels receive the deployment status updates.
+
+### Unified Notifications
+
+When an event occurs (build failure, PR opened, deploy completed), the notification is sent to all connected channels. Users with linked identities are not notified twice — they receive the notification on their primary channel.
+
+### Consistent Permissions
+
+RBAC roles apply across all channels. If John is a `maintainer` on Slack, he has `maintainer` permissions on WhatsApp, Discord, and Telegram too.
+
+### Unified Audit Trail
+
+All actions are attributed to the resolved identity, regardless of which channel was used:
+
+```bash
+curl "http://localhost:3000/api/audit?limit=5"
+```
+
+```json
+{
+  "entries": [
+    {
+      "actorId": "identity-001",
+      "actorType": "user",
+      "action": "deploy",
+      "metadata": {
+        "channel": "whatsapp",
+        "displayName": "John Silva"
+      }
+    }
+  ]
+}
+```
+
+## Same @mention Syntax
+
+The same `@codespar` mention syntax works on every channel:
+
+| Channel | Syntax | Notes |
+|---------|--------|-------|
+| Slack | `@codespar deploy staging` | Standard Slack mention |
+| WhatsApp | `@codespar deploy staging` | Configurable via `WHATSAPP_BOT_MENTION` |
+| Discord | `@codespar deploy staging` | Uses Discord bot mention |
+| Telegram | `@codespar deploy staging` | Uses Telegram bot username |
+
+In direct messages (DMs), the `@codespar` prefix is optional on all channels.
+
+## Channel-Specific Behavior
+
+While the core experience is identical, some channels have minor differences:
+
+| Feature | Slack | WhatsApp | Discord | Telegram |
+|---------|-------|----------|---------|----------|
+| Code blocks | Rendered with syntax highlighting | Monospace text | Rendered with syntax highlighting | Monospace text |
+| Inline buttons | Not used (text commands) | Not used | Not used | Not used |
+| Thread support | Messages in threads | Flat messages | Messages in threads | Flat messages |
+| File attachments | Supported | Supported | Supported | Supported |
+| Max message length | 40,000 chars | 4,096 chars | 2,000 chars | 4,096 chars |
+
+For channels with shorter message limits (Discord), long outputs are automatically split into multiple messages.
+
+## Reconnecting a Channel
+
+If a channel disconnects, you can reconnect it without restarting CodeSpar:
+
+```bash
+curl -X POST http://localhost:3000/api/channels/discord/reconnect
+```
+
+Or check status and reconnect all disconnected channels:
+
+```bash
+# Check which channels are disconnected
+curl http://localhost:3000/api/channels
+
+# Reconnect specific channel
+curl -X POST http://localhost:3000/api/channels/whatsapp/reconnect
+```
+
+## Troubleshooting
+
+### Channel shows "disconnected"
+
+1. Check channel-specific environment variables are correctly set
+2. Verify the external service is running (Evolution API for WhatsApp, etc.)
+3. Try reconnecting via the API: `POST /api/channels/:name/reconnect`
+4. Check CodeSpar logs for connection errors
+
+### Identity not linking across channels
+
+1. Ensure the exact same display name is used on all channels (case-sensitive)
+2. Check identity resolution: `@codespar whoami` from each channel
+3. Verify via API: `GET /api/identity?channelType=slack&channelUserId=U1234`
+
+### Notifications received on wrong channel
+
+1. Check that the user's identity is properly linked
+2. Notifications are sent to all connected channels by default
+3. Channel preferences are not yet configurable (coming soon)
+
+## Next Steps
+
+- [Command Reference](/docs/commands) — Commands work the same on all channels
+- [Security](/docs/configuration/security) — RBAC roles across channels
+- [Deploy Pipeline](/docs/guides/deploy-pipeline) — Cross-channel approval for deploys

@@ -1,0 +1,261 @@
+---
+title: Railway Deployment
+description: Deploy CodeSpar to Railway with one-click setup, environment variable configuration, custom domains, and monitoring.
+---
+
+# Railway Deployment
+
+Railway is the recommended platform for deploying CodeSpar to the cloud. It offers one-click deploys from GitHub, automatic HTTPS, and built-in monitoring.
+
+## One-Click Deploy
+
+The fastest way to deploy CodeSpar:
+
+1. Fork the `codespar/codespar` repository to your GitHub account
+2. Go to [Railway](https://railway.app) and create a new project
+3. Select **"Deploy from GitHub Repo"**
+4. Choose your forked `codespar/codespar` repository
+5. Railway will auto-detect the Dockerfile and begin building
+
+## Required Environment Variables
+
+After the initial deploy, set these environment variables in the Railway dashboard under **Settings > Variables**:
+
+| Variable | Required | Notes |
+|----------|----------|-------|
+| `ANTHROPIC_API_KEY` | Yes | Your Anthropic API key |
+| `GITHUB_TOKEN` | Yes | GitHub PAT with `repo` scope |
+| `PROJECT_NAME` | No | Your project name (default: `codespar`) |
+| `ADMIN_NAME` | No | Admin display name |
+| `WEBHOOK_BASE_URL` | Recommended | Your Railway public URL (e.g., `https://codespar-production.up.railway.app`) |
+
+### Setting Variables via CLI
+
+You can also use the Railway CLI:
+
+```bash
+# Install Railway CLI
+npm install -g @railway/cli
+
+# Login
+railway login
+
+# Link to your project
+railway link
+
+# Set variables
+railway variables set ANTHROPIC_API_KEY=sk-ant-api03-...
+railway variables set GITHUB_TOKEN=ghp_...
+railway variables set WEBHOOK_BASE_URL=https://codespar-production.up.railway.app
+```
+
+## PORT Configuration
+
+Railway automatically sets the `PORT` environment variable to `8080`. CodeSpar reads this automatically — you do not need to set it manually.
+
+If you see port-related errors, verify that:
+- You have **not** hardcoded `PORT=3000` in your Railway variables
+- Your Dockerfile uses `ENV PORT=3000` as a default but CodeSpar respects the runtime `PORT` value
+
+## Adding Channels
+
+### Slack
+
+```
+ENABLE_SLACK=true
+SLACK_BOT_TOKEN=xoxb-your-bot-token
+SLACK_APP_TOKEN=xapp-your-app-token
+```
+
+### Discord
+
+```
+ENABLE_DISCORD=true
+DISCORD_TOKEN=your-discord-bot-token
+```
+
+### Telegram
+
+```
+ENABLE_TELEGRAM=true
+TELEGRAM_BOT_TOKEN=your-telegram-bot-token
+```
+
+### WhatsApp
+
+WhatsApp requires an Evolution API instance. You can add it as a separate Railway service:
+
+1. Add a new service in your Railway project
+2. Deploy the Evolution API image: `atendai/evolution-api:latest`
+3. Set the `AUTHENTICATION_API_KEY` variable on the Evolution service
+4. Set the following on your CodeSpar service:
+
+```
+ENABLE_WHATSAPP=true
+EVOLUTION_API_URL=http://evolution.railway.internal:8080
+EVOLUTION_API_KEY=your-evolution-key
+EVOLUTION_INSTANCE=codespar
+WHATSAPP_WEBHOOK_PORT=8085
+```
+
+Note: Use Railway's internal networking (`*.railway.internal`) for service-to-service communication.
+
+## Adding a Database
+
+### PostgreSQL
+
+1. Click **"+ New"** in your Railway project
+2. Select **"Database" > "PostgreSQL"**
+3. Railway auto-provisions the database and sets `DATABASE_URL`
+4. Add the reference variable to your CodeSpar service:
+
+```
+DATABASE_URL=${{Postgres.DATABASE_URL}}
+```
+
+### Redis
+
+1. Click **"+ New"** in your Railway project
+2. Select **"Database" > "Redis"**
+3. Add the reference variable:
+
+```
+REDIS_URL=${{Redis.REDIS_URL}}
+```
+
+## Custom Domain Setup
+
+Railway provides a default URL like `https://codespar-production.up.railway.app`. To use a custom domain:
+
+1. Go to your service's **Settings > Networking**
+2. Click **"+ Custom Domain"**
+3. Enter your domain (e.g., `codespar.example.com`)
+4. Add the provided CNAME record to your DNS provider:
+
+```
+Type: CNAME
+Name: codespar
+Value: codespar-production.up.railway.app
+```
+
+5. Wait for DNS propagation (usually 5–30 minutes)
+6. Railway auto-provisions an SSL certificate via Let's Encrypt
+
+After setting up the custom domain, update `WEBHOOK_BASE_URL`:
+
+```
+WEBHOOK_BASE_URL=https://codespar.example.com
+```
+
+## Monitoring and Logs
+
+### Viewing Logs
+
+**Railway Dashboard:**
+- Go to your service > **Deployments** > click a deployment > **View Logs**
+
+**Railway CLI:**
+
+```bash
+# Stream live logs
+railway logs
+
+# Stream logs with timestamps
+railway logs --timestamps
+```
+
+### Metrics
+
+Railway provides built-in metrics for:
+- CPU usage
+- Memory usage
+- Network traffic
+- Disk usage
+
+Access these from the service's **Metrics** tab in the dashboard.
+
+### Health Monitoring
+
+Set up a health check endpoint in Railway:
+
+1. Go to **Settings > Deploy > Health Check**
+2. Set the path to `/api/agents`
+3. Set the timeout to `10s`
+
+Railway will restart the service if the health check fails.
+
+## Deployment Configuration
+
+### Build Settings
+
+Railway auto-detects the Dockerfile. If you need to customize:
+
+| Setting | Value |
+|---------|-------|
+| Builder | Dockerfile |
+| Dockerfile path | `./Dockerfile` |
+| Watch paths | `/` (rebuild on any change) |
+
+### Scaling
+
+Railway supports horizontal scaling on paid plans:
+
+- **Hobby plan:** Single instance, 512 MB RAM, shared CPU
+- **Pro plan:** Multiple instances, up to 8 GB RAM, dedicated CPU
+- **Enterprise:** Custom resource allocation
+
+For CodeSpar, a single instance with 512 MB RAM is sufficient for most teams. Scale up if you have many concurrent agent tasks.
+
+### Restart Policy
+
+Railway automatically restarts crashed services. The default behavior is:
+- Restart on crash
+- Backoff on repeated crashes (1s, 2s, 4s, 8s... up to 5 minutes)
+
+## Example Full Configuration
+
+A complete Railway setup with all services:
+
+```
+# CodeSpar Service Variables
+ANTHROPIC_API_KEY=sk-ant-api03-...
+GITHUB_TOKEN=ghp_...
+PROJECT_NAME=my-project
+ADMIN_NAME=John
+WEBHOOK_BASE_URL=https://codespar.example.com
+DATABASE_URL=${{Postgres.DATABASE_URL}}
+REDIS_URL=${{Redis.REDIS_URL}}
+ENABLE_SLACK=true
+SLACK_BOT_TOKEN=xoxb-...
+SLACK_APP_TOKEN=xapp-...
+ENABLE_DISCORD=true
+DISCORD_TOKEN=...
+TASK_MODEL=claude-sonnet-4-20250514
+NLU_MODEL=claude-haiku-4-5-20251001
+```
+
+## Troubleshooting
+
+### Service won't start
+
+1. Check logs for missing environment variables
+2. Verify `ANTHROPIC_API_KEY` and `GITHUB_TOKEN` are set
+3. Ensure you have not hardcoded `PORT` (Railway sets it automatically)
+
+### Webhooks not received
+
+1. Verify `WEBHOOK_BASE_URL` matches your Railway URL or custom domain
+2. Check that the URL is publicly accessible (not behind a VPN)
+3. Test with a curl request to `{WEBHOOK_BASE_URL}/webhooks/github`
+
+### Channel connection failures
+
+1. Check channel-specific environment variables are correctly set
+2. For WhatsApp, verify the Evolution API service is running
+3. Use the [Channel API](/docs/api/channels) to check status and reconnect
+
+## Next Steps
+
+- [Docker Configuration](/docs/configuration/docker) — Self-hosted Docker deployment
+- [Configuration](/docs/configuration) — All environment variables
+- [Multi-Channel Setup](/docs/guides/multi-channel) — Enable multiple channels

@@ -1,0 +1,242 @@
+---
+title: Review Pull Requests
+description: How to set up automated pull request review with CodeSpar's Review Agent, including webhook triggers, manual review commands, auto-approve configuration, and review output format.
+---
+
+# Review Pull Requests
+
+CodeSpar's Review Agent analyzes pull requests for code quality, potential bugs, security issues, and best practices. Reviews can be triggered automatically via webhooks or manually via chat commands.
+
+## Prerequisites
+
+1. **Repository linked** — see [Link a Repository](/docs/guides/link-repository)
+2. **`GITHUB_TOKEN` configured** with `repo` scope (to read PR diffs and post comments)
+3. **Webhook configured** (for automatic triggers) — auto-configured when linking with `WEBHOOK_BASE_URL` set
+
+## How It Works
+
+```
+PR opened on GitHub
+       │
+       ▼
+GitHub sends webhook ──▶ CodeSpar receives pull_request event
+                                │
+                                ▼
+                        Autonomy level check
+                                │
+                    ┌───────────┼───────────┐
+                    │           │           │
+                   L0-L1       L2         L3+
+                    │           │           │
+                  Notify    Suggest    Auto-review
+                 "PR #42    "Review     ReviewAgent
+                  opened"   PR #42?"    spawns auto
+```
+
+## Automatic Review (Webhook)
+
+When a pull request is opened or updated, GitHub sends a `pull_request` webhook event to CodeSpar. The agent's behavior depends on the [autonomy level](/docs/commands/autonomy):
+
+| Level | Behavior |
+|-------|----------|
+| L0 | Ignored |
+| L1 | Notification: "PR #42 opened by @alice" |
+| L2 | Notification + suggestion: "I can review this PR. Approve with: `@codespar approve sg-...`" |
+| L3+ | Review Agent spawns automatically, review is posted to channel and (optionally) as a GitHub PR comment |
+
+### Enable Auto-Review
+
+Set autonomy to L3 or higher:
+
+```
+@codespar autonomy L3
+```
+
+From this point, every new PR on the linked repository will be automatically reviewed.
+
+## Manual Review
+
+Trigger a review on any PR at any time, regardless of autonomy level:
+
+```
+@codespar review PR #42
+```
+
+You can also use natural language:
+
+```
+@codespar can you review the latest PR?
+@codespar review the PR from alice
+@codespar revisar o PR 42
+```
+
+## Review Output
+
+The Review Agent analyzes the PR diff and produces a structured review:
+
+```
+📝 PR Review — #42
+─────────────────
+Title: "feat: add rate limiting middleware"
+Author: @alice
+Files: 4 changed (+120 / -3)
+Branch: feature/rate-limiting → main
+
+Review Summary:
+✅ Code quality: Good
+✅ Test coverage: Tests included
+⚠️ 2 suggestions:
+
+1. [src/middleware/rate-limit.ts:15]
+   Consider using a sliding window algorithm instead of fixed window
+   for more even request distribution across time boundaries.
+
+2. [src/middleware/rate-limit.ts:28]
+   Missing error message in RateLimitError constructor. Clients will
+   receive an empty 429 response body. Suggest:
+   `throw new RateLimitError("Rate limit exceeded. Try again in ${retryAfter}s")`
+
+🟢 Verdict: Approve with suggestions
+```
+
+### Verdict Values
+
+| Verdict | Meaning |
+|---------|---------|
+| Approve | No issues found, PR is good to merge |
+| Approve with suggestions | Minor improvements suggested, not blocking |
+| Request changes | Issues found that should be addressed before merge |
+| Needs discussion | Architectural or design decisions need team input |
+
+### Review Criteria
+
+The Review Agent evaluates:
+
+| Category | What It Checks |
+|----------|---------------|
+| **Code quality** | Readability, naming, structure, DRY violations |
+| **Bugs** | Potential runtime errors, null references, edge cases |
+| **Security** | SQL injection, XSS, credential exposure, input validation |
+| **Performance** | N+1 queries, unnecessary allocations, algorithm complexity |
+| **Tests** | Test coverage for new code, edge case testing |
+| **Types** | TypeScript type safety, any usage, missing types |
+| **Best practices** | Framework conventions, error handling, logging |
+
+## Auto-Approve Configuration
+
+At L3+ autonomy, the Review Agent can be configured to auto-approve low-risk PRs:
+
+### What Qualifies as Low-Risk
+
+A PR is considered low-risk when:
+
+- Changes fewer than 50 lines
+- Only modifies non-critical files (docs, configs, styles, tests)
+- No changes to security-sensitive files (auth, permissions, crypto)
+- No changes to database schemas or migrations
+- All existing tests pass
+- No new dependencies added
+
+### Auto-Approve Behavior by Level
+
+| Level | Auto-Approve | Notification |
+|-------|--------------|-------------|
+| L3 | Only for low-risk PRs meeting all criteria | Posts review summary to channel |
+| L4 | For low and medium-risk PRs | Posts review summary to channel |
+| L5 | For all PRs except security-sensitive | Posts review summary to channel |
+
+At all levels, PRs touching security-sensitive files are never auto-approved.
+
+## GitHub Integration
+
+When `GITHUB_TOKEN` has write access, the Review Agent can post its review directly as a GitHub PR review:
+
+- **PR comment** — Summary posted as a PR comment
+- **Inline comments** — Suggestions posted on specific lines
+- **Review status** — GitHub review status set (Approve, Request Changes)
+
+### Example GitHub Review
+
+The agent posts a review with inline annotations:
+
+```
+# CodeSpar Review
+
+## Summary
+Overall good implementation. Two minor suggestions below.
+
+## Suggestions
+- Consider sliding window algorithm (line 15)
+- Add error message to RateLimitError (line 28)
+
+**Verdict:** Approve with suggestions
+```
+
+## Customizing the Review Model
+
+By default, reviews use the `REVIEW_MODEL` (Claude Sonnet). You can change this:
+
+```bash
+# Use a more capable model for critical repos
+REVIEW_MODEL=claude-sonnet-4-20250514
+
+# Use a faster model for high-volume repos
+REVIEW_MODEL=claude-haiku-4-5-20251001
+```
+
+## Examples
+
+### Review a specific PR
+
+```
+@codespar review PR #42
+```
+
+### Review the latest PR
+
+```
+@codespar review the latest PR
+```
+
+### List PRs then review
+
+```
+@codespar prs open
+# See list, then:
+@codespar review PR #47
+```
+
+### Check review history
+
+```
+@codespar logs 10
+```
+
+Look for review entries in the activity log.
+
+## Troubleshooting
+
+### Reviews not triggering automatically
+
+1. Verify autonomy is L3+: `@codespar status agent`
+2. Check webhook is configured: look at GitHub repo Settings > Webhooks
+3. Check webhook deliveries in GitHub for errors
+4. Verify `GITHUB_TOKEN` has `repo` scope
+
+### Review quality is poor
+
+1. Consider using a more capable model: `REVIEW_MODEL=claude-sonnet-4-20250514`
+2. Ensure the repository has been indexed (check `@codespar context`)
+3. For large PRs, the review may be truncated — consider splitting the PR
+
+### Reviews not posted to GitHub
+
+1. Verify `GITHUB_TOKEN` has write access to the repository
+2. Check CodeSpar logs for GitHub API errors
+3. The review is always posted to the chat channel even if GitHub posting fails
+
+## Next Steps
+
+- [Deploy Pipeline](/docs/guides/deploy-pipeline) — Set up deployment orchestration
+- [Graduated Autonomy](/docs/commands/autonomy) — Configure auto-review levels
+- [Webhook API](/docs/api/webhooks) — How webhook events are processed

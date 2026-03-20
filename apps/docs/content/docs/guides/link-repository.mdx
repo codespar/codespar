@@ -1,0 +1,205 @@
+---
+title: Link a Repository
+description: Step-by-step guide to connecting a GitHub repository to your CodeSpar agent, including prerequisites, auto-webhook configuration, and verification.
+---
+
+# Link a Repository
+
+Connect a GitHub repository to your CodeSpar agent so it can monitor builds, review PRs, execute tasks, and orchestrate deploys.
+
+## Prerequisites
+
+Before linking a repository, ensure:
+
+1. **`GITHUB_TOKEN` is configured** with at least `repo` scope
+2. **Your CodeSpar instance is running** and accessible
+3. **At least one channel is connected** (Slack, Discord, WhatsApp, or Telegram)
+
+### GitHub Token Scopes
+
+| Scope | Required | Purpose |
+|-------|----------|---------|
+| `repo` | Yes | Read/write access to repository code, PRs, and issues |
+| `admin:repo_hook` | Recommended | Auto-configure webhooks when linking (without this, webhooks must be set up manually) |
+| `workflow` | Optional | Trigger and manage GitHub Actions workflows |
+
+To create a token:
+
+1. Go to [GitHub Settings > Developer Settings > Personal Access Tokens](https://github.com/settings/tokens)
+2. Click **"Generate new token (classic)"**
+3. Select the scopes listed above
+4. Copy the token and set it as `GITHUB_TOKEN` in your environment
+
+## Link via Chat Command
+
+The simplest way to link a repository is via the `@codespar link` command from any connected channel.
+
+### Using owner/repo format
+
+```
+@codespar link codespar/codespar
+```
+
+### Using full URL
+
+```
+@codespar link https://github.com/codespar/codespar
+```
+
+### Expected Output
+
+```
+🔗 Repository Linked
+─────────────────
+Repo: codespar/codespar
+Branch: main (default)
+Webhook: ✅ configured
+Stars: 1,234
+Last commit: abc1234 (2h ago)
+```
+
+If auto-webhook is not available (missing `WEBHOOK_BASE_URL` or insufficient permissions):
+
+```
+🔗 Repository Linked
+─────────────────
+Repo: codespar/codespar
+Branch: main (default)
+Webhook: ⚠️ not configured (set WEBHOOK_BASE_URL for auto-setup)
+Stars: 1,234
+Last commit: abc1234 (2h ago)
+
+To receive build and PR events, configure the webhook manually:
+URL: https://your-instance.com/webhooks/github
+Events: push, pull_request, workflow_run
+```
+
+## Link via API
+
+You can also link a repository programmatically via the REST API:
+
+```bash
+curl -X POST http://localhost:3000/api/project/link \
+  -H "Content-Type: application/json" \
+  -d '{
+    "agentId": "agent-proj-abc123",
+    "repo": "codespar/codespar"
+  }'
+```
+
+### Response
+
+```json
+{
+  "id": "proj-001",
+  "name": "codespar",
+  "repo": "codespar/codespar",
+  "repoUrl": "https://github.com/codespar/codespar",
+  "defaultBranch": "main",
+  "webhookConfigured": true,
+  "webhookId": 123456789,
+  "linkedAt": "2024-01-15T13:30:00Z"
+}
+```
+
+## Auto-Webhook Configuration
+
+When `WEBHOOK_BASE_URL` is set and `GITHUB_TOKEN` has `admin:repo_hook` scope, CodeSpar automatically creates a GitHub webhook on the linked repository.
+
+### What Gets Configured
+
+| Setting | Value |
+|---------|-------|
+| Payload URL | `{WEBHOOK_BASE_URL}/webhooks/github` |
+| Content type | `application/json` |
+| Events | `push`, `pull_request`, `workflow_run` |
+| Active | `true` |
+
+### Manual Webhook Setup
+
+If auto-configuration is not available, set up the webhook manually:
+
+1. Go to your repository on GitHub
+2. Navigate to **Settings > Webhooks > Add webhook**
+3. Configure as follows:
+
+```
+Payload URL: https://your-codespar-instance.com/webhooks/github
+Content type: application/json
+Events: ✅ Pushes, ✅ Pull requests, ✅ Workflow runs
+Active: ✅ Yes
+```
+
+## Verification
+
+After linking, verify everything is working:
+
+### Check Status
+
+```
+@codespar status
+```
+
+Expected output:
+
+```
+📊 Project Status
+─────────────────
+Project: codespar/codespar
+Branch: main
+Last build: ✅ passed (3m ago)
+Active agents: 1 (Project Agent)
+Autonomy: L1 (Notify)
+```
+
+### Check Project Link via API
+
+```bash
+curl "http://localhost:3000/api/project?agentId=agent-proj-abc123"
+```
+
+### Test Webhook
+
+Push a commit or open a PR on the linked repository. You should receive a notification in your connected channels (at L1+ autonomy).
+
+If no notification arrives:
+
+1. Check the webhook delivery status in GitHub (**Settings > Webhooks > Recent Deliveries**)
+2. Verify `WEBHOOK_BASE_URL` is publicly accessible
+3. Check CodeSpar logs for webhook processing errors
+
+## Unlinking
+
+To remove the repository link:
+
+```
+@codespar unlink
+```
+
+This removes the project link and the GitHub webhook (if it was auto-configured).
+
+## Troubleshooting
+
+### "Repository not found or insufficient permissions"
+
+- Verify `GITHUB_TOKEN` has `repo` scope
+- Confirm the repository exists and your token has access
+- For private repos, ensure the token owner has at least read access
+
+### "Agent already has a linked project"
+
+- Each agent can link to one repository at a time
+- Unlink the current repo first: `@codespar unlink`
+
+### Webhook not delivering
+
+- Check GitHub webhook delivery logs for errors
+- Verify `WEBHOOK_BASE_URL` is reachable from the internet
+- Ensure the URL does not have a trailing slash
+- Test connectivity: `curl https://your-instance.com/webhooks/github`
+
+## Next Steps
+
+- [Review Pull Requests](/docs/guides/review-prs) — Set up automated PR review
+- [Deploy Pipeline](/docs/guides/deploy-pipeline) — Configure deployment orchestration
+- [Webhook API](/docs/api/webhooks) — Webhook processing details

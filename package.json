@@ -3,6 +3,7 @@
   "private": true,
   "packageManager": "npm@11.8.0",
   "workspaces": [
+    "apps/*",
     "packages/*",
     "packages/agents/*",
     "packages/channels/*"

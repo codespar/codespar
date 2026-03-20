@@ -1,0 +1,55 @@
+---
+title: Guides
+description: Step-by-step how-to guides for common CodeSpar tasks including linking repositories, reviewing PRs, deploying, multi-channel setup, and multi-tenant configuration.
+---
+
+# Guides
+
+Practical, step-by-step guides for common CodeSpar tasks. Each guide covers prerequisites, configuration, and verification.
+
+## Available Guides
+
+### Getting Connected
+
+| Guide | Description | Time |
+|-------|-------------|------|
+| [Link a Repository](/docs/guides/link-repository) | Connect a GitHub repository to your CodeSpar agent with auto-webhook configuration | 5 min |
+| [Multi-Channel Setup](/docs/guides/multi-channel) | Enable multiple messaging channels and link user identities across them | 10 min |
+
+### Development Workflow
+
+| Guide | Description | Time |
+|-------|-------------|------|
+| [Review Pull Requests](/docs/guides/review-prs) | Set up automated PR review with the Review Agent, including auto-approve configuration | 5 min |
+| [Deploy Pipeline](/docs/guides/deploy-pipeline) | Orchestrate deployments with approval flows, cross-channel approval, cascading deploys, and rollback | 10 min |
+
+### Administration
+
+| Guide | Description | Time |
+|-------|-------------|------|
+| [Multi-Tenant / Organizations](/docs/guides/multi-tenant) | Set up organizations for multi-tenant deployments with project isolation | 10 min |
+
+## Prerequisites
+
+Before following any guide, make sure you have:
+
+1. **CodeSpar running** — via [Docker](/docs/configuration/docker) or [Railway](/docs/configuration/railway)
+2. **Environment variables set** — at minimum `ANTHROPIC_API_KEY` and `GITHUB_TOKEN` (see [Configuration](/docs/configuration))
+3. **At least one channel enabled** — Slack, Discord, Telegram, or WhatsApp (see [Configuration](/docs/configuration))
+
+## Recommended Order
+
+If you are setting up CodeSpar for the first time, follow these guides in order:
+
+1. [Link a Repository](/docs/guides/link-repository) — connect your project
+2. [Multi-Channel Setup](/docs/guides/multi-channel) — add your team's channels
+3. [Review Pull Requests](/docs/guides/review-prs) — automate code review
+4. [Deploy Pipeline](/docs/guides/deploy-pipeline) — set up deployment orchestration
+5. [Multi-Tenant / Organizations](/docs/guides/multi-tenant) — (if managing multiple projects or teams)
+
+## Need Help?
+
+- [Command Reference](/docs/commands) — Full list of all 17 commands
+- [REST API](/docs/api) — Programmatic access to all CodeSpar features
+- [Configuration](/docs/configuration) — All environment variables
+- [Security](/docs/configuration/security) — RBAC, approvals, and audit

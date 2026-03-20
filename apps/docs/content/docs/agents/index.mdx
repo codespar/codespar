@@ -1,0 +1,221 @@
+---
+title: Agents Overview
+description: CodeSpar's multi-agent architecture — six specialized agent types, lifecycle states, autonomy levels, and the supervisor pattern.
+---
+
+# Agent Architecture
+
+CodeSpar uses a multi-agent architecture where specialized agents collaborate to handle different aspects of software development. Each agent has a focused responsibility, a defined lifecycle, and operates within configurable autonomy bounds.
+
+## Core Concepts
+
+### Agent Interface
+
+Every agent implements a common interface:
+
+```typescript
+interface Agent {
+  /** Initialize the agent with its configuration */
+  initialize(config: AgentConfig): Promise<void>;
+
+  /** Handle an incoming message or event */
+  handleMessage(message: NormalizedMessage): Promise<AgentResponse>;
+
+  /** Return the agent's current state and metadata */
+  getStatus(): AgentStatus;
+
+  /** Gracefully shut down the agent, releasing resources */
+  shutdown(): Promise<void>;
+}
+```
+
+This uniform interface means the system treats all agents the same way — the supervisor doesn't need to know the specifics of what a Review Agent does vs. a Deploy Agent. It just initializes them, routes messages, checks status, and shuts them down.
+
+### Agent Configuration
+
+Each agent is instantiated with a configuration object:
+
+```typescript
+interface AgentConfig {
+  /** Unique identifier for this agent instance */
+  id: string;
+
+  /** The type of agent */
+  type: AgentType;
+
+  /** Autonomy level (L0–L5) controlling what the agent can auto-execute */
+  autonomyLevel: AutonomyLevel;
+
+  /** The project this agent is associated with */
+  projectId: string;
+
+  /** Additional type-specific settings */
+  settings?: Record<string, unknown>;
+}
+
+type AgentType =
+  | "project"
+  | "task"
+  | "review"
+  | "deploy"
+  | "incident"
+  | "coordinator";
+
+type AutonomyLevel = 0 | 1 | 2 | 3 | 4 | 5;
+```
+
+## Agent Lifecycle
+
+Every agent follows a state machine with four states:
+
+```
+┌──────────────┐
+│ INITIALIZING │  Agent is starting up, loading config
+└──────┬───────┘
+       │ initialize() completes
+       ▼
+┌──────────────┐     handleMessage()     ┌──────────────┐
+│     IDLE     │ ◄──────────────────────► │    ACTIVE    │
+│  (waiting)   │    task completes        │ (processing) │
+└──────┬───────┘                          └──────┬───────┘
+       │ shutdown()                              │ shutdown()
+       ▼                                         ▼
+┌──────────────┐
+│  TERMINATED  │  Agent has been shut down
+└──────────────┘
+```
+
+```typescript
+type AgentState = "INITIALIZING" | "IDLE" | "ACTIVE" | "TERMINATED";
+```
+
+| State | Description | Semantic Color |
+|-------|-------------|----------------|
+| `INITIALIZING` | Agent is loading configuration and connecting to services | — |
+| `IDLE` | Agent is running but waiting for messages or events | Idle Gray (`#9CA3AF`) |
+| `ACTIVE` | Agent is processing a message or executing a task | Agent Green (`#10B981`) |
+| `TERMINATED` | Agent has been shut down and released all resources | — |
+
+### Persistent vs. Ephemeral Agents
+
+Agents fall into two lifecycle categories:
+
+**Persistent agents** run continuously for the lifetime of the system. They hold state, maintain connections, and are always ready to receive messages.
+
+**Ephemeral agents** are spawned on demand for a specific task and terminate when the task completes. They're lightweight, stateless between invocations, and can run in parallel.
+
+## The Six Agent Types
+
+| Agent | Type | Lifecycle | Description |
+|-------|------|-----------|-------------|
+| [Project Agent](/docs/agents/project-agent) | `project` | **Persistent** | Always-on agent per project. Handles @mentions, delegates to specialists, monitors CI/CD. |
+| [Task Agent](/docs/agents/task-agent) | `task` | **Ephemeral** | Executes coding tasks — reads code, generates changes, creates branches and PRs. |
+| [Review Agent](/docs/agents/review-agent) | `review` | **Ephemeral** | Analyzes pull requests — fetches diffs, classifies risk, provides code review. |
+| [Deploy Agent](/docs/agents/deploy-agent) | `deploy` | **Ephemeral** | Orchestrates deployments — manages approval quorum, triggers deploys, monitors health. |
+| [Incident Agent](/docs/agents/incident-agent) | `incident` | **Ephemeral** | Investigates production failures — correlates errors with changes, suggests fixes. |
+| [Coordinator Agent](/docs/agents/coordinator-agent) | `coordinator` | **Persistent** | Cross-project orchestration — aggregates status, cascading deploys, routes commands. |
+
+### Agent Relationships
+
+```
+┌─────────────────────────────────────────────┐
+│              Coordinator Agent               │
+│         (cross-project orchestration)        │
+└──────┬──────────────┬──────────────┬────────┘
+       │              │              │
+       ▼              ▼              ▼
+┌─────────────┐ ┌─────────────┐ ┌─────────────┐
+│ Project     │ │ Project     │ │ Project     │
+│ Agent (A)   │ │ Agent (B)   │ │ Agent (C)   │
+└──┬──┬──┬──┬─┘ └─────────────┘ └─────────────┘
+   │  │  │  │
+   │  │  │  └──► Incident Agent (ephemeral)
+   │  │  └─────► Deploy Agent (ephemeral)
+   │  └────────► Review Agent (ephemeral)
+   └───────────► Task Agent (ephemeral)
+```
+
+## Supervisor Pattern
+
+The **Supervisor** is the top-level process that manages all agent lifecycles. It:
+
+1. **Spawns** persistent agents (Project, Coordinator) on startup
+2. **Creates** ephemeral agents on demand when Project Agents delegate tasks
+3. **Monitors** agent health and restarts failed persistent agents
+4. **Terminates** ephemeral agents when their task completes
+5. **Routes** incoming messages to the correct agent based on project/channel mapping
+
+```typescript
+interface Supervisor {
+  /** Start the supervisor and spawn persistent agents */
+  start(): Promise<void>;
+
+  /** Spawn an ephemeral agent for a specific task */
+  spawnAgent(type: AgentType, config: AgentConfig): Promise<Agent>;
+
+  /** Get an agent by ID */
+  getAgent(id: string): Agent | undefined;
+
+  /** List all active agents */
+  listAgents(): AgentStatus[];
+
+  /** Shut down all agents and stop the supervisor */
+  shutdown(): Promise<void>;
+}
+```
+
+### Spawn Flow
+
+When a Project Agent needs to delegate work:
+
+```
+User: @codespar review PR #42
+        │
+        ▼
+┌─────────────────┐
+│  Project Agent   │  Parses command: "review PR #42"
+└────────┬────────┘
+         │ supervisor.spawnAgent("review", { ... })
+         ▼
+┌─────────────────┐
+│  Review Agent    │  Ephemeral — fetches PR, analyzes, responds
+└────────┬────────┘
+         │ Task complete → response sent
+         ▼
+┌─────────────────┐
+│  TERMINATED      │  Agent is cleaned up
+└─────────────────┘
+```
+
+## Autonomy Levels
+
+Every agent respects the project's configured autonomy level, which determines what actions can be auto-executed vs. requiring human approval:
+
+| Level | Name | Behavior |
+|-------|------|----------|
+| **L0** | Passive | Only responds when explicitly addressed |
+| **L1** | Notify | Monitors and alerts, never auto-executes (default) |
+| **L2** | Suggest | Proposes actions proactively, waits for approval |
+| **L3** | Auto-Low | Auto-executes low-risk actions (formatting, linting), notifies after |
+| **L4** | Auto-Med | Auto-executes medium-risk actions (bug fixes, PR reviews) |
+| **L5** | Full Auto | Fully autonomous within policy bounds |
+
+### Safety Guardrail
+
+Regardless of autonomy level, agents **never** auto-execute:
+
+- Production deployments
+- Data migrations
+- Security-sensitive changes
+- Infrastructure modifications
+
+These actions always require explicit human approval, even at L5.
+
+## Next Steps
+
+- [Project Agent](/docs/agents/project-agent) — the persistent hub for every project
+- [Task Agent](/docs/agents/task-agent) — coding task execution with Claude
+- [Review Agent](/docs/agents/review-agent) — automated PR analysis and risk classification
+- [Deploy Agent](/docs/agents/deploy-agent) — approval flows and deployment orchestration
+- [Incident Agent](/docs/agents/incident-agent) — failure investigation and root cause analysis
+- [Coordinator Agent](/docs/agents/coordinator-agent) — cross-project orchestration

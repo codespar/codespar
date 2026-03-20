@@ -1,0 +1,293 @@
+---
+title: Task Agent
+description: The ephemeral agent that executes coding tasks — reading code, generating changes with Claude, creating branches, and opening pull requests.
+---
+
+# Task Agent
+
+The Task Agent is the **coding workhorse** of CodeSpar. It's an ephemeral agent spawned whenever a user requests a code change — from fixing a bug to adding a feature. It reads your codebase, generates changes using Claude, creates a branch, commits the changes, and opens a pull request.
+
+## Characteristics
+
+| Property | Value |
+|----------|-------|
+| **Lifecycle** | Ephemeral — spawned per task, terminates on completion |
+| **Spawned by** | Project Agent, on `fix`, `implement`, `refactor` commands |
+| **AI Model** | Claude Sonnet (configurable via `TASK_MODEL`) |
+| **Color** | Agent Green (`#10B981`) |
+
+## ClaudeBridge
+
+The Task Agent communicates with Claude through a **ClaudeBridge** — a wrapper around the Anthropic Messages API that manages context, system prompts, and response parsing:
+
+```typescript
+class ClaudeBridge {
+  private client: Anthropic;
+  private model: string;
+
+  constructor(config: { apiKey: string; model?: string }) {
+    this.client = new Anthropic({ apiKey: config.apiKey });
+    this.model = config.model ?? "claude-sonnet-4-20250514";
+  }
+
+  async generateChanges(context: TaskContext): Promise<CodeChanges> {
+    const response = await this.client.messages.create({
+      model: this.model,
+      max_tokens: 4096,
+      system: buildSystemPrompt(context),
+      messages: [
+        { role: "user", content: buildTaskPrompt(context) },
+      ],
+    });
+
+    return parseCodeChanges(response);
+  }
+}
+```
+
+## Two Execution Modes
+
+### Generic Mode: `execute()`
+
+For tasks that don't require repository access — answering questions, generating snippets, explaining concepts:
+
+```typescript
+async execute(task: string): Promise<AgentResponse> {
+  const response = await this.claudeBridge.chat(task);
+  return { message: response };
+}
+```
+
+This mode is used when no repository is linked or the task doesn't involve code changes.
+
+### Repository Mode: `executeWithRepo()`
+
+For tasks that modify code in a linked GitHub repository. This is the primary mode and follows a structured flow:
+
+```typescript
+async executeWithRepo(task: string, repo: RepoConfig): Promise<AgentResponse> {
+  // 1. Search for relevant code
+  const relevantFiles = await this.searchCode(repo, task);
+
+  // 2. Read file contents
+  const fileContents = await this.readFiles(repo, relevantFiles);
+
+  // 3. Send to Claude with full context
+  const changes = await this.claudeBridge.generateChanges({
+    task,
+    files: fileContents,
+    repoStructure: await this.getRepoTree(repo),
+  });
+
+  // 4. Create a branch
+  const branch = await this.createBranch(repo, task);
+
+  // 5. Commit changes
+  await this.commitChanges(repo, branch, changes);
+
+  // 6. Open a pull request
+  const pr = await this.openPullRequest(repo, branch, task, changes);
+
+  return {
+    message: formatTaskResult(pr, changes),
+  };
+}
+```
+
+### Step-by-Step: `executeWithRepo` Flow
+
+#### Step 1: Search Code
+
+The agent searches the repository for files relevant to the task. It uses GitHub's code search API and filename pattern matching:
+
+```typescript
+async searchCode(repo: RepoConfig, task: string): Promise<string[]> {
+  // Extract keywords from the task description
+  const keywords = extractKeywords(task);
+
+  // Search via GitHub API
+  const results = await this.github.searchCode({
+    query: `${keywords.join("+")} repo:${repo.owner}/${repo.name}`,
+  });
+
+  // Also check common patterns (test files, configs)
+  const related = inferRelatedFiles(results, task);
+
+  return [...results, ...related];
+}
+```
+
+#### Step 2: Read Files
+
+Fetches the full content of relevant files via the GitHub API:
+
+```typescript
+async readFiles(repo: RepoConfig, paths: string[]): Promise<FileContent[]> {
+  return Promise.all(
+    paths.map(async (path) => ({
+      path,
+      content: await this.github.getFileContent(repo.owner, repo.name, path),
+    }))
+  );
+}
+```
+
+#### Step 3: Generate Changes with Claude
+
+Sends the task description and file contents to Claude, which returns structured code changes:
+
+```typescript
+// Claude receives:
+// - The task description ("fix the login timeout bug")
+// - Full contents of relevant files
+// - Repository structure (tree of files)
+// - Project conventions (from .codespar config if present)
+
+// Claude returns structured changes:
+interface CodeChanges {
+  files: Array<{
+    path: string;
+    action: "create" | "modify" | "delete";
+    content: string;
+  }>;
+  summary: string;
+  reasoning: string;
+}
+```
+
+#### Step 4: Create Branch
+
+Creates a new branch from the default branch:
+
+```typescript
+async createBranch(repo: RepoConfig, task: string): Promise<string> {
+  const branchName = generateBranchName(task);
+  // e.g., "fix/auth-timeout" or "feat/add-retry-logic"
+
+  const defaultBranch = await this.github.getDefaultBranch(
+    repo.owner,
+    repo.name
+  );
+  const sha = await this.github.getBranchSHA(
+    repo.owner,
+    repo.name,
+    defaultBranch
+  );
+
+  await this.github.createBranch(repo.owner, repo.name, branchName, sha);
+
+  return branchName;
+}
+```
+
+#### Step 5: Commit Changes
+
+Commits all generated changes to the new branch:
+
+```typescript
+async commitChanges(
+  repo: RepoConfig,
+  branch: string,
+  changes: CodeChanges
+): Promise<void> {
+  for (const file of changes.files) {
+    await this.github.createOrUpdateFile(
+      repo.owner,
+      repo.name,
+      file.path,
+      file.content,
+      `${changes.summary}\n\nGenerated by CodeSpar Task Agent`,
+      branch
+    );
+  }
+}
+```
+
+#### Step 6: Open Pull Request
+
+Creates a PR with a detailed description:
+
+```typescript
+async openPullRequest(
+  repo: RepoConfig,
+  branch: string,
+  task: string,
+  changes: CodeChanges
+): Promise<PullRequest> {
+  return this.github.createPullRequest({
+    owner: repo.owner,
+    repo: repo.name,
+    title: changes.summary,
+    body: formatPRBody(task, changes),
+    head: branch,
+    base: await this.github.getDefaultBranch(repo.owner, repo.name),
+  });
+}
+```
+
+## Example Interaction
+
+```
+User: @codespar fix the auth timeout in login.ts — sessions expire too fast
+
+CodeSpar: 🔍 Searching for auth-related code...
+          Found 3 relevant files:
+          • src/auth/login.ts
+          • src/auth/session.ts
+          • src/config/auth.config.ts
+
+          🤖 Analyzing with Claude Sonnet...
+
+          ✅ Fix ready:
+          → Branch: fix/auth-session-timeout
+          → PR #87: Increase session timeout from 30s to 120s
+          → Files changed: 2
+            • src/auth/login.ts (line 47: timeout 30000 → 120000)
+            • src/auth/session.ts (line 12: added session refresh logic)
+          → Risk: low
+
+          Review PR: https://github.com/org/repo/pull/87
+```
+
+## Simulation Mode
+
+When no Anthropic API key is configured (`ANTHROPIC_API_KEY` is not set), the Task Agent falls back to **simulation mode**. It goes through the same flow but returns a simulated response instead of calling Claude:
+
+```typescript
+async generateChanges(context: TaskContext): Promise<CodeChanges> {
+  if (!this.apiKey) {
+    return {
+      files: [],
+      summary: `[Simulated] Would fix: ${context.task}`,
+      reasoning: "No API key configured. Running in simulation mode.",
+    };
+  }
+
+  // Normal Claude API call
+  return this.callClaude(context);
+}
+```
+
+This is useful for testing the full flow (branch creation, PR opening) without incurring API costs.
+
+## Environment Variables
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `ANTHROPIC_API_KEY` | No | — | Anthropic API key. Without it, runs in simulation mode. |
+| `TASK_MODEL` | No | `claude-sonnet-4-20250514` | Claude model to use for code generation |
+
+## Configuration Tips
+
+### Model Selection
+
+The default model (`claude-sonnet-4-20250514`) balances speed and quality for most coding tasks. For complex refactors or architecture-level changes, you can switch to a more capable model by setting `TASK_MODEL`.
+
+### Context Window
+
+The Task Agent is selective about which files it sends to Claude to stay within context limits. It prioritizes:
+
+1. Files directly mentioned in the task description
+2. Files found via code search matching task keywords
+3. Files imported by the above (one level of dependency)
+4. Test files corresponding to modified source files

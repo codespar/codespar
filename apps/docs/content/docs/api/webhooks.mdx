@@ -1,0 +1,252 @@
+---
+title: GitHub Webhooks
+description: How CodeSpar receives and processes GitHub webhook events for push, pull request, and workflow run events, triggering automated agent responses.
+---
+
+# GitHub Webhooks
+
+CodeSpar receives GitHub webhook events to trigger automated agent responses. When a repository is linked, CodeSpar can auto-configure the webhook on GitHub (if `WEBHOOK_BASE_URL` and `GITHUB_TOKEN` are set) or you can configure it manually.
+
+## Webhook Endpoint
+
+```
+POST /webhooks/github
+```
+
+This endpoint receives all GitHub webhook events. CodeSpar processes three event types and ignores the rest.
+
+### Supported Events
+
+| Event | GitHub Action | CodeSpar Behavior |
+|-------|--------------|-------------------|
+| `push` | Code pushed to branch | Updates project context, triggers notifications at L1+ |
+| `pull_request` | PR opened, updated, closed | Triggers ReviewAgent on open (L3+), notifications at L1+ |
+| `workflow_run` | CI/CD workflow completes | Triggers IncidentAgent on failure (L3+), notifications at L1+ |
+
+## Auto-Configuration
+
+When you link a repository via `@codespar link` or the [Project API](/docs/api/projects), CodeSpar automatically creates a GitHub webhook if these conditions are met:
+
+1. `WEBHOOK_BASE_URL` is set (e.g., `https://codespar.example.com`)
+2. `GITHUB_TOKEN` has `admin:repo_hook` permission
+
+The webhook is configured to send:
+- `push` events
+- `pull_request` events
+- `workflow_run` events
+
+The webhook URL will be:
+
+```
+{WEBHOOK_BASE_URL}/webhooks/github
+```
+
+### Example
+
+If `WEBHOOK_BASE_URL=https://codespar.example.com`, the webhook URL is:
+
+```
+https://codespar.example.com/webhooks/github
+```
+
+## Manual Configuration
+
+If auto-configuration is not available (e.g., no admin permissions), you can manually configure the webhook in GitHub:
+
+1. Go to your repository on GitHub
+2. Navigate to **Settings** > **Webhooks** > **Add webhook**
+3. Set the following:
+
+| Field | Value |
+|-------|-------|
+| **Payload URL** | `https://your-codespar-instance.com/webhooks/github` |
+| **Content type** | `application/json` |
+| **Secret** | (optional, not currently validated) |
+| **Events** | Select: `Pushes`, `Pull requests`, `Workflow runs` |
+
+## Payload Processing
+
+### Push Events
+
+When CodeSpar receives a `push` event, it maps the payload to an internal `CIEvent`:
+
+```json
+{
+  "type": "push",
+  "repo": "codespar/codespar",
+  "branch": "main",
+  "commit": "abc1234",
+  "author": "alice",
+  "message": "feat: add rate limiting",
+  "timestamp": "2024-01-15T14:30:00Z"
+}
+```
+
+**Agent behavior by autonomy level:**
+
+| Level | Behavior |
+|-------|----------|
+| L0 | Ignored |
+| L1+ | Notification sent to connected channels |
+| L3+ | Project context updated automatically |
+
+### Pull Request Events
+
+When a `pull_request` event is received with action `opened` or `synchronize`:
+
+```json
+{
+  "type": "pull_request",
+  "repo": "codespar/codespar",
+  "action": "opened",
+  "prNumber": 42,
+  "title": "feat: add rate limiting",
+  "author": "alice",
+  "branch": "feature/rate-limiting",
+  "baseBranch": "main",
+  "timestamp": "2024-01-15T14:28:00Z"
+}
+```
+
+**Agent behavior by autonomy level:**
+
+| Level | Behavior |
+|-------|----------|
+| L0 | Ignored |
+| L1 | Notification: "New PR #42 opened by @alice" |
+| L2 | Notification + suggestion: "I can review this PR. Approve?" |
+| L3+ | ReviewAgent spawned automatically, review posted to channel and GitHub |
+
+### Workflow Run Events
+
+When a `workflow_run` event is received with status `completed`:
+
+```json
+{
+  "type": "workflow_run",
+  "repo": "codespar/codespar",
+  "workflowName": "CI",
+  "status": "failure",
+  "conclusion": "failure",
+  "branch": "main",
+  "commit": "abc1234",
+  "url": "https://github.com/codespar/codespar/actions/runs/123",
+  "timestamp": "2024-01-15T14:32:00Z"
+}
+```
+
+**Agent behavior by autonomy level:**
+
+| Level | Behavior |
+|-------|----------|
+| L0 | Ignored |
+| L1 | Notification: "Build failed on main" |
+| L2 | Notification + suggestion: "I can investigate this failure. Approve?" |
+| L3+ | IncidentAgent spawned automatically on failure, investigation starts |
+| L1+ (success) | Notification: "Build passed on main" |
+
+## Testing Webhooks
+
+You can test the webhook endpoint by sending a simulated event:
+
+### Simulate a Push Event
+
+```bash
+curl -X POST http://localhost:3000/webhooks/github \
+  -H "Content-Type: application/json" \
+  -H "X-GitHub-Event: push" \
+  -d '{
+    "ref": "refs/heads/main",
+    "repository": {
+      "full_name": "codespar/codespar"
+    },
+    "head_commit": {
+      "id": "abc1234",
+      "message": "feat: add rate limiting",
+      "author": {
+        "username": "alice"
+      },
+      "timestamp": "2024-01-15T14:30:00Z"
+    }
+  }'
+```
+
+### Simulate a PR Open Event
+
+```bash
+curl -X POST http://localhost:3000/webhooks/github \
+  -H "Content-Type: application/json" \
+  -H "X-GitHub-Event: pull_request" \
+  -d '{
+    "action": "opened",
+    "pull_request": {
+      "number": 42,
+      "title": "feat: add rate limiting",
+      "user": {
+        "login": "alice"
+      },
+      "head": {
+        "ref": "feature/rate-limiting"
+      },
+      "base": {
+        "ref": "main"
+      }
+    },
+    "repository": {
+      "full_name": "codespar/codespar"
+    }
+  }'
+```
+
+### Simulate a Build Failure
+
+```bash
+curl -X POST http://localhost:3000/webhooks/github \
+  -H "Content-Type: application/json" \
+  -H "X-GitHub-Event: workflow_run" \
+  -d '{
+    "action": "completed",
+    "workflow_run": {
+      "name": "CI",
+      "status": "completed",
+      "conclusion": "failure",
+      "head_branch": "main",
+      "head_sha": "abc1234",
+      "html_url": "https://github.com/codespar/codespar/actions/runs/123"
+    },
+    "repository": {
+      "full_name": "codespar/codespar"
+    }
+  }'
+```
+
+### Expected Response
+
+All webhook events return a `200 OK` with a processing confirmation:
+
+```json
+{
+  "received": true,
+  "event": "pull_request",
+  "action": "opened",
+  "repo": "codespar/codespar",
+  "processed": true
+}
+```
+
+Unrecognized events return `200 OK` with `processed: false`:
+
+```json
+{
+  "received": true,
+  "event": "star",
+  "processed": false,
+  "reason": "Event type not handled"
+}
+```
+
+## Next Steps
+
+- [Link a Repository](/docs/guides/link-repository) — Set up webhook auto-configuration
+- [Review PRs Guide](/docs/guides/review-prs) — Auto-review setup
+- [Configuration](/docs/configuration) — `WEBHOOK_BASE_URL` and related env vars

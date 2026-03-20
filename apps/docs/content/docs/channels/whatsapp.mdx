@@ -1,0 +1,228 @@
+---
+title: WhatsApp
+description: Connect CodeSpar to WhatsApp using Evolution API for team communication via QR code pairing and webhook-based messaging.
+---
+
+# WhatsApp Channel
+
+CodeSpar connects to WhatsApp through **Evolution API**, an open-source WhatsApp gateway. This approach uses a real WhatsApp session (via QR code) rather than the official Business API, making it accessible for teams of any size without Meta Business verification.
+
+## Prerequisites
+
+- Docker and Docker Compose installed
+- A phone number dedicated to the bot (a secondary number or old phone works)
+- CodeSpar instance running
+
+## Architecture
+
+```
+WhatsApp User
+      │
+      ▼
+┌──────────────┐    webhook     ┌──────────────┐
+│ Evolution API │ ─────────────→ │  CodeSpar    │
+│  (port 8080)  │ ←───────────── │  (port 3001) │
+└──────────────┘   REST API     └──────────────┘
+```
+
+Evolution API runs as a separate Docker container. It manages the WhatsApp Web session and forwards messages to CodeSpar via webhooks. CodeSpar sends responses back through Evolution API's REST endpoint.
+
+## Docker Compose Setup
+
+Create a `docker-compose.whatsapp.yml` or add the Evolution API service to your existing compose file:
+
+```yaml
+version: "3.8"
+
+services:
+  evolution-api:
+    image: evoapicloud/evolution-api:v2.3.7
+    container_name: codespar-evolution
+    ports:
+      - "8080:8080"
+    environment:
+      - AUTHENTICATION_API_KEY=${EVOLUTION_API_KEY}
+      - WEBHOOK_GLOBAL_URL=http://codespar:3001/webhook/whatsapp
+      - WEBHOOK_GLOBAL_ENABLED=true
+      - WEBHOOK_GLOBAL_WEBHOOK_BY_EVENTS=true
+      - WEBHOOK_EVENTS_MESSAGES_UPSERT=true
+    volumes:
+      - evolution_data:/evolution/instances
+    networks:
+      - codespar-network
+
+  codespar:
+    image: codespar/codespar:latest
+    container_name: codespar
+    ports:
+      - "3001:3001"
+    env_file:
+      - .env
+    networks:
+      - codespar-network
+
+volumes:
+  evolution_data:
+
+networks:
+  codespar-network:
+    driver: bridge
+```
+
+## Environment Variables
+
+Add these to your `.env` file:
+
+```bash
+# Enable the WhatsApp channel
+ENABLE_WHATSAPP=true
+
+# Evolution API connection
+EVOLUTION_API_URL=http://localhost:8080
+EVOLUTION_API_KEY=your-api-key-here
+
+# Instance name (identifies this WhatsApp session)
+EVOLUTION_INSTANCE=codespar-bot
+
+# The keyword that triggers the bot in group chats
+WHATSAPP_BOT_MENTION=@codespar
+```
+
+### Variable Reference
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `ENABLE_WHATSAPP` | Yes | Set to `true` to activate the WhatsApp channel |
+| `EVOLUTION_API_URL` | Yes | URL where Evolution API is running |
+| `EVOLUTION_API_KEY` | Yes | API key for authenticating with Evolution API |
+| `EVOLUTION_INSTANCE` | Yes | Instance name for the WhatsApp session |
+| `WHATSAPP_BOT_MENTION` | No | Trigger keyword in group chats (default: `@codespar`) |
+
+## QR Code Pairing
+
+After starting Evolution API, you need to scan a QR code to link a WhatsApp account:
+
+### Step 1: Create an Instance
+
+```bash
+curl -X POST http://localhost:8080/instance/create \
+  -H "Content-Type: application/json" \
+  -H "apikey: your-api-key-here" \
+  -d '{
+    "instanceName": "codespar-bot",
+    "qrcode": true
+  }'
+```
+
+### Step 2: Get the QR Code
+
+```bash
+curl http://localhost:8080/instance/connect/codespar-bot \
+  -H "apikey: your-api-key-here"
+```
+
+This returns a QR code (as base64 image or text). You can also access it in a browser at `http://localhost:8080/manager` if the Evolution API manager UI is enabled.
+
+### Step 3: Scan with WhatsApp
+
+1. Open WhatsApp on the phone you want to use as the bot
+2. Go to **Settings → Linked Devices → Link a Device**
+3. Scan the QR code
+4. The session is now active
+
+The session persists across restarts thanks to the Docker volume. You only need to scan the QR code once unless the session is revoked from the phone.
+
+## Webhook Configuration
+
+Evolution API sends incoming messages to CodeSpar via webhook. The key configuration in the Docker Compose file:
+
+```yaml
+WEBHOOK_GLOBAL_URL=http://codespar:3001/webhook/whatsapp
+WEBHOOK_GLOBAL_ENABLED=true
+WEBHOOK_GLOBAL_WEBHOOK_BY_EVENTS=true
+WEBHOOK_EVENTS_MESSAGES_UPSERT=true
+```
+
+CodeSpar listens on port `3001` for these webhook events. The `MESSAGES_UPSERT` event fires for every incoming message. The adapter filters for messages containing the bot mention keyword.
+
+## How Mentions Work
+
+WhatsApp doesn't have native bot mentions like Slack or Discord. Instead, CodeSpar uses a **keyword trigger**:
+
+```
+Group chat message: @codespar deploy staging
+
+→ Adapter detects "codespar" keyword
+→ Strips the trigger word
+→ Normalizes to: "deploy staging"
+→ Routes to Project Agent
+```
+
+### In Group Chats
+
+The bot only responds to messages containing the `WHATSAPP_BOT_MENTION` keyword. All other messages are ignored.
+
+```
+Maria: @codespar status
+CodeSpar: 📊 Project frontend: All systems green
+          Last deploy: 2h ago (v2.1.3)
+          CI: passing (12/12)
+
+João: nice!
+(bot ignores this — no mention keyword)
+
+Maria: @codespar review PR #15
+CodeSpar: 🔍 Reviewing PR #15...
+```
+
+### In Direct Messages
+
+When messaging the bot directly (1:1 chat), no mention keyword is needed. Every message is processed as a command:
+
+```
+You: status
+CodeSpar: 📊 Project frontend: All systems green
+```
+
+## Limitations
+
+WhatsApp has some constraints compared to other channels:
+
+| Feature | Support |
+|---------|---------|
+| Threads | Not supported — all replies go to the main chat |
+| Reactions | Not supported via Evolution API |
+| Rich formatting | Partial — bold, italic, monospace, but no full Markdown |
+| File uploads | Supported (images, documents) |
+| Message editing | Not supported |
+| Message length | ~65,000 characters per message |
+
+## Troubleshooting
+
+### QR code expired
+
+QR codes expire after about 60 seconds. Request a new one:
+
+```bash
+curl http://localhost:8080/instance/connect/codespar-bot \
+  -H "apikey: your-api-key-here"
+```
+
+### Bot not responding in groups
+
+1. Verify `ENABLE_WHATSAPP=true` is set
+2. Check that the `WHATSAPP_BOT_MENTION` keyword matches what users are typing
+3. Ensure the webhook URL is reachable from the Evolution API container (`http://codespar:3001/webhook/whatsapp`)
+4. Check CodeSpar logs for incoming webhook events
+
+### Session disconnected
+
+If WhatsApp disconnects the linked device (happens after ~14 days of inactivity on the phone), you need to re-scan the QR code. Keep the phone connected to the internet and WhatsApp open periodically.
+
+### Evolution API container won't start
+
+Ensure the `evolution_data` volume has proper permissions. On Linux, you may need:
+
+```bash
+sudo chown -R 1000:1000 /var/lib/docker/volumes/evolution_data
+```

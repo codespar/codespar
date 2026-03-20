@@ -1,0 +1,91 @@
+---
+title: Introduction
+description: CodeSpar is an open source, multi-agent platform that deploys autonomous AI coding agents to WhatsApp, Slack, Telegram, Discord, and CLI.
+---
+
+# Introduction
+
+**Autonomous agents for every project. Deployed where your team works.**
+
+CodeSpar is an open source, multi-agent platform that deploys autonomous AI coding agents directly into the messaging channels your team already uses — WhatsApp, Slack, Telegram, Discord, and CLI. Each project gets its own persistent agent that monitors builds, investigates failures, proposes fixes, and orchestrates deploys, all via `@mention` commands.
+
+## Key Features
+
+- **Six specialized agent types** — purpose-built agents for project management, task execution, code review, deployment, incident response, and cross-project coordination
+- **Five messaging channels** — WhatsApp, Slack, Telegram, Discord, and CLI, all with the same `@mention` interface
+- **Graduated autonomy (L0–L5)** — fine-grained control over how much independence your agents have, from passive (L0) to fully autonomous (L5)
+- **Security-first architecture** — 10 defense layers including sandboxed Docker execution, secrets isolation, audit logging, and human approval gates for sensitive operations
+- **Open source (MIT License)** — full transparency, community contributions, self-host anywhere
+
+## How It Works
+
+CodeSpar follows a persistent + ephemeral agent architecture:
+
+```
+┌─────────────────────────────────────────────────┐
+│                  Coordinator                     │
+│           (cross-project orchestration)          │
+└──────────────────────┬──────────────────────────┘
+                       │
+        ┌──────────────┼──────────────┐
+        ▼              ▼              ▼
+┌──────────────┐┌──────────────┐┌──────────────┐
+│Project Agent ││Project Agent ││Project Agent │
+│  (repo-a)    ││  (repo-b)    ││  (repo-c)    │
+└──────┬───────┘└──────┬───────┘└──────────────┘
+       │               │
+       ▼               ▼
+  ┌─────────┐    ┌─────────┐
+  │  Task   │    │ Review  │
+  │  Agent  │    │  Agent  │
+  └─────────┘    └─────────┘
+  (ephemeral)    (ephemeral)
+```
+
+### Project Agent (Persistent)
+
+Every linked repository gets a **Project Agent** that runs continuously. It monitors your CI/CD pipeline, listens for `@mention` commands in your messaging channels, and spawns ephemeral agents as needed. The Project Agent is your team's always-on interface to CodeSpar.
+
+### Ephemeral Agents
+
+When a task requires specialized work, the Project Agent spawns short-lived agents:
+
+| Agent | Purpose |
+|-------|---------|
+| **Task Agent** | Executes coding tasks inside sandboxed Docker containers — writes code, runs tests, creates PRs |
+| **Review Agent** | Analyzes pull requests for code quality, security issues, and style consistency |
+| **Deploy Agent** | Orchestrates deployments with approval workflows and health monitoring |
+| **Incident Agent** | Investigates production errors, performs root cause analysis, and proposes fixes |
+
+### Coordinator (Persistent)
+
+The **Coordinator** manages cross-project concerns — cascading deploys, shared dependency updates, and multi-repo orchestration.
+
+## Autonomy Levels
+
+CodeSpar uses a graduated autonomy model so you control exactly how much independence your agents have:
+
+| Level | Name | Behavior |
+|-------|------|----------|
+| **L0** | Passive | Only responds when directly addressed |
+| **L1** | Notify | Monitors and alerts, never auto-executes (default) |
+| **L2** | Suggest | Proposes actions proactively, requires human approval |
+| **L3** | Auto-Low | Auto-executes low-risk actions (formatting, linting), notifies after |
+| **L4** | Auto-Med | Auto-executes medium-risk actions (bug fixes, PR reviews) |
+| **L5** | Full Auto | Fully autonomous within policy bounds |
+
+**Safety guardrail:** Regardless of autonomy level, agents never auto-execute production deployments, data migrations, security-sensitive changes, or infrastructure modifications. These always require explicit human approval.
+
+## Tech Stack
+
+CodeSpar is built with:
+
+- **TypeScript** — end to end, strict mode
+- **Fastify** — high-performance HTTP server
+- **Turborepo** — monorepo with 13 packages
+- **Docker** — sandboxed agent execution
+- **MIT License** — use it, fork it, contribute to it
+
+## Next Steps
+
+Ready to get started? Head to the [Quickstart](/docs/getting-started/quickstart) guide to have CodeSpar running in under 5 minutes, or read the full [Installation](/docs/getting-started/installation) guide for production deployment options.

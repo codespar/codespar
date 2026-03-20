@@ -1,0 +1,190 @@
+---
+title: Memory API
+description: API endpoints for querying the vector store stats and resolving user identities across channels.
+---
+
+# Memory API
+
+CodeSpar agents maintain contextual memory via a vector store (embeddings of conversations, code, and project context) and an identity resolution system that maps users across multiple channels.
+
+## Vector Store Stats
+
+Retrieve memory and vector store statistics for the current instance.
+
+```
+GET /api/memory
+```
+
+### Request
+
+```bash
+curl http://localhost:3000/api/memory
+```
+
+### Response
+
+```json
+{
+  "vectorStore": {
+    "totalEmbeddings": 1247,
+    "storageMB": 12.3,
+    "lastSync": "2024-01-15T14:15:00Z",
+    "dimensions": 1536,
+    "backend": "file"
+  },
+  "conversations": {
+    "totalMessages": 892,
+    "uniqueUsers": 15,
+    "channels": {
+      "slack": 450,
+      "whatsapp": 312,
+      "discord": 130
+    },
+    "retentionDays": 30
+  },
+  "projectContext": {
+    "filesIndexed": 45,
+    "lastIndexed": "2024-01-15T13:00:00Z",
+    "repo": "codespar/codespar"
+  }
+}
+```
+
+### Response Schema
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `vectorStore.totalEmbeddings` | number | Total number of stored embedding vectors |
+| `vectorStore.storageMB` | number | Disk usage in megabytes |
+| `vectorStore.lastSync` | string | ISO 8601 timestamp of last sync |
+| `vectorStore.dimensions` | number | Embedding vector dimensions |
+| `vectorStore.backend` | string | Storage backend: `file`, `postgres`, `redis` |
+| `conversations.totalMessages` | number | Total conversation messages stored |
+| `conversations.uniqueUsers` | number | Distinct users who have interacted |
+| `conversations.channels` | object | Message count per channel |
+| `conversations.retentionDays` | number | How long messages are kept |
+| `projectContext.filesIndexed` | number | Number of repo files indexed |
+| `projectContext.lastIndexed` | string | When the repo was last indexed |
+| `projectContext.repo` | string | Linked repository |
+
+---
+
+## User Identity Lookup
+
+Look up a user's resolved identity by their channel-specific identifier. This is used internally for cross-channel identity resolution and can be useful for debugging identity issues.
+
+```
+GET /api/identity?channelType=<type>&channelUserId=<id>
+```
+
+### Query Parameters
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `channelType` | string | Yes | Channel type: `slack`, `whatsapp`, `discord`, `telegram` |
+| `channelUserId` | string | Yes | Channel-specific user ID |
+
+### Request
+
+```bash
+curl "http://localhost:3000/api/identity?channelType=slack&channelUserId=U1234ABCD"
+```
+
+### Response (registered user)
+
+```json
+{
+  "found": true,
+  "identity": {
+    "id": "identity-001",
+    "displayName": "John Silva",
+    "role": "maintainer",
+    "channels": [
+      {
+        "type": "slack",
+        "userId": "U1234ABCD",
+        "username": "john",
+        "linkedAt": "2024-01-15T13:28:00Z"
+      },
+      {
+        "type": "whatsapp",
+        "userId": "5511999990000",
+        "username": null,
+        "linkedAt": "2024-01-15T13:30:00Z"
+      },
+      {
+        "type": "discord",
+        "userId": "123456789012345678",
+        "username": "john#1234",
+        "linkedAt": "2024-01-16T09:00:00Z"
+      }
+    ],
+    "registeredAt": "2024-01-15T13:28:00Z",
+    "lastSeen": "2024-01-15T14:32:00Z"
+  }
+}
+```
+
+### Response (unregistered user)
+
+```json
+{
+  "found": true,
+  "identity": {
+    "id": "identity-anon-002",
+    "displayName": null,
+    "role": "read-only",
+    "channels": [
+      {
+        "type": "slack",
+        "userId": "U9999ZZZZ",
+        "username": "unknown-user",
+        "linkedAt": "2024-01-15T14:00:00Z"
+      }
+    ],
+    "registeredAt": null,
+    "lastSeen": "2024-01-15T14:00:00Z"
+  }
+}
+```
+
+### Response (not found)
+
+```json
+{
+  "found": false,
+  "identity": null
+}
+```
+
+### Identity Schema
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `id` | string | Unique identity identifier |
+| `displayName` | string \| null | Registered display name (null if not registered) |
+| `role` | string | RBAC role: `owner`, `maintainer`, `operator`, `reviewer`, `read-only`, `emergency_admin` |
+| `channels` | object[] | Array of linked channel identities |
+| `channels[].type` | string | Channel type |
+| `channels[].userId` | string | Channel-specific user ID |
+| `channels[].username` | string \| null | Channel-specific username |
+| `channels[].linkedAt` | string | When this channel was linked |
+| `registeredAt` | string \| null | When the user registered (null if auto-created) |
+| `lastSeen` | string | Last interaction timestamp |
+
+## How Identity Resolution Works
+
+When a user sends a message from any channel, CodeSpar resolves their identity through these steps:
+
+1. **Channel lookup** — Find the identity record matching the `channelType` and `channelUserId`
+2. **Cross-channel merge** — If the user has registered via `@codespar register <name>`, all their channel identities are merged under a single identity record
+3. **Role assignment** — The resolved identity carries the user's RBAC role, which determines command permissions
+4. **Audit attribution** — All actions are logged against the resolved identity
+
+This allows a user to approve a deploy from WhatsApp that was requested from Slack, as long as both channels are linked to the same identity.
+
+## Next Steps
+
+- [Multi-Channel Setup](/docs/guides/multi-channel) — Link identities across channels
+- [Security](/docs/configuration/security) — RBAC roles and permissions
+- [Agent API](/docs/api/agents) — Agent memory and stats

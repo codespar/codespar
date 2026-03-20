@@ -1,0 +1,147 @@
+---
+title: Channels Overview
+description: CodeSpar's channel-agnostic architecture normalizes messages across WhatsApp, Slack, Discord, Telegram, and CLI into a unified interface.
+---
+
+# Channel Architecture
+
+CodeSpar is channel-agnostic by design. Every messaging platform — WhatsApp, Slack, Discord, Telegram, and CLI — normalizes into the same internal format. Agents never know (or care) which channel a message came from. The same `@codespar` syntax works everywhere.
+
+## Core Concept
+
+The channel layer sits between the messaging platform and the agent system. Each channel has an **adapter** that:
+
+1. Connects to the platform's API or webhook
+2. Normalizes incoming messages into a `NormalizedMessage`
+3. Sends agent responses back through the platform's native format
+
+This means adding a new channel requires only implementing a single adapter — no changes to agent logic.
+
+## NormalizedMessage Interface
+
+Every message from every channel is transformed into this common shape before reaching any agent:
+
+```typescript
+interface NormalizedMessage {
+  id: string;              // Unique message ID (platform-native)
+  channelType: ChannelType; // "slack" | "whatsapp" | "discord" | "telegram" | "cli"
+  channelId: string;       // Channel/group/chat identifier
+  channelUserId: string;   // User ID within that platform
+  text: string;            // Raw message text, @mention stripped
+  timestamp: Date;         // When the message was sent
+  mentions: string[];      // Extracted @mentions from the message
+  metadata: Record<string, unknown>; // Platform-specific extras
+}
+```
+
+The `metadata` field carries platform-specific data (thread IDs in Slack, reply-to references in Telegram, etc.) without polluting the core interface.
+
+## ChannelAdapter Interface
+
+Every channel implements this adapter contract:
+
+```typescript
+interface ChannelAdapter {
+  /** Connect to the platform (open WebSocket, start polling, etc.) */
+  connect(): Promise<void>;
+
+  /** Register a callback for incoming messages */
+  onMessage(handler: (message: NormalizedMessage) => Promise<void>): void;
+
+  /** Send a response back to the originating channel */
+  sendToChannel(channelId: string, text: string): Promise<void>;
+
+  /** Report what this channel supports */
+  getCapabilities(): ChannelCapabilities;
+}
+```
+
+### Channel Capabilities
+
+Not all platforms support the same features. The `getCapabilities()` method returns what each adapter can do:
+
+```typescript
+interface ChannelCapabilities {
+  threads: boolean;       // Can reply in threads
+  reactions: boolean;     // Can add emoji reactions
+  richText: boolean;      // Supports formatting (bold, code blocks)
+  fileUpload: boolean;    // Can attach files
+  editMessage: boolean;   // Can edit sent messages
+}
+```
+
+## Same Syntax, Every Channel
+
+The `@codespar` mention works identically across all platforms:
+
+```
+@codespar fix the login timeout bug
+@codespar review PR #42
+@codespar deploy staging
+@codespar status
+```
+
+Each channel has its own native mention mechanism (Slack's `@app`, WhatsApp's keyword trigger, Discord's `@bot`, Telegram's `@bot`), but the agent receives the same normalized command regardless of origin.
+
+## Channel Comparison
+
+| Channel | Threads | Reactions | Rich Text | File Upload | Edit Messages |
+|---------|---------|-----------|-----------|-------------|---------------|
+| **Slack** | Yes | Yes | Yes | Yes | Yes |
+| **WhatsApp** | No | No | Partial | Yes | No |
+| **Discord** | Yes | Yes | Yes | Yes | Yes |
+| **Telegram** | Yes | Yes | Yes | Yes | Yes |
+| **CLI** | No | No | Yes | No | No |
+
+## Enabling Channels
+
+Each channel is toggled independently via environment variables. You can run one channel or all five simultaneously:
+
+```bash
+# Enable the channels you need
+ENABLE_SLACK=true
+ENABLE_WHATSAPP=true
+ENABLE_DISCORD=true
+ENABLE_TELEGRAM=true
+```
+
+The CLI channel is always available and requires no configuration.
+
+## Message Flow
+
+```
+User sends @codespar message
+        │
+        ▼
+┌─────────────────┐
+│ Channel Adapter  │  (Slack, WhatsApp, Discord, Telegram, CLI)
+│ normalizes msg   │
+└────────┬────────┘
+         │  NormalizedMessage
+         ▼
+┌─────────────────┐
+│ Message Router   │  Routes to correct Project Agent
+└────────┬────────┘
+         │
+         ▼
+┌─────────────────┐
+│ Project Agent    │  Parses command, delegates to specialist agents
+└────────┬────────┘
+         │
+         ▼
+┌─────────────────┐
+│ Channel Adapter  │  Sends response back via platform API
+│ sendToChannel()  │
+└─────────────────┘
+```
+
+## Cross-Channel Operations
+
+Because agents are channel-agnostic, operations can span channels. A deploy approval requested in Slack can be approved from WhatsApp. An incident detected via CI webhook can notify the team on Discord. The agent tracks state internally — the channel is just a transport layer.
+
+## Next Steps
+
+- [Slack Setup](/docs/channels/slack) — Socket Mode, scopes, and configuration
+- [WhatsApp Setup](/docs/channels/whatsapp) — Evolution API, QR code, and webhooks
+- [Discord Setup](/docs/channels/discord) — Bot creation, intents, and permissions
+- [Telegram Setup](/docs/channels/telegram) — BotFather, polling, and group commands

@@ -1,0 +1,181 @@
+---
+title: Channel API
+description: API endpoints for listing connected messaging channels and their status, and reconnecting disconnected channels.
+---
+
+# Channel API
+
+Manage the messaging channels connected to your CodeSpar instance. CodeSpar supports five channels: WhatsApp, Slack, Discord, Telegram, and Web (API). Each channel can be independently enabled, monitored, and reconnected.
+
+## List Channels
+
+Retrieve all configured channels and their current connection status.
+
+```
+GET /api/channels
+```
+
+### Request
+
+```bash
+curl http://localhost:3000/api/channels
+```
+
+### Response
+
+```json
+[
+  {
+    "name": "whatsapp",
+    "enabled": true,
+    "status": "connected",
+    "connectedAt": "2024-01-15T08:00:00Z",
+    "uptime": 23400,
+    "config": {
+      "instance": "codespar-prod",
+      "apiUrl": "https://evolution.example.com"
+    }
+  },
+  {
+    "name": "slack",
+    "enabled": true,
+    "status": "connected",
+    "connectedAt": "2024-01-15T08:00:00Z",
+    "uptime": 23400,
+    "config": {
+      "teamId": "T1234ABCD",
+      "botUserId": "U9876WXYZ"
+    }
+  },
+  {
+    "name": "discord",
+    "enabled": true,
+    "status": "disconnected",
+    "lastError": "WebSocket closed unexpectedly",
+    "lastErrorAt": "2024-01-15T14:20:00Z",
+    "config": {
+      "guildId": "123456789012345678"
+    }
+  },
+  {
+    "name": "telegram",
+    "enabled": false,
+    "status": "disabled",
+    "config": {}
+  },
+  {
+    "name": "web",
+    "enabled": true,
+    "status": "connected",
+    "connectedAt": "2024-01-15T08:00:00Z",
+    "uptime": 23400,
+    "config": {}
+  }
+]
+```
+
+### Response Schema
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `name` | string | Channel identifier: `whatsapp`, `slack`, `discord`, `telegram`, `web` |
+| `enabled` | boolean | Whether the channel is enabled in configuration |
+| `status` | string | Connection state: `connected`, `disconnected`, `connecting`, `disabled`, `error` |
+| `connectedAt` | string | ISO 8601 timestamp of last successful connection |
+| `uptime` | number | Seconds since last connection (only when connected) |
+| `lastError` | string | Most recent error message (only when disconnected/error) |
+| `lastErrorAt` | string | Timestamp of the last error |
+| `config` | object | Channel-specific configuration (sanitized, no secrets) |
+
+### Channel Statuses
+
+| Status | Description |
+|--------|-------------|
+| `connected` | Channel is online and processing messages |
+| `disconnected` | Channel was connected but lost connection |
+| `connecting` | Channel is attempting to establish connection |
+| `disabled` | Channel is not enabled in configuration |
+| `error` | Channel encountered a persistent error |
+
+---
+
+## Reconnect a Channel
+
+Force a channel to disconnect and reconnect. Useful when a channel is stuck in a disconnected or error state.
+
+```
+POST /api/channels/:name/reconnect
+```
+
+### Path Parameters
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `name` | string | Channel name: `whatsapp`, `slack`, `discord`, `telegram` |
+
+### Request
+
+```bash
+curl -X POST http://localhost:3000/api/channels/discord/reconnect
+```
+
+### Response
+
+```json
+{
+  "name": "discord",
+  "action": "reconnect",
+  "previousStatus": "disconnected",
+  "currentStatus": "connecting",
+  "timestamp": "2024-01-15T14:25:00Z"
+}
+```
+
+After a few seconds, the channel status will update to `connected` (or `error` if the reconnection fails).
+
+### Verify Reconnection
+
+```bash
+# Check status after reconnection attempt
+curl http://localhost:3000/api/channels
+```
+
+### Error Responses
+
+**Channel not found:**
+
+```json
+{
+  "error": "Channel 'teams' not found. Valid channels: whatsapp, slack, discord, telegram",
+  "code": "CHANNEL_NOT_FOUND",
+  "status": 404
+}
+```
+
+**Channel not enabled:**
+
+```json
+{
+  "error": "Channel 'telegram' is not enabled. Set ENABLE_TELEGRAM=true to enable.",
+  "code": "CHANNEL_DISABLED",
+  "status": 400
+}
+```
+
+## Channel Configuration
+
+Each channel requires specific environment variables to be enabled. See [Configuration](/docs/configuration) for the full list.
+
+| Channel | Enable Variable | Required Variables |
+|---------|----------------|-------------------|
+| WhatsApp | `ENABLE_WHATSAPP=true` | `EVOLUTION_API_URL`, `EVOLUTION_API_KEY`, `EVOLUTION_INSTANCE` |
+| Slack | `ENABLE_SLACK=true` | `SLACK_BOT_TOKEN`, `SLACK_APP_TOKEN` |
+| Discord | `ENABLE_DISCORD=true` | `DISCORD_TOKEN` |
+| Telegram | `ENABLE_TELEGRAM=true` | `TELEGRAM_BOT_TOKEN` |
+| Web | Always enabled | None (uses REST API) |
+
+## Next Steps
+
+- [Configuration](/docs/configuration) — Channel environment variables
+- [Multi-Channel Setup](/docs/guides/multi-channel) — Enable multiple channels
+- [Agent API](/docs/api/agents) — Manage agents that use channels

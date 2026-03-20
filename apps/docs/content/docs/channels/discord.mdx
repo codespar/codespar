@@ -1,0 +1,184 @@
+---
+title: Discord
+description: Set up CodeSpar as a Discord bot with message content intent for @mention-driven agent interactions in your server.
+---
+
+# Discord Channel
+
+CodeSpar integrates with Discord as a bot application. Once added to your server, team members can @mention the bot in any channel to interact with agents — reviewing PRs, deploying code, investigating incidents, and more.
+
+## Prerequisites
+
+- A Discord server where you have **Manage Server** permission
+- CodeSpar instance running (Docker or local)
+
+## Create a Discord Bot
+
+### Step 1: Create an Application
+
+1. Go to the [Discord Developer Portal](https://discord.com/developers/applications)
+2. Click **New Application**
+3. Name it `CodeSpar` and click **Create**
+
+### Step 2: Create a Bot User
+
+1. In the left sidebar, click **Bot**
+2. Click **Add Bot** and confirm
+3. Under the bot's username, click **Reset Token**
+4. Copy the token — this is your `DISCORD_BOT_TOKEN`
+
+**Important:** Keep this token secret. Anyone with it can control the bot.
+
+### Step 3: Enable Privileged Intents
+
+Under the **Bot** settings page, enable these **Privileged Gateway Intents**:
+
+| Intent | Purpose |
+|--------|---------|
+| **Message Content Intent** | Required to read the text content of messages |
+| **Server Members Intent** | Optional — needed if you want to resolve usernames |
+
+Without **Message Content Intent**, the bot can see that a message was sent but cannot read its text, making it unable to parse commands.
+
+### Step 4: Configure Permissions
+
+Under **OAuth2 → URL Generator**:
+
+1. Select the `bot` scope
+2. Select these bot permissions:
+   - **Send Messages** — respond to commands
+   - **Read Message History** — context for conversations
+   - **Add Reactions** — acknowledge commands with emoji
+   - **Use Slash Commands** — optional, for future slash command support
+   - **Attach Files** — send diffs, reports, and logs
+   - **Embed Links** — format responses with rich embeds
+
+The minimum required permission integer is `277025770560`.
+
+### Step 5: Invite the Bot to Your Server
+
+1. In **OAuth2 → URL Generator**, copy the generated URL
+2. Open it in your browser
+3. Select the server to add the bot to
+4. Click **Authorize**
+
+## Environment Variables
+
+Add these to your `.env` file:
+
+```bash
+# Enable the Discord channel
+ENABLE_DISCORD=true
+
+# Bot token from the Developer Portal
+DISCORD_BOT_TOKEN=your-discord-bot-token
+```
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `ENABLE_DISCORD` | Yes | Set to `true` to activate the Discord channel |
+| `DISCORD_BOT_TOKEN` | Yes | The bot token from Discord Developer Portal |
+
+## How It Works
+
+The Discord adapter uses `discord.js` to connect to the Discord Gateway via WebSocket.
+
+### Connection Flow
+
+1. On startup, the adapter logs into Discord using the bot token
+2. A WebSocket connection is established to the Discord Gateway
+3. The bot appears as "Online" in your server's member list
+4. The adapter listens for `messageCreate` events
+
+### Mention Detection
+
+Discord has native @mention support. When a user types `@CodeSpar`, Discord replaces it with a mention reference containing the bot's user ID:
+
+```
+Raw message: <@1234567890> deploy staging
+             ^^^^^^^^^^^^^^ bot mention
+
+Adapter:
+1. Detects the bot's user ID in the mention
+2. Strips the mention from the text
+3. Normalizes to: "deploy staging"
+4. Routes to the Project Agent
+```
+
+### Threading
+
+Discord supports threads natively. When CodeSpar responds to a message, it can reply in the same thread or create a new one for long-running operations:
+
+```
+#deployments channel:
+
+User:       @CodeSpar deploy production
+
+CodeSpar:   🚀 Deploy to production requested.
+            Environment: production
+            Branch: main (commit abc1234)
+
+            Approval required (2 of 2 needed).
+            React with ✅ to approve.
+
+Admin1:     ✅ Approved
+Admin2:     ✅ Approved
+
+CodeSpar:   ✅ Quorum reached (2/2). Deploying...
+            Deploy complete. Health check: passing.
+```
+
+## Channel Linking
+
+After adding the bot to your server, link a Discord channel to a CodeSpar project:
+
+```
+@CodeSpar link github:myorg/myrepo
+```
+
+This associates the channel with the repository. All subsequent commands in that channel will operate on that project.
+
+Multiple channels can be linked to different projects within the same server:
+
+```
+#frontend → github:myorg/frontend
+#backend  → github:myorg/backend-api
+#mobile   → github:myorg/mobile-app
+```
+
+## Capabilities
+
+| Feature | Support |
+|---------|---------|
+| Threads | Yes — replies in threads, can create threads |
+| Reactions | Yes — emoji reactions for acknowledgment |
+| Rich formatting | Yes — Markdown, code blocks, embeds |
+| File uploads | Yes — diffs, logs, reports as attachments |
+| Message editing | Yes — can edit its own previous messages |
+| Embeds | Yes — rich embedded content with fields |
+
+## Troubleshooting
+
+### Bot appears offline
+
+1. Verify `ENABLE_DISCORD=true` in your environment
+2. Check that `DISCORD_BOT_TOKEN` is correct and not expired
+3. Look for connection errors in CodeSpar logs
+4. Ensure the bot has not been removed from the server
+
+### Bot is online but doesn't respond
+
+1. Confirm **Message Content Intent** is enabled in the Developer Portal
+2. Verify the bot has **Send Messages** permission in the channel
+3. Check that the bot can see the channel (channel permissions may restrict visibility)
+4. Ensure the message contains a proper @mention (not just typing "codespar")
+
+### "Missing Access" or "Missing Permissions" errors
+
+The bot lacks required permissions in the channel or server. Either:
+- Update the bot's role permissions in **Server Settings → Roles**
+- Re-invite the bot with the correct permission set using the OAuth2 URL
+
+### Rate limiting
+
+Discord enforces rate limits on API calls. CodeSpar handles this automatically with exponential backoff, but if you see delayed responses, check for excessive message volume in your channels.

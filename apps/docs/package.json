@@ -1,0 +1,26 @@
+{
+  "name": "@codespar/docs",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "build": "next build",
+    "dev": "next dev --port 3002",
+    "start": "next start"
+  },
+  "dependencies": {
+    "fumadocs-core": "16.7.1",
+    "fumadocs-mdx": "14.2.11",
+    "fumadocs-ui": "16.7.1",
+    "next": "15.4.11",
+    "react": "19.3.0-canary-b4546cd0-20260318",
+    "react-dom": "19.3.0-canary-b4546cd0-20260318",
+    "tailwindcss": "^4.0.0"
+  },
+  "devDependencies": {
+    "@types/mdx": "^2.0.13",
+    "@types/node": "^22.0.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "typescript": "^5.8.0"
+  }
+}

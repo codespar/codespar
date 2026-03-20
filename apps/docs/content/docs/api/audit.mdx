@@ -1,0 +1,251 @@
+---
+title: Audit API
+description: Query the append-only audit trail with pagination, filtering by risk level, and hash chain integrity verification.
+---
+
+# Audit API
+
+CodeSpar maintains an append-only audit trail of all agent actions, user commands, and system events. Every entry is cryptographically linked to the previous one via a hash chain, ensuring tamper-evident integrity.
+
+## Query Audit Entries
+
+Retrieve paginated audit log entries with optional filtering.
+
+```
+GET /api/audit
+```
+
+### Query Parameters
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `limit` | integer | 20 | Entries per page (max: 100) |
+| `page` | integer | 1 | Page number (1-indexed) |
+| `risk` | string | `all` | Filter by risk level: `low`, `medium`, `high`, `critical`, `all` |
+
+### Request
+
+```bash
+curl "http://localhost:3000/api/audit?limit=20&page=1"
+```
+
+With risk filtering:
+
+```bash
+curl "http://localhost:3000/api/audit?limit=10&page=1&risk=high"
+```
+
+With multi-tenant scoping:
+
+```bash
+curl "http://localhost:3000/api/audit?limit=20&page=1" \
+  -H "x-org-id: org-acme-corp"
+```
+
+### Response
+
+```json
+{
+  "entries": [
+    {
+      "id": "audit-001",
+      "timestamp": "2024-01-15T14:32:00Z",
+      "actorType": "user",
+      "actorId": "slack:U1234ABCD",
+      "action": "deploy",
+      "result": "approved",
+      "metadata": {
+        "target": "staging",
+        "commit": "abc1234",
+        "branch": "main",
+        "approvedBy": "slack:U5678EFGH",
+        "approvalToken": "dp-a1b2c3",
+        "duration": 105
+      },
+      "hash": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "id": "audit-002",
+      "timestamp": "2024-01-15T14:30:00Z",
+      "actorType": "agent",
+      "actorId": "agent-proj-abc123",
+      "action": "review",
+      "result": "completed",
+      "metadata": {
+        "prNumber": 42,
+        "repo": "codespar/codespar",
+        "verdict": "approve_with_suggestions",
+        "suggestions": 2
+      },
+      "hash": "sha256:d7a8fbb307d7809469ca9abcb0082e4f8d5651e46d3cdb762d02d0bf37c9e592"
+    },
+    {
+      "id": "audit-003",
+      "timestamp": "2024-01-15T14:28:00Z",
+      "actorType": "system",
+      "actorId": "webhook-handler",
+      "action": "ci_event",
+      "result": "processed",
+      "metadata": {
+        "event": "workflow_run",
+        "repo": "codespar/codespar",
+        "status": "failure",
+        "branch": "feature/auth"
+      },
+      "hash": "sha256:6b86b273ff34fce19d6b804eff5a3f5747ada4eaa22f1d49c01e52ddb7875b4b"
+    }
+  ],
+  "total": 150,
+  "page": 1,
+  "pageSize": 20,
+  "totalPages": 8,
+  "hasMore": true
+}
+```
+
+### Response Schema
+
+#### Pagination Wrapper
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `entries` | AuditEntry[] | Array of audit entries |
+| `total` | number | Total number of entries matching the filter |
+| `page` | number | Current page number |
+| `pageSize` | number | Entries per page |
+| `totalPages` | number | Total number of pages |
+| `hasMore` | boolean | Whether more pages exist |
+
+#### AuditEntry Schema
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `id` | string | Unique entry identifier |
+| `timestamp` | string | ISO 8601 timestamp |
+| `actorType` | string | Who performed the action: `user`, `agent`, `system` |
+| `actorId` | string | Identifier of the actor (e.g., `slack:U1234`, `agent-proj-abc123`) |
+| `action` | string | The command or event (e.g., `deploy`, `review`, `ci_event`, `kill`) |
+| `result` | string | Outcome: `completed`, `approved`, `denied`, `failed`, `processed` |
+| `metadata` | object | Action-specific data (varies by action type) |
+| `hash` | string | SHA-256 hash linking this entry to the previous one |
+
+### Actor Types
+
+| Actor Type | Description | Example `actorId` |
+|------------|-------------|-------------------|
+| `user` | Human user via a channel | `slack:U1234ABCD`, `whatsapp:5511999990000` |
+| `agent` | CodeSpar agent | `agent-proj-abc123`, `agent-task-def456` |
+| `system` | Internal system event | `webhook-handler`, `scheduler`, `startup` |
+
+### Common Action Types
+
+| Action | Actor Type | Description |
+|--------|-----------|-------------|
+| `status` | user | User queried status |
+| `instruct` | user | User requested a coding task |
+| `fix` | user/agent | Issue investigation triggered |
+| `review` | user/agent | PR review performed |
+| `deploy` | user | Deployment requested or completed |
+| `rollback` | user | Rollback requested or completed |
+| `approve` | user | Action approved |
+| `deny` | user | Action denied |
+| `kill` | user | Emergency kill switch activated |
+| `autonomy_change` | user | Autonomy level changed |
+| `link` | user | Repository linked |
+| `unlink` | user | Repository unlinked |
+| `ci_event` | system | CI/CD webhook event received |
+| `agent_spawn` | system | Ephemeral agent created |
+| `agent_terminate` | system | Ephemeral agent completed and terminated |
+| `error` | agent/system | Error occurred during processing |
+
+## Hash Chain Integrity
+
+Each audit entry includes a `hash` field computed as:
+
+```
+hash = SHA-256(previousHash + timestamp + actorType + actorId + action + result + JSON(metadata))
+```
+
+The first entry in the chain uses a zero hash as the previous hash. This creates a tamper-evident log: modifying any entry would break the chain for all subsequent entries.
+
+### Verifying Integrity
+
+To verify the audit chain integrity, iterate through entries in chronological order and recompute each hash:
+
+```javascript
+import { createHash } from 'crypto';
+
+function verifyChain(entries) {
+  let previousHash = '0'.repeat(64); // genesis hash
+
+  for (const entry of entries) {
+    const payload = previousHash
+      + entry.timestamp
+      + entry.actorType
+      + entry.actorId
+      + entry.action
+      + entry.result
+      + JSON.stringify(entry.metadata);
+
+    const expectedHash = 'sha256:' + createHash('sha256')
+      .update(payload)
+      .digest('hex');
+
+    if (entry.hash !== expectedHash) {
+      return { valid: false, brokenAt: entry.id };
+    }
+
+    previousHash = entry.hash.replace('sha256:', '');
+  }
+
+  return { valid: true };
+}
+```
+
+## Retention
+
+Audit entries are retained for **365 days** by default. After the retention period, entries are archived (if configured) or deleted.
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| Retention period | 365 days | How long entries are kept |
+| Storage | File-based (`.codespar/audit/`) | Default storage backend |
+| Archive | Not configured | Optional external archive (S3, etc.) |
+
+## Examples
+
+### Get the latest 5 entries
+
+```bash
+curl "http://localhost:3000/api/audit?limit=5&page=1"
+```
+
+### Get only high-risk actions
+
+```bash
+curl "http://localhost:3000/api/audit?risk=high&limit=50"
+```
+
+### Get only critical actions (deploys, rollbacks, kills)
+
+```bash
+curl "http://localhost:3000/api/audit?risk=critical&limit=20"
+```
+
+### Paginate through all entries
+
+```bash
+# Page 1
+curl "http://localhost:3000/api/audit?limit=50&page=1"
+
+# Page 2
+curl "http://localhost:3000/api/audit?limit=50&page=2"
+
+# Continue until hasMore is false
+```
+
+## Next Steps
+
+- [Agent API](/docs/api/agents) — Manage agent lifecycle
+- [Security](/docs/configuration/security) — RBAC and approval system
+- [Configuration](/docs/configuration) — Environment variables

@@ -1,0 +1,241 @@
+---
+title: Installation
+description: Full installation guide for CodeSpar covering npm from source, Docker Compose, Railway one-click deploy, and building from source.
+---
+
+# Installation
+
+CodeSpar can be installed and deployed in several ways depending on your needs. Choose the method that fits your environment.
+
+## Prerequisites
+
+| Requirement | Version | Notes |
+|-------------|---------|-------|
+| Node.js | 22+ | Required for running from source |
+| npm | 11+ | Included with Node.js 22+ |
+| Docker | 24+ | Required for Docker Compose and sandboxed agent execution |
+| Docker Compose | v2+ | Required for Docker Compose deployment |
+| Git | 2.40+ | For cloning the repository |
+
+## Option 1: Install from Source
+
+The most straightforward method for development and local use.
+
+### Clone and install
+
+```bash
+git clone https://github.com/codespar/codespar.git
+cd codespar
+npm install
+```
+
+### Configure environment
+
+```bash
+cp .env.example .env
+```
+
+Edit `.env` with your configuration. At minimum, set:
+
+```bash
+ANTHROPIC_API_KEY=sk-ant-your-key
+```
+
+See the [Quickstart](/docs/getting-started/quickstart) for the full environment variable reference.
+
+### Start the server
+
+```bash
+npm run start
+```
+
+To enable specific channels, pass the relevant environment variables:
+
+```bash
+ENABLE_SLACK=true \
+SLACK_BOT_TOKEN=xoxb-... \
+SLACK_SIGNING_SECRET=... \
+npm run start
+```
+
+## Option 2: Docker Compose
+
+Docker Compose is the recommended method for production deployments. It runs CodeSpar with all required services in isolated containers.
+
+### Clone the repository
+
+```bash
+git clone https://github.com/codespar/codespar.git
+cd codespar
+```
+
+### Configure environment
+
+```bash
+cp .env.example .env
+```
+
+Edit `.env` with your API keys and channel credentials.
+
+### Start with Docker Compose
+
+```bash
+docker compose up
+```
+
+This starts CodeSpar using the included `docker-compose.yml`:
+
+```yaml
+# docker-compose.yml (simplified structure)
+services:
+  codespar:
+    build: .
+    ports:
+      - "3000:3000"
+    env_file:
+      - .env
+    volumes:
+      - codespar-data:/app/data
+    restart: unless-stopped
+
+  # Agent execution sandbox
+  sandbox:
+    build:
+      context: .
+      dockerfile: Dockerfile.sandbox
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    restart: unless-stopped
+
+volumes:
+  codespar-data:
+```
+
+To run in detached mode:
+
+```bash
+docker compose up -d
+```
+
+To view logs:
+
+```bash
+docker compose logs -f codespar
+```
+
+To stop all services:
+
+```bash
+docker compose down
+```
+
+## Option 3: Railway One-Click Deploy
+
+Deploy CodeSpar to [Railway](https://railway.app) with a single click for a managed cloud deployment.
+
+1. Click the **Deploy on Railway** button in the [CodeSpar repository README](https://github.com/codespar/codespar)
+2. Railway will fork the repo and create a new project
+3. Set your environment variables in the Railway dashboard:
+   - `ANTHROPIC_API_KEY`
+   - Channel-specific variables (Slack, Discord, etc.)
+4. Railway automatically builds and deploys
+
+Railway provides:
+- Automatic HTTPS
+- Built-in logging and monitoring
+- Easy environment variable management
+- Automatic redeploys on git push
+
+## Option 4: Build from Source
+
+For custom builds, CI/CD pipelines, or contributing to CodeSpar.
+
+### Clone and install
+
+```bash
+git clone https://github.com/codespar/codespar.git
+cd codespar
+npm install
+```
+
+### Build all packages
+
+```bash
+npm run build
+```
+
+This runs Turborepo to build all 13 packages in the monorepo in the correct dependency order. The build output includes:
+
+- Core engine
+- Agent runtime
+- Channel bridges (Slack, Discord, Telegram, WhatsApp, CLI)
+- Shared utilities and types
+- Documentation site
+
+### Verify the build
+
+```bash
+npm run typecheck
+npm run lint
+npm run test
+```
+
+### Run the production build
+
+```bash
+NODE_ENV=production npm run start
+```
+
+## Monorepo Structure
+
+CodeSpar uses Turborepo to manage a monorepo with 13 packages:
+
+```
+codespar/
+├── apps/
+│   ├── server/          # Fastify HTTP server, main entry point
+│   ├── cli/             # CLI interface
+│   └── docs/            # Documentation site (Fumadocs)
+├── packages/
+│   ├── core/            # Core engine, agent lifecycle
+│   ├── agents/          # Agent implementations (Project, Task, Review, etc.)
+│   ├── channels/        # Channel bridges (Slack, Discord, Telegram, WhatsApp)
+│   ├── sandbox/         # Docker sandbox for agent execution
+│   ├── security/        # Security layers, audit logging
+│   ├── config/          # Shared configuration
+│   ├── types/           # Shared TypeScript types
+│   ├── utils/           # Shared utilities
+│   ├── db/              # Database layer
+│   └── logger/          # Structured logging
+├── docker-compose.yml
+├── turbo.json
+└── package.json
+```
+
+## Verifying Your Installation
+
+After starting CodeSpar by any method, verify it is running:
+
+```bash
+curl http://localhost:3000/health
+```
+
+Expected response:
+
+```json
+{
+  "status": "ok",
+  "version": "0.1.0",
+  "channels": {
+    "slack": "connected",
+    "discord": "disabled",
+    "telegram": "disabled",
+    "whatsapp": "disabled"
+  }
+}
+```
+
+## Next Steps
+
+- **[First Agent](/docs/getting-started/first-agent)** — deploy your first agent, link a repo, and start issuing commands
+- **[Quickstart](/docs/getting-started/quickstart)** — the 5-minute version if you just want to try it out

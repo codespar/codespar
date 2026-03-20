@@ -1,0 +1,304 @@
+---
+title: Project API
+description: API endpoints for linking GitHub repositories, listing projects, creating projects with auto-webhook configuration, and removing projects.
+---
+
+# Project API
+
+Manage project links between CodeSpar agents and GitHub repositories. When a repository is linked, CodeSpar automatically configures webhooks (if `WEBHOOK_BASE_URL` is set) to receive push, pull request, and workflow events.
+
+## Check Linked Project
+
+Check which repository is linked to a specific agent.
+
+```
+GET /api/project?agentId=<agent-id>
+```
+
+### Request
+
+```bash
+curl "http://localhost:3000/api/project?agentId=agent-proj-abc123"
+```
+
+### Response (linked)
+
+```json
+{
+  "linked": true,
+  "project": {
+    "id": "proj-001",
+    "name": "codespar",
+    "repo": "codespar/codespar",
+    "repoUrl": "https://github.com/codespar/codespar",
+    "defaultBranch": "main",
+    "webhookConfigured": true,
+    "linkedAt": "2024-01-15T13:30:00Z",
+    "linkedBy": "slack:U1234ABCD"
+  }
+}
+```
+
+### Response (not linked)
+
+```json
+{
+  "linked": false,
+  "project": null
+}
+```
+
+### Response Schema
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `linked` | boolean | Whether a repo is linked |
+| `project.id` | string | Project identifier |
+| `project.name` | string | Project display name (derived from repo) |
+| `project.repo` | string | GitHub repo in `owner/name` format |
+| `project.repoUrl` | string | Full GitHub URL |
+| `project.defaultBranch` | string | Default branch (e.g., `main`) |
+| `project.webhookConfigured` | boolean | Whether the GitHub webhook was auto-configured |
+| `project.linkedAt` | string | ISO 8601 timestamp of when the link was created |
+| `project.linkedBy` | string | Identity of who linked the repo |
+
+---
+
+## Link a Repository
+
+Link a GitHub repository to an agent. If `WEBHOOK_BASE_URL` is set and `GITHUB_TOKEN` has admin permissions, a webhook is automatically created on the repository.
+
+```
+POST /api/project/link
+```
+
+### Request Body
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `agentId` | string | Yes | Agent to link the repo to |
+| `repo` | string | Yes | GitHub repo (`owner/name` or full URL) |
+
+### Request
+
+```bash
+curl -X POST http://localhost:3000/api/project/link \
+  -H "Content-Type: application/json" \
+  -d '{
+    "agentId": "agent-proj-abc123",
+    "repo": "codespar/codespar"
+  }'
+```
+
+Using a full URL:
+
+```bash
+curl -X POST http://localhost:3000/api/project/link \
+  -H "Content-Type: application/json" \
+  -d '{
+    "agentId": "agent-proj-abc123",
+    "repo": "https://github.com/codespar/codespar"
+  }'
+```
+
+### Response
+
+```json
+{
+  "id": "proj-001",
+  "name": "codespar",
+  "repo": "codespar/codespar",
+  "repoUrl": "https://github.com/codespar/codespar",
+  "defaultBranch": "main",
+  "webhookConfigured": true,
+  "webhookId": 123456789,
+  "linkedAt": "2024-01-15T13:30:00Z"
+}
+```
+
+### Error Responses
+
+**Repository not found or no access:**
+
+```json
+{
+  "error": "Repository not found or insufficient permissions",
+  "code": "REPO_NOT_FOUND",
+  "status": 404
+}
+```
+
+**Already linked:**
+
+```json
+{
+  "error": "Agent already has a linked project. Unlink first.",
+  "code": "ALREADY_LINKED",
+  "status": 409
+}
+```
+
+**Missing GitHub token:**
+
+```json
+{
+  "error": "GITHUB_TOKEN is not configured",
+  "code": "MISSING_CONFIG",
+  "status": 400
+}
+```
+
+---
+
+## List All Projects
+
+Retrieve all projects, optionally scoped to an organization.
+
+```
+GET /api/projects
+```
+
+### Request
+
+```bash
+curl http://localhost:3000/api/projects
+```
+
+With multi-tenant scoping:
+
+```bash
+curl http://localhost:3000/api/projects \
+  -H "x-org-id: org-acme-corp"
+```
+
+### Response
+
+```json
+[
+  {
+    "id": "proj-001",
+    "name": "codespar",
+    "repo": "codespar/codespar",
+    "repoUrl": "https://github.com/codespar/codespar",
+    "defaultBranch": "main",
+    "webhookConfigured": true,
+    "agentId": "agent-proj-abc123",
+    "agentStatus": "ACTIVE",
+    "orgId": "org-acme-corp",
+    "createdAt": "2024-01-15T13:30:00Z"
+  },
+  {
+    "id": "proj-002",
+    "name": "frontend",
+    "repo": "acme/frontend",
+    "repoUrl": "https://github.com/acme/frontend",
+    "defaultBranch": "main",
+    "webhookConfigured": true,
+    "agentId": "agent-proj-def456",
+    "agentStatus": "IDLE",
+    "orgId": "org-acme-corp",
+    "createdAt": "2024-01-16T09:00:00Z"
+  }
+]
+```
+
+---
+
+## Create Project
+
+Create a new project with an associated agent. If `WEBHOOK_BASE_URL` and `GITHUB_TOKEN` are configured, the webhook is automatically set up.
+
+```
+POST /api/projects
+```
+
+### Request Body
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `name` | string | Yes | Display name for the project |
+| `repo` | string | Yes | GitHub repo (`owner/name`) |
+| `orgId` | string | No | Organization ID (for multi-tenant) |
+| `autonomyLevel` | number | No | Initial autonomy level (default: 1) |
+
+### Request
+
+```bash
+curl -X POST http://localhost:3000/api/projects \
+  -H "Content-Type: application/json" \
+  -H "x-org-id: org-acme-corp" \
+  -d '{
+    "name": "API Service",
+    "repo": "acme/api-service",
+    "autonomyLevel": 2
+  }'
+```
+
+### Response
+
+```json
+{
+  "id": "proj-003",
+  "name": "API Service",
+  "repo": "acme/api-service",
+  "repoUrl": "https://github.com/acme/api-service",
+  "defaultBranch": "main",
+  "webhookConfigured": true,
+  "webhookId": 987654321,
+  "agentId": "agent-proj-ghi789",
+  "agentStatus": "ACTIVE",
+  "autonomyLevel": 2,
+  "orgId": "org-acme-corp",
+  "createdAt": "2024-01-17T10:00:00Z"
+}
+```
+
+---
+
+## Delete Project
+
+Remove a project and its associated agent. This also removes the GitHub webhook if one was configured.
+
+```
+DELETE /api/projects/:id
+```
+
+### Request
+
+```bash
+curl -X DELETE http://localhost:3000/api/projects/proj-003
+```
+
+With multi-tenant scoping:
+
+```bash
+curl -X DELETE http://localhost:3000/api/projects/proj-003 \
+  -H "x-org-id: org-acme-corp"
+```
+
+### Response
+
+```json
+{
+  "deleted": true,
+  "id": "proj-003",
+  "webhookRemoved": true,
+  "agentTerminated": true
+}
+```
+
+### Error Response
+
+```json
+{
+  "error": "Project not found",
+  "code": "PROJECT_NOT_FOUND",
+  "status": 404
+}
+```
+
+## Next Steps
+
+- [Agent API](/docs/api/agents) — Manage agent lifecycle
+- [Webhook API](/docs/api/webhooks) — GitHub webhook processing
+- [Link a Repository Guide](/docs/guides/link-repository) — Step-by-step guide

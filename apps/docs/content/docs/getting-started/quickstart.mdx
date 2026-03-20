@@ -1,0 +1,102 @@
+---
+title: Quickstart
+description: Get CodeSpar running in under 5 minutes with Slack and start issuing commands to your first AI coding agent.
+---
+
+# Quickstart
+
+This guide gets you from zero to a working CodeSpar agent in under 5 minutes. By the end, you will have a running instance connected to Slack, ready to accept `@codespar` commands.
+
+## Prerequisites
+
+- **Node.js 22+** and **npm 11+**
+- A **Slack workspace** where you can install apps
+- An **Anthropic API key** ([get one here](https://console.anthropic.com/))
+
+## Steps
+
+### 1. Clone the repository
+
+```bash
+git clone https://github.com/codespar/codespar.git
+cd codespar
+```
+
+### 2. Install dependencies
+
+```bash
+npm install
+```
+
+This installs all packages across the Turborepo monorepo.
+
+### 3. Configure environment variables
+
+```bash
+cp .env.example .env
+```
+
+Open `.env` and set your Anthropic API key:
+
+```bash
+ANTHROPIC_API_KEY=sk-ant-...
+```
+
+### 4. Start CodeSpar with Slack
+
+Run the server with Slack enabled, passing your Slack credentials:
+
+```bash
+ENABLE_SLACK=true \
+SLACK_BOT_TOKEN=xoxb-your-bot-token \
+SLACK_SIGNING_SECRET=your-signing-secret \
+npm run start
+```
+
+You should see output confirming the server is running and the Slack channel is connected:
+
+```
+[codespar] Server listening on http://localhost:3000
+[codespar] Slack channel connected ✓
+```
+
+### 5. Send your first command
+
+In any Slack channel where the CodeSpar bot is present, type:
+
+```
+@codespar status
+```
+
+The agent responds with its current state, linked repositories, and autonomy level.
+
+## Minimum Environment Variables
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `ANTHROPIC_API_KEY` | Yes | Your Anthropic API key for LLM access |
+| `ENABLE_SLACK` | No | Set to `true` to enable the Slack channel (default: `false`) |
+| `SLACK_BOT_TOKEN` | If Slack enabled | Bot token from your Slack app (`xoxb-...`) |
+| `SLACK_SIGNING_SECRET` | If Slack enabled | Signing secret from your Slack app settings |
+| `ENABLE_DISCORD` | No | Set to `true` to enable the Discord channel (default: `false`) |
+| `DISCORD_BOT_TOKEN` | If Discord enabled | Bot token from your Discord application |
+| `ENABLE_TELEGRAM` | No | Set to `true` to enable the Telegram channel (default: `false`) |
+| `TELEGRAM_BOT_TOKEN` | If Telegram enabled | Bot token from BotFather |
+| `ENABLE_WHATSAPP` | No | Set to `true` to enable the WhatsApp channel (default: `false`) |
+| `WHATSAPP_API_TOKEN` | If WhatsApp enabled | API token from WhatsApp Business Platform |
+| `GITHUB_TOKEN` | Recommended | GitHub personal access token for repo operations |
+| `LOG_LEVEL` | No | Logging verbosity: `debug`, `info`, `warn`, `error` (default: `info`) |
+
+## What Just Happened?
+
+When you started CodeSpar:
+
+1. The **core server** started on port 3000
+2. The **Slack bridge** connected using Socket Mode via your bot token
+3. A **Project Agent** was initialized, waiting for commands
+4. When you typed `@codespar status`, the Slack bridge routed the message to the Project Agent, which responded with its state
+
+## Next Steps
+
+- **[Installation guide](/docs/getting-started/installation)** — Docker Compose, Railway deploy, and production configuration
+- **[First Agent tutorial](/docs/getting-started/first-agent)** — link a repo, execute tasks, and review PRs from Slack

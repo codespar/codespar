@@ -1,0 +1,234 @@
+---
+title: First Agent
+description: Step-by-step tutorial to deploy your first CodeSpar agent, link a GitHub repository, and execute tasks from Slack.
+---
+
+# Deploy Your First Agent
+
+This tutorial walks you through deploying a CodeSpar Project Agent connected to Slack, linking it to a GitHub repository, and using it to execute tasks, review pull requests, and manage your project — all from Slack.
+
+## Prerequisites
+
+Before starting, make sure you have:
+
+- CodeSpar installed ([Installation guide](/docs/getting-started/installation))
+- A **Slack workspace** where you have permission to install apps
+- A **GitHub repository** you want to link
+- A **GitHub personal access token** with `repo` scope ([create one here](https://github.com/settings/tokens))
+- Your **Anthropic API key** set in `.env`
+
+## Step 1: Create a Slack App
+
+1. Go to [api.slack.com/apps](https://api.slack.com/apps) and click **Create New App**
+2. Choose **From scratch**, give it the name `CodeSpar`, and select your workspace
+3. Under **OAuth & Permissions**, add these **Bot Token Scopes**:
+   - `app_mentions:read` — detect `@codespar` mentions
+   - `chat:write` — send messages
+   - `channels:history` — read channel messages
+   - `groups:history` — read private channel messages
+   - `files:write` — upload code snippets and diffs
+4. Under **Event Subscriptions**, enable events and subscribe to:
+   - `app_mention` — triggers when someone mentions `@codespar`
+   - `message.channels` — monitors channel messages
+5. Install the app to your workspace
+6. Copy the **Bot User OAuth Token** (`xoxb-...`) from the OAuth & Permissions page
+7. Copy the **Signing Secret** from the Basic Information page
+
+## Step 2: Configure Environment Variables
+
+Add your Slack credentials and GitHub token to `.env`:
+
+```bash
+ANTHROPIC_API_KEY=sk-ant-your-key
+ENABLE_SLACK=true
+SLACK_BOT_TOKEN=xoxb-your-bot-token
+SLACK_SIGNING_SECRET=your-signing-secret
+GITHUB_TOKEN=ghp_your-github-token
+```
+
+## Step 3: Start CodeSpar
+
+```bash
+npm run start
+```
+
+You should see:
+
+```
+[codespar] Server listening on http://localhost:3000
+[codespar] Slack channel connected ✓
+[codespar] Project Agent initialized (autonomy: L1)
+```
+
+The Project Agent starts at **L1 (Notify)** by default — it monitors and alerts but never auto-executes actions.
+
+## Step 4: Verify the Connection
+
+Invite the CodeSpar bot to a Slack channel, then type:
+
+```
+@codespar help
+```
+
+The agent responds with available commands:
+
+```
+Available commands:
+  help              Show this help message
+  status            Show agent status and linked repos
+  link <repo>       Link a GitHub repository
+  unlink <repo>     Unlink a GitHub repository
+  instruct <task>   Execute a coding task
+  review <PR>       Review a pull request
+  prs               List open pull requests
+  deploy <env>      Deploy to an environment
+  autonomy <level>  Set autonomy level (L0-L5)
+  config            Show current configuration
+```
+
+## Step 5: Link a Repository
+
+Connect a GitHub repository to your Project Agent:
+
+```
+@codespar link owner/repo
+```
+
+Replace `owner/repo` with your actual GitHub repository (e.g., `acme/backend`). The agent confirms:
+
+```
+✓ Linked to owner/repo
+  Branch: main
+  Last commit: abc1234 — "fix: update dependency versions"
+  Open PRs: 3
+  CI status: passing
+```
+
+## Step 6: Check Project Status
+
+Ask for the current state of your project:
+
+```
+@codespar status
+```
+
+The agent responds with a summary:
+
+```
+Project Agent — owner/repo
+  Autonomy: L1 (Notify)
+  Branch: main
+  CI: passing (last run: 2 min ago)
+  Open PRs: 3
+  Active tasks: 0
+```
+
+## Step 7: Execute a Task
+
+Give the agent a coding task using natural language:
+
+```
+@codespar instruct add a health check endpoint at GET /health that returns { status: "ok", uptime: process.uptime() }
+```
+
+The agent:
+
+1. Spawns an ephemeral **Task Agent**
+2. Clones the repo into a sandboxed Docker container
+3. Writes the code, runs existing tests
+4. Creates a branch and opens a pull request
+5. Reports back in Slack with a link to the PR
+
+```
+✓ Task completed
+  Branch: codespar/add-health-check
+  PR: #42 — "feat: add health check endpoint"
+  Files changed: 2 (src/routes/health.ts, src/routes/index.ts)
+  Tests: 14 passed, 0 failed
+```
+
+## Step 8: Review a Pull Request
+
+Ask the agent to review any open PR:
+
+```
+@codespar review PR #42
+```
+
+The agent spawns a **Review Agent** that analyzes the PR and responds with findings:
+
+```
+Review: PR #42 — "feat: add health check endpoint"
+
+Summary: Adds a GET /health endpoint returning status and uptime.
+
+✓ No security issues found
+✓ Code style consistent
+✓ Tests included
+
+Suggestions:
+  1. Consider adding a response type interface for type safety
+  2. The uptime value could include units (seconds) for clarity
+
+Verdict: Approve (low risk)
+```
+
+## Step 9: List Open Pull Requests
+
+See all open PRs on the linked repository:
+
+```
+@codespar prs
+```
+
+The agent lists them with status:
+
+```
+Open PRs for owner/repo:
+  #42  feat: add health check endpoint     (codespar/add-health-check)   CI: passing
+  #41  fix: handle null user in auth        (fix/null-user-auth)          CI: passing
+  #39  chore: update dependencies           (chore/dep-update)            CI: failing
+```
+
+## Step 10: Explore Further
+
+Now that you have a working agent, try these:
+
+### Adjust autonomy level
+
+```
+@codespar autonomy L2
+```
+
+At L2 (Suggest), the agent proactively proposes actions when it detects issues — like a failing CI build — but still waits for your approval before acting.
+
+### Ask about a CI failure
+
+```
+@codespar why is CI failing on PR #39?
+```
+
+### Request a fix
+
+```
+@codespar instruct fix the failing tests in PR #39
+```
+
+## Summary
+
+In this tutorial you:
+
+1. Created a Slack app and connected it to CodeSpar
+2. Linked a GitHub repository to a Project Agent
+3. Checked project status from Slack
+4. Executed a coding task that produced a pull request
+5. Reviewed a pull request with automated analysis
+6. Listed open pull requests
+
+The same `@mention` interface works identically across Discord, Telegram, WhatsApp, and CLI. To enable another channel, set the corresponding `ENABLE_*` and token environment variables and restart CodeSpar.
+
+## Next Steps
+
+- Learn about the [six agent types](/docs/agents) and what each one does
+- Configure [autonomy levels](/docs/autonomy) for your team's risk tolerance
+- Set up [multiple channels](/docs/channels) for the same project

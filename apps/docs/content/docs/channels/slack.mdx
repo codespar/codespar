@@ -1,0 +1,174 @@
+---
+title: Slack
+description: Set up CodeSpar as a Slack app using Socket Mode for real-time messaging, mentions, and threaded conversations.
+---
+
+# Slack Channel
+
+CodeSpar integrates with Slack via a custom Slack app using **Socket Mode**. This means no public URL or ingress is required — the connection is outbound from your infrastructure to Slack's servers.
+
+## Prerequisites
+
+- A Slack workspace where you have admin permissions
+- CodeSpar instance running (Docker or local)
+
+## Create a Slack App
+
+1. Go to [api.slack.com/apps](https://api.slack.com/apps) and click **Create New App**
+2. Choose **From scratch**
+3. Name it `CodeSpar` (or your preferred name) and select your workspace
+4. Click **Create App**
+
+### Enable Socket Mode
+
+Socket Mode lets the app receive events over a WebSocket instead of HTTP webhooks. This is simpler to deploy and doesn't require a public URL.
+
+1. In the app settings, go to **Socket Mode** in the left sidebar
+2. Toggle **Enable Socket Mode** to on
+3. Create an **App-Level Token** with the `connections:write` scope
+4. Name it `codespar-socket` and click **Generate**
+5. Copy the token (starts with `xapp-`) — this is your `SLACK_APP_TOKEN`
+
+### Configure OAuth Scopes
+
+Go to **OAuth & Permissions** and add these **Bot Token Scopes**:
+
+| Scope | Purpose |
+|-------|---------|
+| `app_mentions:read` | Receive messages where the bot is @mentioned |
+| `chat:write` | Send messages and responses |
+| `channels:read` | List public channels the bot is in |
+
+Optional scopes for enhanced functionality:
+
+| Scope | Purpose |
+|-------|---------|
+| `channels:history` | Read message history for context |
+| `reactions:write` | Add emoji reactions to messages |
+| `files:write` | Upload files (diffs, reports) |
+
+### Enable Event Subscriptions
+
+1. Go to **Event Subscriptions** and toggle to **On**
+2. Under **Subscribe to bot events**, add:
+   - `app_mention` — triggers when someone @mentions the bot in a channel
+   - `message.im` — triggers on direct messages to the bot
+
+### Install to Workspace
+
+1. Go to **Install App** in the left sidebar
+2. Click **Install to Workspace** and authorize
+3. Copy the **Bot User OAuth Token** (starts with `xoxb-`) — this is your `SLACK_BOT_TOKEN`
+
+### Get the Signing Secret
+
+1. Go to **Basic Information**
+2. Under **App Credentials**, copy the **Signing Secret** — this is your `SLACK_SIGNING_SECRET`
+
+## Environment Variables
+
+Add these to your `.env` file:
+
+```bash
+# Enable the Slack channel
+ENABLE_SLACK=true
+
+# Bot User OAuth Token (xoxb-...)
+SLACK_BOT_TOKEN=xoxb-your-bot-token
+
+# Signing Secret (used to verify requests from Slack)
+SLACK_SIGNING_SECRET=your-signing-secret
+
+# App-Level Token for Socket Mode (xapp-...)
+SLACK_APP_TOKEN=xapp-your-app-level-token
+```
+
+## How It Works
+
+The Slack adapter uses Bolt for JavaScript (`@slack/bolt`) under the hood.
+
+### Channel Messages
+
+When a user @mentions the bot in a channel, Slack fires an `app_mention` event:
+
+```
+User in #dev-ops: @CodeSpar status
+```
+
+The adapter:
+1. Receives the `app_mention` event via Socket Mode
+2. Strips the `@CodeSpar` mention from the text
+3. Normalizes into a `NormalizedMessage` with `channelType: "slack"`
+4. Routes to the Project Agent linked to that channel
+5. Sends the response back to the same channel (in a thread if applicable)
+
+### Direct Messages
+
+DMs use the `message.im` event — no @mention needed:
+
+```
+User DM: review PR #42 on frontend
+```
+
+### Threading
+
+Slack responses are threaded by default. When a user @mentions CodeSpar in a channel, the response appears as a thread reply, keeping the channel clean. Ongoing conversation within the thread continues without needing to @mention again.
+
+## Example Conversation
+
+```
+User:       @CodeSpar fix the auth timeout in login.ts
+
+CodeSpar:   🔍 Looking at the auth timeout issue in login.ts...
+
+            I found the problem. The session timeout is set to 30s
+            in `src/auth/login.ts:47` but the OAuth flow takes up
+            to 60s on slow connections.
+
+            I've created a fix:
+            → Branch: fix/auth-timeout
+            → PR #87: Increase auth session timeout to 120s
+            → Files changed: 1 (login.ts)
+            → Risk: low
+
+            Approve or request changes?
+
+User:       approve
+
+CodeSpar:   ✅ PR #87 merged. Deployed to staging.
+```
+
+## Invite the Bot to Channels
+
+After installation, invite the bot to any channel where you want it active:
+
+```
+/invite @CodeSpar
+```
+
+Or go to the channel settings → Integrations → Add apps → select CodeSpar.
+
+## Troubleshooting
+
+### Bot doesn't respond to mentions
+
+1. Verify `ENABLE_SLACK=true` in your environment
+2. Check that the bot is invited to the channel
+3. Confirm `app_mentions:read` scope is granted
+4. Check logs for Socket Mode connection errors
+
+### "not_authed" errors
+
+Your `SLACK_BOT_TOKEN` is invalid or expired. Reinstall the app to your workspace to generate a new token.
+
+### Socket Mode disconnects
+
+Socket Mode connections can drop under high load or network instability. CodeSpar automatically reconnects, but check your logs if messages are being missed. Ensure `SLACK_APP_TOKEN` has the `connections:write` scope.
+
+### Messages appear but agent doesn't process
+
+Verify that the channel is linked to a project. Use the CLI to check:
+
+```bash
+@codespar link github:org/repo
+```

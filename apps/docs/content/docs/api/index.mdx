@@ -1,0 +1,176 @@
+---
+title: REST API Overview
+description: Introduction to the CodeSpar REST API, including base URL configuration, response format, multi-tenant headers, pagination, and error handling.
+---
+
+# REST API Overview
+
+CodeSpar exposes a REST API for programmatic access to agents, projects, audit logs, channels, memory, and organizations. The API is used internally by the agent system and can be consumed by external tools, dashboards, and CI/CD integrations.
+
+## Base URL
+
+The API base URL is configurable via the `PORT` environment variable. By default, the server listens on port `3000`:
+
+```
+http://localhost:3000
+```
+
+When deployed on Railway, the port is typically `8080` (auto-set by Railway). In production, you would place this behind a reverse proxy or load balancer with HTTPS.
+
+```
+https://api.codespar.example.com
+```
+
+## Response Format
+
+All API responses are JSON. Successful responses return the data directly:
+
+```json
+{
+  "id": "agent-abc123",
+  "type": "project",
+  "status": "ACTIVE",
+  "autonomyLevel": 1
+}
+```
+
+List endpoints return arrays:
+
+```json
+[
+  { "id": "agent-abc123", "type": "project", "status": "ACTIVE" },
+  { "id": "agent-def456", "type": "task", "status": "IDLE" }
+]
+```
+
+Paginated endpoints (like audit) return a wrapper object:
+
+```json
+{
+  "entries": [...],
+  "total": 150,
+  "page": 1,
+  "pageSize": 20,
+  "totalPages": 8,
+  "hasMore": true
+}
+```
+
+## Authentication
+
+CodeSpar does not implement authentication at the API level. Authentication is **delegated to the deployment layer** — your reverse proxy, API gateway, or platform (e.g., Railway private networking, Cloudflare Access, or a custom auth middleware).
+
+This design keeps the core engine simple and allows each deployment to use its preferred auth strategy.
+
+For multi-tenant deployments, use the `x-org-id` header (see below) to scope requests to a specific organization.
+
+## Multi-Tenant Scoping
+
+CodeSpar supports multi-tenant deployments via the `x-org-id` header. When provided, all API operations are scoped to the specified organization:
+
+```bash
+curl http://localhost:3000/api/projects \
+  -H "x-org-id: org-acme-corp"
+```
+
+Without the header, requests operate in the default (single-tenant) context.
+
+| Header | Required | Description |
+|--------|----------|-------------|
+| `x-org-id` | No | Organization ID for multi-tenant scoping |
+| `Content-Type` | Yes (for POST/PUT) | Must be `application/json` |
+
+## Pagination
+
+The audit endpoint supports pagination with `limit` and `page` query parameters:
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `limit` | integer | 20 | Number of entries per page (max: 100) |
+| `page` | integer | 1 | Page number (1-indexed) |
+
+Example:
+
+```bash
+curl "http://localhost:3000/api/audit?limit=10&page=3"
+```
+
+Response includes pagination metadata:
+
+```json
+{
+  "entries": [...],
+  "total": 150,
+  "page": 3,
+  "pageSize": 10,
+  "totalPages": 15,
+  "hasMore": true
+}
+```
+
+## Error Handling
+
+Errors follow standard HTTP status codes with a JSON error body:
+
+| Status Code | Meaning | Example |
+|-------------|---------|---------|
+| `400` | Bad Request | Missing required field, invalid parameter |
+| `404` | Not Found | Agent, project, or org not found |
+| `409` | Conflict | Resource already exists (e.g., duplicate link) |
+| `500` | Internal Server Error | Unexpected server failure |
+
+Error response format:
+
+```json
+{
+  "error": "Agent not found",
+  "code": "AGENT_NOT_FOUND",
+  "status": 404
+}
+```
+
+## API Endpoints
+
+| Group | Endpoints | Description |
+|-------|-----------|-------------|
+| [Agents](/docs/api/agents) | `GET /api/agents`, `GET /api/agents/:id`, `POST /api/agents/:id/action` | Manage agent lifecycle and actions |
+| [Audit](/docs/api/audit) | `GET /api/audit` | Query the append-only audit trail |
+| [Projects](/docs/api/projects) | `GET /api/project`, `POST /api/project/link`, `GET /api/projects`, `POST /api/projects`, `DELETE /api/projects/:id` | Manage project links and configuration |
+| [Channels](/docs/api/channels) | `GET /api/channels`, `POST /api/channels/:name/reconnect` | View and manage channel connections |
+| [Memory](/docs/api/memory) | `GET /api/memory`, `GET /api/identity` | Query vector store and identity data |
+| [Organizations](/docs/api/orgs) | `GET /api/orgs`, `POST /api/orgs`, `GET /api/orgs/:id` | Manage organizations (multi-tenant) |
+| [Webhooks](/docs/api/webhooks) | `POST /webhooks/github` | Receive GitHub webhook events |
+
+## Quick Start
+
+List all agents:
+
+```bash
+curl http://localhost:3000/api/agents
+```
+
+Get agent details:
+
+```bash
+curl http://localhost:3000/api/agents/agent-abc123
+```
+
+Trigger an agent action:
+
+```bash
+curl -X POST http://localhost:3000/api/agents/agent-abc123/action \
+  -H "Content-Type: application/json" \
+  -d '{"action": "set_autonomy", "params": {"level": 3}}'
+```
+
+View recent audit entries:
+
+```bash
+curl "http://localhost:3000/api/audit?limit=5"
+```
+
+## Next Steps
+
+- [Agent API](/docs/api/agents) — Manage agents
+- [Project API](/docs/api/projects) — Link repositories
+- [Configuration](/docs/configuration) — Environment variables and setup

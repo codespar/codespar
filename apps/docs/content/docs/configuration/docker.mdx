@@ -1,0 +1,336 @@
+---
+title: Docker Configuration
+description: Running CodeSpar with Docker, including Dockerfile details, Docker Compose configurations for minimal and full deployments, channel-specific overrides, and volume mounts.
+---
+
+# Docker Configuration
+
+CodeSpar ships with Docker configurations for development and production deployments. The Docker setup uses multi-stage builds for minimal image size and includes Compose files for different deployment scenarios.
+
+## Dockerfile
+
+CodeSpar uses a multi-stage Node.js 22 Alpine build for small, secure images.
+
+```dockerfile
+# Stage 1: Install dependencies
+FROM node:22-alpine AS deps
+WORKDIR /app
+COPY package.json package-lock.json ./
+RUN npm ci --production
+
+# Stage 2: Build
+FROM node:22-alpine AS builder
+WORKDIR /app
+COPY package.json package-lock.json ./
+RUN npm ci
+COPY . .
+RUN npm run build
+
+# Stage 3: Production image
+FROM node:22-alpine AS runner
+WORKDIR /app
+
+ENV NODE_ENV=production
+ENV PORT=3000
+
+# Create non-root user
+RUN addgroup --system --gid 1001 codespar && \
+    adduser --system --uid 1001 codespar
+
+# Copy built application
+COPY --from=deps /app/node_modules ./node_modules
+COPY --from=builder /app/dist ./dist
+COPY --from=builder /app/package.json ./package.json
+
+# Create storage directory
+RUN mkdir -p .codespar && chown -R codespar:codespar .codespar
+
+USER codespar
+
+EXPOSE 3000
+
+CMD ["node", "dist/index.js"]
+```
+
+### Image Details
+
+| Property | Value |
+|----------|-------|
+| Base image | `node:22-alpine` |
+| Final image size | ~180 MB |
+| User | `codespar` (non-root, UID 1001) |
+| Working directory | `/app` |
+| Storage directory | `/app/.codespar` |
+| Default port | `3000` |
+
+## Docker Compose — Base
+
+The base `docker-compose.yml` runs CodeSpar with minimal configuration:
+
+```yaml
+version: "3.8"
+
+services:
+  codespar:
+    build: .
+    ports:
+      - "${PORT:-3000}:3000"
+    environment:
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - GITHUB_TOKEN=${GITHUB_TOKEN}
+      - PORT=3000
+      - PROJECT_NAME=${PROJECT_NAME:-codespar}
+      - ADMIN_NAME=${ADMIN_NAME:-admin}
+      - WEBHOOK_BASE_URL=${WEBHOOK_BASE_URL:-}
+    volumes:
+      - codespar-data:/app/.codespar
+    restart: unless-stopped
+
+volumes:
+  codespar-data:
+```
+
+### Running
+
+```bash
+# Start with .env file
+docker compose up -d
+
+# View logs
+docker compose logs -f codespar
+
+# Stop
+docker compose down
+```
+
+## Docker Compose — Full Stack
+
+The `docker-compose.full.yml` includes all supporting services: PostgreSQL, Redis, and the Evolution API for WhatsApp.
+
+```yaml
+version: "3.8"
+
+services:
+  codespar:
+    build: .
+    ports:
+      - "${PORT:-3000}:3000"
+      - "${WHATSAPP_WEBHOOK_PORT:-8085}:8085"
+    environment:
+      # Required
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - GITHUB_TOKEN=${GITHUB_TOKEN}
+      # Server
+      - PORT=3000
+      - PROJECT_NAME=${PROJECT_NAME:-codespar}
+      - ADMIN_NAME=${ADMIN_NAME:-admin}
+      - WEBHOOK_BASE_URL=${WEBHOOK_BASE_URL:-}
+      # Models
+      - TASK_MODEL=${TASK_MODEL:-claude-sonnet-4-20250514}
+      - NLU_MODEL=${NLU_MODEL:-claude-haiku-4-5-20251001}
+      - SMART_MODEL=${SMART_MODEL:-claude-sonnet-4-20250514}
+      - REVIEW_MODEL=${REVIEW_MODEL:-claude-sonnet-4-20250514}
+      # Database
+      - DATABASE_URL=postgresql://codespar:codespar@postgres:5432/codespar
+      - REDIS_URL=redis://redis:6379
+      # Channels
+      - ENABLE_SLACK=${ENABLE_SLACK:-false}
+      - SLACK_BOT_TOKEN=${SLACK_BOT_TOKEN:-}
+      - SLACK_APP_TOKEN=${SLACK_APP_TOKEN:-}
+      - ENABLE_WHATSAPP=${ENABLE_WHATSAPP:-false}
+      - EVOLUTION_API_URL=http://evolution:8080
+      - EVOLUTION_API_KEY=${EVOLUTION_API_KEY:-}
+      - EVOLUTION_INSTANCE=${EVOLUTION_INSTANCE:-codespar}
+      - WHATSAPP_WEBHOOK_PORT=8085
+      - WHATSAPP_BOT_MENTION=${WHATSAPP_BOT_MENTION:-@codespar}
+      - ENABLE_DISCORD=${ENABLE_DISCORD:-false}
+      - DISCORD_TOKEN=${DISCORD_TOKEN:-}
+      - ENABLE_TELEGRAM=${ENABLE_TELEGRAM:-false}
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
+    volumes:
+      - codespar-data:/app/.codespar
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: codespar
+      POSTGRES_USER: codespar
+      POSTGRES_PASSWORD: codespar
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U codespar"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  evolution:
+    image: atendai/evolution-api:latest
+    ports:
+      - "8080:8080"
+    environment:
+      - AUTHENTICATION_API_KEY=${EVOLUTION_API_KEY:-}
+    volumes:
+      - evolution-data:/evolution/instances
+    restart: unless-stopped
+    profiles:
+      - whatsapp
+
+volumes:
+  codespar-data:
+  postgres-data:
+  redis-data:
+  evolution-data:
+```
+
+### Running the Full Stack
+
+```bash
+# Start all services (without WhatsApp)
+docker compose -f docker-compose.full.yml up -d
+
+# Start with WhatsApp (Evolution API)
+docker compose -f docker-compose.full.yml --profile whatsapp up -d
+
+# View all logs
+docker compose -f docker-compose.full.yml logs -f
+
+# View only CodeSpar logs
+docker compose -f docker-compose.full.yml logs -f codespar
+```
+
+## Channel-Specific Overrides
+
+You can create override files for specific channel combinations.
+
+### Slack Only
+
+```yaml
+# docker-compose.slack.yml
+version: "3.8"
+
+services:
+  codespar:
+    environment:
+      - ENABLE_SLACK=true
+      - SLACK_BOT_TOKEN=${SLACK_BOT_TOKEN}
+      - SLACK_APP_TOKEN=${SLACK_APP_TOKEN}
+```
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.slack.yml up -d
+```
+
+### Discord Only
+
+```yaml
+# docker-compose.discord.yml
+version: "3.8"
+
+services:
+  codespar:
+    environment:
+      - ENABLE_DISCORD=true
+      - DISCORD_TOKEN=${DISCORD_TOKEN}
+```
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.discord.yml up -d
+```
+
+### Multiple Channels
+
+```bash
+docker compose \
+  -f docker-compose.yml \
+  -f docker-compose.slack.yml \
+  -f docker-compose.discord.yml \
+  up -d
+```
+
+## Volume Mounts
+
+The `.codespar` directory contains all persistent state. It must be mounted as a volume in production to survive container restarts.
+
+| Volume | Container Path | Description |
+|--------|---------------|-------------|
+| `codespar-data` | `/app/.codespar` | Agent state, audit logs, vector store, project configs |
+| `postgres-data` | `/var/lib/postgresql/data` | PostgreSQL data (full stack only) |
+| `redis-data` | `/data` | Redis persistence (full stack only) |
+| `evolution-data` | `/evolution/instances` | Evolution API WhatsApp sessions |
+
+### Backup
+
+To back up the CodeSpar data volume:
+
+```bash
+# Create a backup
+docker run --rm \
+  -v codespar-data:/data \
+  -v $(pwd):/backup \
+  alpine tar czf /backup/codespar-backup-$(date +%Y%m%d).tar.gz -C /data .
+
+# Restore from backup
+docker run --rm \
+  -v codespar-data:/data \
+  -v $(pwd):/backup \
+  alpine tar xzf /backup/codespar-backup-20240115.tar.gz -C /data
+```
+
+## Building the Image
+
+```bash
+# Build
+docker build -t codespar .
+
+# Build with a specific tag
+docker build -t codespar:v1.0.0 .
+
+# Run directly (without Compose)
+docker run -d \
+  --name codespar \
+  -p 3000:3000 \
+  -v codespar-data:/app/.codespar \
+  -e ANTHROPIC_API_KEY=sk-ant-... \
+  -e GITHUB_TOKEN=ghp_... \
+  codespar
+```
+
+## Health Check
+
+Add a health check to your container:
+
+```yaml
+services:
+  codespar:
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3000/api/agents"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+```
+
+## Next Steps
+
+- [Railway Deployment](/docs/configuration/railway) — Deploy to Railway
+- [Configuration](/docs/configuration) — All environment variables
+- [Security](/docs/configuration/security) — RBAC and audit configuration

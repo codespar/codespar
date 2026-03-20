@@ -1,0 +1,249 @@
+---
+title: Security
+description: CodeSpar security architecture including RBAC roles, permission mapping, token-based approval system, audit trail integrity, identity resolution, and safety guardrails.
+---
+
+# Security
+
+CodeSpar implements defense-in-depth security with role-based access control (RBAC), a token-based approval system, an append-only audit trail with hash chain integrity, cross-channel identity resolution, and mandatory safety guardrails for high-risk operations.
+
+## RBAC — Role-Based Access Control
+
+### Roles
+
+CodeSpar defines six roles, ordered from most to least privileged:
+
+| Role | Description | Typical User |
+|------|-------------|--------------|
+| `owner` | Full control over project, agents, and configuration | Project creator, tech lead |
+| `maintainer` | Can execute all commands, manage autonomy and links | Senior developers |
+| `operator` | Can execute tasks and deploys, limited configuration | DevOps engineers |
+| `reviewer` | Can review PRs and view status, no execution | Junior developers, QA |
+| `read-only` | Can only view status, logs, and memory stats | Stakeholders, observers |
+| `emergency_admin` | Can execute `kill` without approval at any autonomy level | On-call engineers |
+
+### Permission Matrix
+
+Each role maps to a set of permitted intents (commands):
+
+| Permission | owner | maintainer | operator | reviewer | read-only | emergency_admin |
+|------------|-------|------------|----------|----------|-----------|-----------------|
+| `status` | Yes | Yes | Yes | Yes | Yes | Yes |
+| `help` | Yes | Yes | Yes | Yes | Yes | Yes |
+| `logs` | Yes | Yes | Yes | Yes | Yes | Yes |
+| `context` / `memory` | Yes | Yes | Yes | Yes | Yes | Yes |
+| `whoami` | Yes | Yes | Yes | Yes | Yes | Yes |
+| `register` | Yes | Yes | Yes | Yes | No | Yes |
+| `prs` | Yes | Yes | Yes | Yes | Yes | Yes |
+| `review` | Yes | Yes | Yes | Yes | No | Yes |
+| `instruct` | Yes | Yes | Yes | No | No | Yes |
+| `fix` | Yes | Yes | Yes | No | No | Yes |
+| `link` | Yes | Yes | No | No | No | Yes |
+| `unlink` | Yes | Yes | No | No | No | Yes |
+| `deploy` | Yes | Yes | Yes | No | No | Yes |
+| `rollback` | Yes | Yes | No | No | No | Yes |
+| `approve` | Yes | Yes | Yes | No | No | Yes |
+| `autonomy` | Yes | Yes | Limited* | No | No | Yes |
+| `kill` | Yes | Yes | No | No | No | Yes |
+
+\* Operators can set autonomy up to L4. Only owners and maintainers can set L5.
+
+### 15 Permissions
+
+The complete list of permissions that map to command intents:
+
+| # | Permission | Intent | Risk Level |
+|---|-----------|--------|------------|
+| 1 | `view:status` | `status` | low |
+| 2 | `view:help` | `help` | low |
+| 3 | `view:logs` | `logs` | low |
+| 4 | `view:memory` | `context`, `memory` | low |
+| 5 | `view:identity` | `whoami` | low |
+| 6 | `view:prs` | `prs` | low |
+| 7 | `manage:identity` | `register` | low |
+| 8 | `execute:review` | `review` | low |
+| 9 | `execute:task` | `instruct` | medium |
+| 10 | `execute:fix` | `fix` | medium |
+| 11 | `manage:link` | `link`, `unlink` | medium |
+| 12 | `execute:deploy` | `deploy` | high |
+| 13 | `execute:rollback` | `rollback` | critical |
+| 14 | `manage:autonomy` | `autonomy` | medium |
+| 15 | `execute:kill` | `kill` | critical |
+
+## Approval System
+
+High-risk actions require explicit human approval before execution. The approval system is token-based with several safety mechanisms.
+
+### How It Works
+
+1. A user requests a high-risk action (e.g., `@codespar deploy production`)
+2. CodeSpar generates a unique approval token (e.g., `dp-a1b2c3`)
+3. A notification is sent to connected channels with the token
+4. An authorized user approves with `@codespar approve dp-a1b2c3`
+5. The action executes
+
+### Approval Token Properties
+
+| Property | Value |
+|----------|-------|
+| Format | `{prefix}-{random}` (e.g., `dp-a1b2c3`, `rb-x9y8z7`) |
+| Expiration | 30 minutes |
+| Single-use | Yes — token is invalidated after use |
+| Cross-channel | Yes — approve from any connected channel |
+
+### Prefixes
+
+| Prefix | Action |
+|--------|--------|
+| `dp-` | Deploy |
+| `rb-` | Rollback |
+| `sg-` | Suggested action |
+| `tk-` | Task execution (at certain autonomy levels) |
+| `kl-` | Kill switch |
+
+### Safety Mechanisms
+
+#### Self-Approval Blocking
+
+A user cannot approve their own request. This prevents a single person from both requesting and approving a high-risk action.
+
+```
+@alice: @codespar deploy production
+@codespar: ⏳ Approval required. Token: dp-a1b2c3
+
+@alice: @codespar approve dp-a1b2c3
+@codespar: ❌ Cannot self-approve. Another team member must approve this action.
+```
+
+#### Quorum
+
+For production deployments, organizations can configure a quorum — the minimum number of approvals required:
+
+| Configuration | Default | Description |
+|--------------|---------|-------------|
+| `APPROVAL_QUORUM` | 1 | Number of approvals required |
+| `APPROVAL_TIMEOUT` | 30m | Time before approval expires |
+| `ALLOW_SELF_APPROVE` | `false` | Whether requestor can self-approve |
+
+#### Expiration
+
+Approval tokens expire after 30 minutes (configurable). Expired tokens cannot be used:
+
+```
+@codespar approve dp-a1b2c3
+
+❌ Approval token expired. Request the action again.
+```
+
+## Audit Trail
+
+Every action in CodeSpar is recorded in an append-only audit log with cryptographic hash chain integrity.
+
+### What Gets Logged
+
+| Event Type | Examples |
+|------------|---------|
+| User commands | All 17 commands and their results |
+| Agent actions | Task execution, PR review, deploy, auto-actions |
+| System events | Webhook receipt, agent spawn/terminate, errors |
+| Access control | Permission denials, role changes |
+| Approvals | Approval requests, grants, denials, expirations |
+
+### Hash Chain Integrity
+
+Each audit entry includes a SHA-256 hash that chains to the previous entry:
+
+```
+Entry N hash = SHA-256(Entry N-1 hash + timestamp + actor + action + result + metadata)
+```
+
+This creates a tamper-evident chain: modifying any entry invalidates all subsequent hashes. See the [Audit API](/docs/api/audit) for verification details.
+
+### Retention
+
+| Setting | Default |
+|---------|---------|
+| Retention period | 365 days |
+| Storage | File-based (`.codespar/audit/`) or PostgreSQL |
+| Export | Available via Audit API pagination |
+
+## Identity Resolution
+
+CodeSpar maintains a cross-channel identity system that links users across WhatsApp, Slack, Discord, and Telegram.
+
+### How Identity Linking Works
+
+1. A user sends a message from any channel (e.g., Slack)
+2. CodeSpar creates an identity record with the channel-specific ID
+3. The user registers: `@codespar register John Silva`
+4. From another channel (e.g., WhatsApp), the same user registers with the same name
+5. CodeSpar links both channel identities under a single identity record
+
+### Cross-Channel Capabilities
+
+With linked identities:
+- **Approve from any channel:** A deploy requested in Slack can be approved from WhatsApp
+- **Unified audit trail:** All actions across channels are attributed to the same identity
+- **Consistent permissions:** RBAC role applies regardless of which channel is used
+- **Single notification:** Avoid duplicate alerts when the same user is on multiple channels
+
+### Identity Lookup
+
+```bash
+curl "http://localhost:3000/api/identity?channelType=slack&channelUserId=U1234ABCD"
+```
+
+See the [Memory API](/docs/api/memory) for full details.
+
+## Safety Guardrails
+
+Regardless of autonomy level, RBAC role, or configuration, CodeSpar enforces hard safety guardrails:
+
+### Never Auto-Executed
+
+These actions always require explicit human approval:
+
+| Action | Reason |
+|--------|--------|
+| Production deployments | Direct user impact, requires verification |
+| Rollbacks | Destructive, may cause data inconsistency |
+| Data migrations | Irreversible database changes |
+| Security-sensitive changes | Credential rotation, permission changes, secret updates |
+| Infrastructure modifications | Scaling, networking, resource allocation changes |
+| Kill switch | Emergency stop affects all running agents |
+
+### Guardrail Enforcement
+
+Guardrails are enforced at the engine level and cannot be overridden by configuration, RBAC roles, or autonomy settings. Even at L5 (Full Auto) with `owner` role:
+
+```
+# L5 autonomy, owner role
+@codespar deploy production
+
+# Still requires approval:
+⏳ Production deploy requires approval (safety guardrail).
+Approve with: @codespar approve dp-a1b2c3
+```
+
+The only exception is `emergency_admin` for the `kill` command, which can be executed without approval to enable rapid incident response.
+
+## Security Checklist
+
+When deploying CodeSpar to production:
+
+- [ ] Set `ANTHROPIC_API_KEY` and `GITHUB_TOKEN` as environment variables (never in code)
+- [ ] Use HTTPS for `WEBHOOK_BASE_URL`
+- [ ] Configure reverse proxy or API gateway for authentication
+- [ ] Set appropriate autonomy level (L1 recommended for production)
+- [ ] Assign RBAC roles to all team members
+- [ ] Verify audit trail is being written (check `.codespar/audit/`)
+- [ ] Set up monitoring for agent errors and unusual activity
+- [ ] Configure approval quorum for production deploys (2+ recommended)
+- [ ] Disable self-approval (`ALLOW_SELF_APPROVE=false`)
+- [ ] Review and test the kill switch procedure
+
+## Next Steps
+
+- [Graduated Autonomy](/docs/commands/autonomy) — Autonomy level details and RBAC interaction
+- [Audit API](/docs/api/audit) — Query and verify the audit trail
+- [Configuration](/docs/configuration) — All environment variables
