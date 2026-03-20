@@ -1,0 +1,13 @@
+{
+  "title": "API Reference",
+  "pages": [
+    "index",
+    "agents",
+    "projects",
+    "audit",
+    "channels",
+    "memory",
+    "orgs",
+    "webhooks"
+  ]
+}

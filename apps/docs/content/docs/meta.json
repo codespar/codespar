@@ -1,0 +1,19 @@
+{
+  "title": "Documentation",
+  "root": true,
+  "pages": [
+    "---Getting Started---",
+    "index",
+    "getting-started",
+    "---Core Concepts---",
+    "agents",
+    "commands",
+    "channels",
+    "---Using CodeSpar---",
+    "guides",
+    "dashboard",
+    "---Reference---",
+    "api",
+    "configuration"
+  ]
+}

@@ -1,15 +1,24 @@
 ---
 title: Channel API
-description: API endpoints for listing connected messaging channels and their status, and reconnecting disconnected channels.
+description: Complete API reference for listing connected messaging channels, checking their status and capabilities, and reconnecting disconnected channels.
 ---
 
 # Channel API
 
 Manage the messaging channels connected to your CodeSpar instance. CodeSpar supports five channels: WhatsApp, Slack, Discord, Telegram, and Web (API). Each channel can be independently enabled, monitored, and reconnected.
 
+## Endpoints Overview
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/channels` | List all channels with status and capabilities |
+| `POST` | `/api/channels/:name/reconnect` | Force-reconnect a channel |
+
+---
+
 ## List Channels
 
-Retrieve all configured channels and their current connection status.
+Retrieve all configured channels, their current connection status, and their capabilities.
 
 ```
 GET /api/channels
@@ -24,78 +33,128 @@ curl http://localhost:3000/api/channels
 ### Response
 
 ```json
-[
-  {
-    "name": "whatsapp",
-    "enabled": true,
-    "status": "connected",
-    "connectedAt": "2024-01-15T08:00:00Z",
-    "uptime": 23400,
-    "config": {
-      "instance": "codespar-prod",
-      "apiUrl": "https://evolution.example.com"
+{
+  "channels": [
+    {
+      "name": "whatsapp",
+      "platform": "whatsapp",
+      "connected": true,
+      "capabilities": {
+        "threads": false,
+        "codeBlocks": false,
+        "syntaxHighlighting": false,
+        "fileAttachments": true,
+        "reactions": false,
+        "maxMessageLength": 4096,
+        "mentionFormat": "text"
+      }
+    },
+    {
+      "name": "slack",
+      "platform": "slack",
+      "connected": true,
+      "capabilities": {
+        "threads": true,
+        "codeBlocks": true,
+        "syntaxHighlighting": true,
+        "fileAttachments": true,
+        "reactions": true,
+        "maxMessageLength": 40000,
+        "mentionFormat": "user_id"
+      }
+    },
+    {
+      "name": "discord",
+      "platform": "discord",
+      "connected": false,
+      "capabilities": {
+        "threads": true,
+        "codeBlocks": true,
+        "syntaxHighlighting": true,
+        "fileAttachments": true,
+        "reactions": true,
+        "maxMessageLength": 2000,
+        "mentionFormat": "user_id"
+      }
+    },
+    {
+      "name": "telegram",
+      "platform": "telegram",
+      "connected": false,
+      "capabilities": {
+        "threads": false,
+        "codeBlocks": false,
+        "syntaxHighlighting": false,
+        "fileAttachments": true,
+        "reactions": false,
+        "maxMessageLength": 4096,
+        "mentionFormat": "username"
+      }
+    },
+    {
+      "name": "web",
+      "platform": "web",
+      "connected": true,
+      "capabilities": {
+        "threads": false,
+        "codeBlocks": true,
+        "syntaxHighlighting": true,
+        "fileAttachments": false,
+        "reactions": false,
+        "maxMessageLength": 100000,
+        "mentionFormat": "none"
+      }
     }
-  },
-  {
-    "name": "slack",
-    "enabled": true,
-    "status": "connected",
-    "connectedAt": "2024-01-15T08:00:00Z",
-    "uptime": 23400,
-    "config": {
-      "teamId": "T1234ABCD",
-      "botUserId": "U9876WXYZ"
-    }
-  },
-  {
-    "name": "discord",
-    "enabled": true,
-    "status": "disconnected",
-    "lastError": "WebSocket closed unexpectedly",
-    "lastErrorAt": "2024-01-15T14:20:00Z",
-    "config": {
-      "guildId": "123456789012345678"
-    }
-  },
-  {
-    "name": "telegram",
-    "enabled": false,
-    "status": "disabled",
-    "config": {}
-  },
-  {
-    "name": "web",
-    "enabled": true,
-    "status": "connected",
-    "connectedAt": "2024-01-15T08:00:00Z",
-    "uptime": 23400,
-    "config": {}
-  }
-]
+  ]
+}
 ```
 
 ### Response Schema
 
+Each channel object contains the following fields:
+
 | Field | Type | Description |
 |-------|------|-------------|
 | `name` | string | Channel identifier: `whatsapp`, `slack`, `discord`, `telegram`, `web` |
-| `enabled` | boolean | Whether the channel is enabled in configuration |
-| `status` | string | Connection state: `connected`, `disconnected`, `connecting`, `disabled`, `error` |
-| `connectedAt` | string | ISO 8601 timestamp of last successful connection |
-| `uptime` | number | Seconds since last connection (only when connected) |
-| `lastError` | string | Most recent error message (only when disconnected/error) |
-| `lastErrorAt` | string | Timestamp of the last error |
-| `config` | object | Channel-specific configuration (sanitized, no secrets) |
+| `platform` | string | Platform type. Same as `name` for built-in channels. |
+| `connected` | boolean | Whether the channel is currently connected and processing messages |
+| `capabilities` | object | Channel-specific capabilities (see below) |
 
-### Channel Statuses
+### Capabilities Object
 
-| Status | Description |
-|--------|-------------|
-| `connected` | Channel is online and processing messages |
-| `disconnected` | Channel was connected but lost connection |
-| `connecting` | Channel is attempting to establish connection |
-| `disabled` | Channel is not enabled in configuration |
-| `error` | Channel encountered a persistent error |
+The `capabilities` object describes what each channel supports. CodeSpar uses this information to format messages appropriately for each channel.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `threads` | boolean | Whether the channel supports threaded replies. Slack and Discord support threads; WhatsApp and Telegram do not. |
+| `codeBlocks` | boolean | Whether the channel renders code blocks with monospace formatting. |
+| `syntaxHighlighting` | boolean | Whether code blocks support language-specific syntax highlighting. |
+| `fileAttachments` | boolean | Whether the channel can send and receive file attachments. |
+| `reactions` | boolean | Whether the channel supports emoji reactions on messages. |
+| `maxMessageLength` | number | Maximum characters per message. Messages exceeding this limit are automatically split. |
+| `mentionFormat` | string | How the channel handles @mentions: `"text"` (raw text), `"user_id"` (platform user ID), `"username"` (platform username), `"none"` (no mentions). |
+
+### How Capabilities Affect Behavior
+
+CodeSpar adapts its output based on channel capabilities:
+
+| Capability | When `true` | When `false` |
+|------------|-------------|--------------|
+| `threads` | Responses are posted as thread replies | Responses are posted as flat messages |
+| `codeBlocks` | Code is wrapped in triple-backtick blocks | Code is sent as plain text |
+| `syntaxHighlighting` | Language identifier is added to code blocks (e.g., ` ```typescript `) | Code blocks use no language identifier |
+| `maxMessageLength` | Messages within limit are sent as-is | Messages exceeding limit are split into multiple messages |
+
+### Channel Connection States
+
+The `connected` field is a boolean. For more detailed status information, the full internal states are:
+
+| State | `connected` Value | Description |
+|-------|-------------------|-------------|
+| Connected | `true` | Channel is online and processing messages |
+| Disconnected | `false` | Channel lost connection or encountered an error |
+| Disabled | `false` | Channel is not enabled in configuration |
+| Connecting | `false` | Channel is attempting to establish connection (transitional) |
 
 ---
 
@@ -123,26 +182,29 @@ curl -X POST http://localhost:3000/api/channels/discord/reconnect
 
 ```json
 {
-  "name": "discord",
-  "action": "reconnect",
-  "previousStatus": "disconnected",
-  "currentStatus": "connecting",
-  "timestamp": "2024-01-15T14:25:00Z"
+  "success": true,
+  "channel": "discord",
+  "connected": true
 }
 ```
 
-After a few seconds, the channel status will update to `connected` (or `error` if the reconnection fails).
+The `connected` field reflects the state after the reconnection attempt. If the reconnection fails (e.g., invalid token, service unavailable), `connected` will be `false`.
 
 ### Verify Reconnection
 
+After a reconnection attempt, verify the channel status:
+
 ```bash
-# Check status after reconnection attempt
 curl http://localhost:3000/api/channels
 ```
 
 ### Error Responses
 
-**Channel not found:**
+**Channel not found (404):**
+
+```bash
+curl -X POST http://localhost:3000/api/channels/teams/reconnect
+```
 
 ```json
 {
@@ -152,7 +214,11 @@ curl http://localhost:3000/api/channels
 }
 ```
 
-**Channel not enabled:**
+**Channel not enabled (400):**
+
+```bash
+curl -X POST http://localhost:3000/api/channels/telegram/reconnect
+```
 
 ```json
 {
@@ -162,20 +228,65 @@ curl http://localhost:3000/api/channels
 }
 ```
 
-## Channel Configuration
+---
 
-Each channel requires specific environment variables to be enabled. See [Configuration](/docs/configuration) for the full list.
+## Channel Configuration Reference
+
+Each channel requires specific environment variables. See [Configuration](/docs/configuration) for full details.
 
 | Channel | Enable Variable | Required Variables |
 |---------|----------------|-------------------|
 | WhatsApp | `ENABLE_WHATSAPP=true` | `EVOLUTION_API_URL`, `EVOLUTION_API_KEY`, `EVOLUTION_INSTANCE` |
 | Slack | `ENABLE_SLACK=true` | `SLACK_BOT_TOKEN`, `SLACK_APP_TOKEN` |
-| Discord | `ENABLE_DISCORD=true` | `DISCORD_TOKEN` |
+| Discord | `ENABLE_DISCORD=true` | `DISCORD_BOT_TOKEN` |
 | Telegram | `ENABLE_TELEGRAM=true` | `TELEGRAM_BOT_TOKEN` |
-| Web | Always enabled | None (uses REST API) |
+| Web | Always enabled | None (built-in REST API) |
+
+---
+
+## Usage Examples
+
+### Check If All Channels Are Connected
+
+```bash
+curl -s http://localhost:3000/api/channels | jq '.channels[] | {name, connected}'
+```
+
+```json
+{"name": "whatsapp", "connected": true}
+{"name": "slack", "connected": true}
+{"name": "discord", "connected": false}
+{"name": "telegram", "connected": false}
+{"name": "web", "connected": true}
+```
+
+### Reconnect All Disconnected Channels
+
+```bash
+# Get disconnected channels and reconnect each one
+for channel in $(curl -s http://localhost:3000/api/channels \
+  | jq -r '.channels[] | select(.connected == false) | .name'); do
+  echo "Reconnecting $channel..."
+  curl -s -X POST "http://localhost:3000/api/channels/$channel/reconnect"
+  echo ""
+done
+```
+
+### Check a Channel's Message Length Limit
+
+```bash
+curl -s http://localhost:3000/api/channels \
+  | jq '.channels[] | select(.name == "discord") | .capabilities.maxMessageLength'
+```
+
+```
+2000
+```
+
+---
 
 ## Next Steps
 
 - [Configuration](/docs/configuration) — Channel environment variables
-- [Multi-Channel Setup](/docs/guides/multi-channel) — Enable multiple channels
+- [Multi-Channel Setup](/docs/guides/multi-channel) — Enable multiple channels simultaneously
 - [Agent API](/docs/api/agents) — Manage agents that use channels

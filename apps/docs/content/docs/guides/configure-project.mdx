@@ -1,0 +1,293 @@
+---
+title: Configure a Project
+description: End-to-end guide for setting up a CodeSpar project — from deploying the backend to linking a repository, enabling channels, and verifying everything works.
+---
+
+# Configure a Project
+
+This guide walks you through the complete setup of a CodeSpar project, from deploying the backend to running your first command.
+
+**Estimated time:** 15-20 minutes
+
+## Prerequisites
+
+- A GitHub account with at least one repository
+- A [GitHub Personal Access Token](https://github.com/settings/tokens) with `repo` and `admin:repo_hook` scopes
+- An [Anthropic API key](https://console.anthropic.com/)
+- At least one messaging platform account (Slack, Discord, WhatsApp, or Telegram)
+
+## Step 1: Deploy the Backend
+
+You can run the CodeSpar backend locally with Docker or deploy it to Railway. Choose one:
+
+### Option A: Docker (Local Development)
+
+```bash
+# Clone the repository
+git clone https://github.com/codespar/codespar.git
+cd codespar
+
+# Copy the environment template
+cp .env.example .env
+
+# Edit .env with your values (see Step 2)
+nano .env
+
+# Start with Docker Compose
+docker compose up -d
+```
+
+The backend will be available at `http://localhost:3000`.
+
+### Option B: Railway (Production)
+
+1. Fork the [codespar/codespar](https://github.com/codespar/codespar) repository
+2. Go to [railway.app](https://railway.app) and create a new project
+3. Select "Deploy from GitHub repo" and choose your fork
+4. Configure environment variables (see Step 2)
+5. Deploy
+
+Railway will assign a public URL (e.g., `https://codespar-production.up.railway.app`). Note this URL — you will need it for webhook configuration.
+
+For detailed deployment instructions, see the [Docker guide](/docs/configuration/docker) or [Railway guide](/docs/configuration/railway).
+
+## Step 2: Set Environment Variables
+
+Configure the required environment variables for your deployment:
+
+### Required Variables
+
+| Variable | Description | Example |
+|----------|-------------|---------|
+| `ANTHROPIC_API_KEY` | Your Anthropic API key | `sk-ant-...` |
+| `GITHUB_TOKEN` | GitHub PAT with `repo` scope | `ghp_...` |
+
+### Channel Variables
+
+Enable at least one channel:
+
+| Variable | Description |
+|----------|-------------|
+| `ENABLE_SLACK` | Set to `true` to enable Slack |
+| `SLACK_BOT_TOKEN` | Slack Bot User OAuth Token (`xoxb-...`) |
+| `SLACK_SIGNING_SECRET` | Slack app signing secret |
+| `ENABLE_DISCORD` | Set to `true` to enable Discord |
+| `DISCORD_BOT_TOKEN` | Discord bot token |
+| `ENABLE_TELEGRAM` | Set to `true` to enable Telegram |
+| `TELEGRAM_BOT_TOKEN` | Telegram bot token from BotFather |
+| `ENABLE_WHATSAPP` | Set to `true` to enable WhatsApp |
+
+### Webhook Variables
+
+| Variable | Description | Example |
+|----------|-------------|---------|
+| `WEBHOOK_BASE_URL` | Public URL of your CodeSpar instance | `https://codespar.up.railway.app` |
+
+The `WEBHOOK_BASE_URL` is used for auto-configuring GitHub webhooks when linking repositories. Without it, you will need to configure webhooks manually.
+
+### Example `.env` File
+
+```bash
+# AI
+ANTHROPIC_API_KEY=sk-ant-api03-your-key-here
+
+# GitHub
+GITHUB_TOKEN=ghp_your-token-here
+WEBHOOK_BASE_URL=https://codespar.up.railway.app
+
+# Slack (primary channel)
+ENABLE_SLACK=true
+SLACK_BOT_TOKEN=xoxb-your-bot-token
+SLACK_SIGNING_SECRET=your-signing-secret
+
+# Optional: additional channels
+ENABLE_DISCORD=false
+ENABLE_TELEGRAM=false
+ENABLE_WHATSAPP=false
+```
+
+## Step 3: Enable Channels
+
+For each channel you want to use, follow the corresponding setup guide:
+
+| Channel | Guide | Setup Time |
+|---------|-------|-----------|
+| Slack | [Slack Setup](/docs/channels/slack) | 5 min |
+| Discord | [Discord Setup](/docs/channels/discord) | 5 min |
+| Telegram | [Telegram Setup](/docs/channels/telegram) | 3 min |
+| WhatsApp | [WhatsApp Setup](/docs/channels/whatsapp) | 3 min |
+
+You can also configure channels from the [Dashboard Setup page](/docs/dashboard/setup) if the dashboard is deployed.
+
+## Step 4: Start the Server
+
+### Docker
+
+```bash
+docker compose up -d
+```
+
+### Local Development
+
+```bash
+npm install
+npm run build
+npm run start
+```
+
+### Verify the Server
+
+Check that the server is running:
+
+```bash
+curl http://localhost:3000/api/health
+```
+
+Expected response:
+
+```json
+{
+  "status": "ok",
+  "uptime": 12345,
+  "agents": 1,
+  "channels": ["slack"]
+}
+```
+
+## Step 5: Link a Repository
+
+From your connected channel (e.g., Slack), send:
+
+```
+@codespar link owner/repo
+```
+
+Replace `owner/repo` with your actual repository (e.g., `acme/backend-api`).
+
+### Expected Response
+
+```
+Repository Linked
+──────────────────
+Repo: acme/backend-api
+Branch: main (default)
+Webhook: configured
+Stars: 42
+Last commit: abc1234 (1h ago)
+```
+
+If the webhook could not be auto-configured, see [manual webhook setup](/docs/guides/link-repository#manual-webhook-setup).
+
+## Step 6: Verify the Webhook
+
+Confirm that the GitHub webhook is active:
+
+```
+@codespar status
+```
+
+### Expected Response
+
+```
+Project Status
+──────────────────
+Project: acme/backend-api
+Branch: main
+Last build: passed (5m ago)
+Active agents: 1 (Project Agent)
+Autonomy: L1 (Notify)
+```
+
+You can also verify in GitHub by going to your repository's **Settings > Webhooks** and checking for a webhook pointing to `{WEBHOOK_BASE_URL}/webhooks/github`.
+
+## Step 7: Set Autonomy Level
+
+By default, agents start at **L1 (Notify)** — they monitor and alert but never auto-execute. You can increase the autonomy level:
+
+```
+@codespar autonomy L2
+```
+
+### Autonomy Levels
+
+| Level | Name | What Changes |
+|-------|------|-------------|
+| L0 | Passive | Only responds when addressed |
+| L1 | Notify | Monitors and alerts (default) |
+| L2 | Suggest | Proposes actions, waits for approval |
+| L3 | Auto-Low | Auto-executes low-risk actions |
+| L4 | Auto-Med | Auto-executes medium-risk actions |
+| L5 | Full Auto | Fully autonomous within policy bounds |
+
+For a new project, **L2 (Suggest)** is a good starting point — the agent will proactively suggest actions but always wait for your approval before executing.
+
+## Step 8: Test with a Command
+
+Run a simple command to verify everything is working end-to-end:
+
+```
+@codespar instruct add a README with the project name and description
+```
+
+### Expected Behavior
+
+1. The Dev Agent searches your repository
+2. Reads relevant files for context
+3. Sends the task to Claude
+4. Creates a branch `codespar/<taskId>`
+5. Commits the changes
+6. Opens a pull request
+
+You should receive a response like:
+
+```
+Task completed:
+- Branch: codespar/task-abc123
+- Files changed:
+  - README.md (new)
+- PR: https://github.com/acme/backend-api/pull/1
+```
+
+## Step 9: Monitor via Dashboard
+
+If you have the CodeSpar dashboard deployed (see [Production Deploy](/docs/guides/production-deploy)), you can monitor your agents at `codespar.dev/dashboard`:
+
+1. Log in with your Clerk credentials
+2. Select your organization
+3. See your agents on the Overview page
+4. Click an agent card for detailed stats
+5. View the Audit Trail for event history
+
+## Troubleshooting
+
+### "Agent not responding"
+
+- Verify the server is running: `curl http://localhost:3000/api/health`
+- Check that the channel is enabled in environment variables
+- Verify the bot is invited to the correct channel/group
+- Check server logs for connection errors
+
+### "Repository not found"
+
+- Verify `GITHUB_TOKEN` has `repo` scope
+- Confirm the repository name format is correct: `owner/repo`
+- For private repos, ensure the token owner has access
+
+### "Webhook not delivering"
+
+- Check `WEBHOOK_BASE_URL` is set and publicly accessible
+- Verify the webhook in GitHub: **Settings > Webhooks > Recent Deliveries**
+- Ensure no firewall is blocking incoming requests on your deployment
+
+### "Claude API errors"
+
+- Verify `ANTHROPIC_API_KEY` is valid
+- Check your Anthropic account has sufficient credits
+- If using a custom model via `TASK_MODEL`, ensure the model name is correct
+
+## Next Steps
+
+- [Dev Agent PR Guide](/docs/guides/dev-agent-prs) — create pull requests with the Dev Agent
+- [Approval System](/docs/guides/approval-system) — configure approval workflows
+- [Webhook Monitoring](/docs/guides/webhook-monitoring) — monitor builds and PRs
+- [Dashboard Overview](/docs/dashboard/overview) — monitor agents via the web dashboard

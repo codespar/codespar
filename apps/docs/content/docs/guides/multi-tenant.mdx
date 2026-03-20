@@ -1,6 +1,6 @@
 ---
 title: Multi-Tenant / Organizations
-description: How to set up multi-tenant CodeSpar deployments with organizations, project isolation, x-org-id header scoping, and Clerk Organizations integration.
+description: How to set up multi-tenant CodeSpar deployments with organizations, project isolation, x-org-id header scoping, file storage structure, Clerk Organizations integration, and API examples.
 ---
 
 # Multi-Tenant / Organizations
@@ -26,6 +26,8 @@ CodeSpar Instance
 
 Each organization is fully isolated — agents, projects, audit logs, and user identities are scoped per organization.
 
+---
+
 ## x-org-id Header Scoping
 
 All API requests can be scoped to a specific organization using the `x-org-id` header:
@@ -42,17 +44,31 @@ curl http://localhost:3000/api/projects \
 
 Without the header, requests operate in the default (single-tenant) context.
 
+### How x-org-id Works
+
+When the `x-org-id` header is present on a request:
+
+1. The API validates that the organization exists
+2. All data reads are filtered to that organization's scope
+3. All data writes are stored in that organization's directory or database partition
+4. RBAC is evaluated against the user's role in that specific organization
+
+When the header is absent, the API operates in single-tenant mode — all data is accessed without org filtering.
+
 ### Scoped Endpoints
 
 All major endpoints respect `x-org-id`:
 
-| Endpoint | Scoped By |
-|----------|-----------|
-| `GET /api/agents` | Returns agents for the org |
-| `GET /api/projects` | Returns projects for the org |
-| `GET /api/audit` | Returns audit entries for the org |
-| `POST /api/projects` | Creates project in the org |
-| `GET /api/memory` | Returns memory stats for the org |
+| Endpoint | With `x-org-id` | Without `x-org-id` |
+|----------|-----------------|---------------------|
+| `GET /api/agents` | Returns agents for the org | Returns all agents |
+| `GET /api/projects` | Returns projects for the org | Returns all projects |
+| `GET /api/audit` | Returns audit entries for the org | Returns all audit entries |
+| `POST /api/projects` | Creates project in the org | Creates project in default scope |
+| `GET /api/memory` | Returns memory stats for the org | Returns global memory stats |
+| `DELETE /api/projects/:id` | Deletes only if project belongs to org | Deletes without org check |
+
+---
 
 ## Creating Organizations
 
@@ -81,6 +97,31 @@ curl -X POST http://localhost:3000/api/orgs \
 }
 ```
 
+The organization ID is automatically generated as `org-{slug}`.
+
+### After Creating an Organization
+
+Once created, you can immediately start scoping operations to it:
+
+```bash
+# Create a project in the new org
+curl -X POST http://localhost:3000/api/projects \
+  -H "Content-Type: application/json" \
+  -H "x-org-id: org-acme-corp" \
+  -d '{
+    "repo": "acme/api-service",
+    "name": "API Service"
+  }'
+
+# List projects in the org
+curl http://localhost:3000/api/projects \
+  -H "x-org-id: org-acme-corp"
+
+# Check audit trail for the org
+curl http://localhost:3000/api/audit \
+  -H "x-org-id: org-acme-corp"
+```
+
 ### List Organizations
 
 ```bash
@@ -95,30 +136,50 @@ curl http://localhost:3000/api/orgs/org-acme-corp
 
 Returns the organization with all its projects and members. See [Organization API](/docs/api/orgs) for full details.
 
-## File Storage — Org Directories
+---
 
-Each organization gets an isolated directory under `.codespar/orgs/`:
+## File Storage — Organization Directory Structure
+
+When using file-based storage (`DATABASE_URL` not set), each organization gets an isolated directory under `.codespar/orgs/`:
 
 ```
 .codespar/
+  config.json                    # Global instance configuration
   orgs/
     org-acme-corp/
-      config.json              # Org configuration
-      members.json             # Member list and roles
+      memory.json                # Organization-level memory/context
+      audit.json                 # Organization-level audit trail
+      config.json                # Organization configuration
+      members.json               # Member list and roles
       projects/
         proj-001/
-          config.json          # Project config
-          context/             # Vector store embeddings
-          audit/               # Audit log entries
+          config.json            # Project configuration
+          context/               # Vector store embeddings
+          audit/                 # Project-level audit entries
         proj-002/
-          ...
+          config.json
+          context/
+          audit/
     org-globex/
+      memory.json
+      audit.json
       config.json
       members.json
       projects/
         proj-004/
-          ...
+          config.json
+          context/
+          audit/
 ```
+
+### Key Files
+
+| File | Location | Contents |
+|------|----------|----------|
+| `memory.json` | `.codespar/orgs/<orgId>/memory.json` | Organization-level context and memory, including shared knowledge across projects |
+| `audit.json` | `.codespar/orgs/<orgId>/audit.json` | Organization-level audit trail with hash chain integrity |
+| `config.json` | `.codespar/orgs/<orgId>/config.json` | Organization settings: name, slug, autonomy defaults, notification preferences |
+| `members.json` | `.codespar/orgs/<orgId>/members.json` | Member list with identity IDs, display names, roles, and join dates |
 
 ### Isolation Guarantees
 
@@ -130,8 +191,63 @@ Each organization gets an isolated directory under `.codespar/orgs/`:
 | Vector store | Per-project within org |
 | User identities | Per-org (same user can be in multiple orgs) |
 | RBAC roles | Per-org (different roles per org) |
+| Memory/context | Per-org (organization-level), per-project (project-level) |
 
 A user can be an `owner` in one organization and a `reviewer` in another.
+
+### Docker Volume Mount
+
+In containerized deployments, mount the entire `.codespar/` directory as a volume to persist all organization data:
+
+```yaml
+volumes:
+  - codespar-data:/app/.codespar
+```
+
+Or use `CODESPAR_WORK_DIR` to set a custom location:
+
+```yaml
+environment:
+  - CODESPAR_WORK_DIR=/data/codespar
+volumes:
+  - codespar-data:/data/codespar
+```
+
+---
+
+## How Project Isolation Works Per Organization
+
+Projects within an organization are fully isolated from each other:
+
+| Resource | Isolation |
+|----------|-----------|
+| Git repository | Each project links to a different repo |
+| Agent instance | Each project has its own Project Agent |
+| Autonomy level | Set independently per project |
+| Audit trail | Logged per project (queryable per org) |
+| Vector store | Separate embeddings per project |
+| Webhooks | Independent webhook per repo |
+
+Projects in different organizations cannot see or interact with each other. The Coordinator Agent can orchestrate across projects within the same organization (e.g., cascading deploys), but never across organizations.
+
+### Cross-Org Isolation Example
+
+```
+# User in org-acme-corp lists projects — only sees Acme's projects
+curl http://localhost:3000/api/projects -H "x-org-id: org-acme-corp"
+# Returns: API Service, Frontend, Mobile App
+
+# Same user in org-globex lists projects — only sees Globex's projects
+curl http://localhost:3000/api/projects -H "x-org-id: org-globex"
+# Returns: Platform, Dashboard
+
+# Attempting to delete a Globex project from Acme's scope fails
+curl -X DELETE http://localhost:3000/api/projects/proj-004 \
+  -H "x-org-id: org-acme-corp"
+# Returns: 404 Project not found
+```
+
+---
 
 ## Adding Projects to an Organization
 
@@ -143,8 +259,7 @@ curl -X POST http://localhost:3000/api/projects \
   -H "x-org-id: org-acme-corp" \
   -d '{
     "name": "API Service",
-    "repo": "acme/api-service",
-    "autonomyLevel": 2
+    "repo": "acme/api-service"
   }'
 ```
 
@@ -159,6 +274,8 @@ When a user sends commands from a channel, the organization is determined by the
 ```
 
 The project is created in the organization associated with the current channel.
+
+---
 
 ## Managing Members
 
@@ -198,16 +315,22 @@ The response includes a `members` array with role information:
 }
 ```
 
+---
+
 ## Clerk Organizations Integration (Dashboard)
 
-The CodeSpar dashboard (future) integrates with [Clerk](https://clerk.com) for organization management:
+The CodeSpar dashboard (future) integrates with [Clerk](https://clerk.com) for organization management.
 
-### How It Works
+### How Clerk Organizations Map to CodeSpar
 
-1. User signs in to the CodeSpar dashboard via Clerk authentication
-2. Clerk Organizations maps to CodeSpar organizations
-3. Clerk roles map to CodeSpar RBAC roles
-4. Invitations, member management, and billing are handled by Clerk
+Clerk Organizations provide a managed authentication and authorization layer. Each Clerk Organization maps 1:1 to a CodeSpar organization:
+
+| Clerk Concept | CodeSpar Concept |
+|---------------|------------------|
+| Organization | Organization (`x-org-id`) |
+| Organization member | Identity with RBAC role |
+| Organization role | RBAC role |
+| Organization invitation | Member onboarding |
 
 ### Clerk-to-CodeSpar Role Mapping
 
@@ -218,6 +341,51 @@ The CodeSpar dashboard (future) integrates with [Clerk](https://clerk.com) for o
 | `org:viewer` | `read-only` |
 
 Custom Clerk roles can be mapped to any CodeSpar role via configuration.
+
+### Dashboard: OrganizationSwitcher Component
+
+The dashboard sidebar includes a Clerk `OrganizationSwitcher` component that allows users to switch between organizations. When the user switches:
+
+1. The active Clerk organization changes
+2. The dashboard updates the `x-org-id` header on all subsequent API requests
+3. All displayed data (projects, agents, audit logs) updates to reflect the selected organization
+4. RBAC permissions are re-evaluated against the user's role in the new organization
+
+```
+┌─────────────────────────────────┐
+│  Dashboard Sidebar              │
+│  ┌───────────────────────────┐  │
+│  │ 🏢 Acme Corp         ▼  │  │  ← OrganizationSwitcher
+│  │   ○ Globex Inc           │  │
+│  │   ○ Initech              │  │
+│  └───────────────────────────┘  │
+│                                 │
+│  Projects                       │
+│  • API Service (active)         │
+│  • Frontend (idle)              │
+│  • Mobile App (active)          │
+│                                 │
+│  Settings                       │
+│  Audit Log                      │
+│  Members                        │
+└─────────────────────────────────┘
+```
+
+### API: x-org-id Header with Clerk
+
+When the dashboard makes API requests, it includes the active Clerk organization ID as the `x-org-id` header:
+
+```typescript
+// Dashboard API client
+const response = await fetch("/api/projects", {
+  headers: {
+    "x-org-id": activeOrganization.id,  // e.g., "org-acme-corp"
+    "Authorization": `Bearer ${sessionToken}`,
+  },
+});
+```
+
+All API endpoints respect this header and scope their data accordingly.
 
 ### Setup
 
@@ -231,26 +399,71 @@ CLERK_WEBHOOK_SECRET=whsec_...
 ```
 
 Clerk webhooks notify CodeSpar when:
-- A new organization is created
-- A member is added or removed
-- A member's role changes
+- A new organization is created → CodeSpar creates a matching org directory
+- A member is added or removed → CodeSpar updates `members.json`
+- A member's role changes → CodeSpar updates the member's RBAC role
 
-These events are synced to the CodeSpar organization configuration.
+---
 
-## Project Isolation
+## Example: Full Multi-Tenant Workflow
 
-Projects within an organization are fully isolated from each other:
+Here is a complete example of setting up a multi-tenant deployment from scratch.
 
-| Resource | Isolation |
-|----------|-----------|
-| Git repository | Each project links to a different repo |
-| Agent instance | Each project has its own Project Agent |
-| Autonomy level | Set independently per project |
-| Audit trail | Logged per project (queryable per org) |
-| Vector store | Separate embeddings per project |
-| Webhooks | Independent webhook per repo |
+### 1. Create an Organization
 
-However, the Coordinator Agent can orchestrate across projects within the same organization (e.g., cascading deploys).
+```bash
+curl -X POST http://localhost:3000/api/orgs \
+  -H "Content-Type: application/json" \
+  -d '{"name": "Acme Corp", "slug": "acme-corp"}'
+```
+
+### 2. Create Projects in the Organization
+
+```bash
+# API Service
+curl -X POST http://localhost:3000/api/projects \
+  -H "Content-Type: application/json" \
+  -H "x-org-id: org-acme-corp" \
+  -d '{"repo": "acme/api-service", "name": "API Service"}'
+
+# Frontend
+curl -X POST http://localhost:3000/api/projects \
+  -H "Content-Type: application/json" \
+  -H "x-org-id: org-acme-corp" \
+  -d '{"repo": "acme/frontend", "name": "Frontend"}'
+```
+
+### 3. Verify the Organization Structure
+
+```bash
+# List all projects in the org
+curl http://localhost:3000/api/projects \
+  -H "x-org-id: org-acme-corp"
+
+# Check the file storage structure
+ls -la .codespar/orgs/org-acme-corp/
+# config.json  members.json  memory.json  audit.json  projects/
+
+ls -la .codespar/orgs/org-acme-corp/projects/
+# proj-001/  proj-002/
+```
+
+### 4. Operations Are Scoped
+
+From this point, all operations using `-H "x-org-id: org-acme-corp"` are scoped:
+
+```bash
+# Audit log shows only Acme's events
+curl http://localhost:3000/api/audit -H "x-org-id: org-acme-corp"
+
+# Agents list shows only Acme's agents
+curl http://localhost:3000/api/agents -H "x-org-id: org-acme-corp"
+
+# Memory stats are org-scoped
+curl http://localhost:3000/api/memory -H "x-org-id: org-acme-corp"
+```
+
+---
 
 ## Single-Tenant to Multi-Tenant Migration
 
@@ -274,10 +487,16 @@ The existing `.codespar/` data can be migrated by moving project directories int
 .codespar/
   orgs/
     org-acme-corp/
+      memory.json
+      audit.json
+      config.json
+      members.json
       projects/
         proj-001/
         proj-002/
 ```
+
+---
 
 ## Best Practices
 
@@ -289,9 +508,13 @@ The existing `.codespar/` data can be migrated by moving project directories int
 | Autonomy levels | Set per-project based on project criticality |
 | Audit review | Regularly review org-level audit logs |
 | Member offboarding | Remove members promptly when they leave the team |
+| Storage | Always use Docker volumes to persist `.codespar/orgs/` data |
+
+---
 
 ## Next Steps
 
 - [Organization API](/docs/api/orgs) — Full API reference
 - [Security](/docs/configuration/security) — RBAC roles and permissions
 - [Configuration](/docs/configuration) — Environment variables
+- [Multi-Channel Setup](/docs/guides/multi-channel) — Cross-channel identity within orgs

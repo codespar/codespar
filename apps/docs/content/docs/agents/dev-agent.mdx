@@ -1,0 +1,299 @@
+---
+title: Dev Agent
+description: The Task Agent with GitHub integration — reads your codebase via the GitHub API, sends context to Claude, generates code changes, and opens pull requests automatically.
+---
+
+# Dev Agent
+
+The Dev Agent is the **production implementation** of the [Task Agent](/docs/agents/task-agent) with full GitHub integration. While the Task Agent documentation covers the abstract architecture, this page documents how the Dev Agent actually works — from reading your codebase to opening pull requests.
+
+## What It Does
+
+When you send a command like `@codespar instruct add a health check endpoint`, the Dev Agent:
+
+1. Searches your repository for relevant files
+2. Reads the file contents via the GitHub API
+3. Sends everything to Claude with a structured prompt
+4. Parses Claude's response for file changes
+5. Creates a branch, commits the changes, and opens a pull request
+
+The entire flow is automated — from understanding the request to delivering a reviewable PR.
+
+## Characteristics
+
+| Property | Value |
+|----------|-------|
+| **Base type** | Task Agent (ephemeral) |
+| **AI Model** | Claude Sonnet (configurable via `TASK_MODEL`) |
+| **Code access** | GitHub API (search, read, write) |
+| **Output** | Pull request with file changes |
+| **Max files read** | 5 per task |
+| **Max file size** | 20 KB per file |
+| **Max output tokens** | 4,000 from Claude |
+
+## The `executeWithRepo` Flow
+
+The core of the Dev Agent is the `executeWithRepo` method. Here is each step in detail:
+
+### Step 1: Search for Relevant Files
+
+The agent extracts keywords from the user's instruction and searches the repository using the GitHub Code Search API:
+
+```typescript
+// Extract keywords from "add a health check endpoint"
+// → ["health", "check", "endpoint"]
+const keywords = extractKeywords(instruction);
+
+// Search via GitHub API
+const searchResults = await github.searchCode({
+  query: `${keywords.join("+")} repo:${owner}/${repo}`,
+});
+
+// Take the top 5 results
+const relevantFiles = searchResults.slice(0, 5);
+```
+
+The keyword extraction strips common words ("add", "a", "the", "fix") and focuses on domain-specific terms that are likely to appear in code.
+
+### Step 2: Read File Contents
+
+For each relevant file (up to 5), the agent reads the full content via the GitHub API, with a 20 KB size limit per file:
+
+```typescript
+const fileContents: FileWithContent[] = [];
+
+for (const file of relevantFiles) {
+  const content = await github.getFileContent(owner, repo, file.path);
+
+  // Skip files larger than 20KB
+  if (content.length > 20_000) continue;
+
+  fileContents.push({
+    path: file.path,
+    content,
+  });
+}
+```
+
+### Step 3: Fallback — File Tree
+
+If the code search returns no results (common for new features that don't match existing code), the agent falls back to browsing the repository tree:
+
+```typescript
+if (fileContents.length === 0) {
+  // Get the full file tree
+  const tree = await github.getTree(owner, repo, "main", { recursive: true });
+
+  // Filter for TypeScript/JavaScript files
+  const sourceFiles = tree.filter((file) =>
+    /\.(ts|js|tsx|jsx)$/.test(file.path)
+  );
+
+  // Pick the most relevant files based on path heuristics
+  const selected = sourceFiles
+    .sort((a, b) => relevanceScore(b.path, keywords) - relevanceScore(a.path, keywords))
+    .slice(0, 5);
+
+  for (const file of selected) {
+    const content = await github.getFileContent(owner, repo, file.path);
+    if (content.length <= 20_000) {
+      fileContents.push({ path: file.path, content });
+    }
+  }
+}
+```
+
+### Step 4: Build Context Prompt
+
+The agent constructs a prompt that includes all file contents and the user's instruction:
+
+```typescript
+const systemPrompt = `You are a senior software engineer. You will be given a codebase context and a task.
+Respond ONLY with file changes in this exact format:
+
+===FILE: path/to/file.ts===
+<full file content>
+===END===
+
+Do not include explanations outside of file blocks.`;
+
+const userPrompt = `
+## Task
+${instruction}
+
+## Repository: ${owner}/${repo}
+
+## Current Files
+${fileContents.map((f) => `### ${f.path}\n\`\`\`\n${f.content}\n\`\`\``).join("\n\n")}
+
+## Instructions
+Implement the requested changes. Return the complete updated file contents using the ===FILE: path=== format.
+`;
+```
+
+### Step 5: Send to Claude
+
+The assembled prompt is sent to Claude Sonnet (or whichever model is configured via `TASK_MODEL`):
+
+```typescript
+const response = await anthropic.messages.create({
+  model: process.env.TASK_MODEL ?? "claude-sonnet-4-20250514",
+  max_tokens: 4000,
+  system: systemPrompt,
+  messages: [{ role: "user", content: userPrompt }],
+});
+```
+
+### Step 6: Parse File Changes
+
+The agent extracts file changes from Claude's response using a regex pattern that matches the `===FILE: path===` format:
+
+```typescript
+const filePattern = /===FILE:\s*(.+?)===\n([\s\S]*?)===END===/g;
+const changes: FileChange[] = [];
+
+let match: RegExpExecArray | null;
+while ((match = filePattern.exec(responseText)) !== null) {
+  changes.push({
+    path: match[1].trim(),
+    content: match[2].trim(),
+  });
+}
+```
+
+If Claude returns no parseable file blocks, the agent reports this to the user and includes Claude's raw response for context.
+
+### Step 7: Create Branch
+
+A new branch is created from the repository's default branch:
+
+```typescript
+const branchName = `codespar/${taskId}`;
+
+// Get the SHA of the default branch's HEAD
+const baseSha = await github.getBranchSHA(owner, repo, defaultBranch);
+
+// Create the new branch
+await github.createRef(owner, repo, `refs/heads/${branchName}`, baseSha);
+```
+
+The branch naming convention is always `codespar/<taskId>`, making it easy to identify branches created by CodeSpar.
+
+### Step 8: Commit Changes
+
+Each file change is committed to the new branch via the GitHub API:
+
+```typescript
+for (const change of changes) {
+  await github.updateFile(owner, repo, change.path, {
+    message: `codespar: ${instruction}`,
+    content: Buffer.from(change.content).toString("base64"),
+    branch: branchName,
+    // If the file exists, include its current SHA for the update
+    sha: existingFileSha ?? undefined,
+  });
+}
+```
+
+### Step 9: Open Pull Request
+
+Finally, the agent opens a pull request with a descriptive body:
+
+```typescript
+const pr = await github.createPullRequest({
+  owner,
+  repo,
+  title: `codespar: ${instruction}`,
+  body: `## Changes\n\n${changes.map((c) => `- \`${c.path}\``).join("\n")}\n\n---\n*Generated by CodeSpar Dev Agent*`,
+  head: branchName,
+  base: defaultBranch,
+});
+```
+
+## Environment Variables
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `ANTHROPIC_API_KEY` | Yes | — | Anthropic API key for Claude access. Without it, the agent runs in simulation mode. |
+| `GITHUB_TOKEN` | Yes | — | GitHub personal access token with `repo` scope |
+| `TASK_MODEL` | No | `claude-sonnet-4-20250514` | Claude model for code generation |
+
+## Example: End-to-End
+
+Here is a complete example of the Dev Agent in action:
+
+### Command
+
+```
+@codespar instruct add a health check endpoint at /api/health
+```
+
+### What Happens
+
+1. **Keyword extraction:** `["health", "check", "endpoint", "api"]`
+2. **Code search:** Finds `src/routes/index.ts`, `src/server.ts`, `src/routes/status.ts`
+3. **File read:** Reads all 3 files (total 4.2 KB)
+4. **Claude prompt:** Sends files + instruction to Claude Sonnet
+5. **Claude response:** Returns modified `src/routes/index.ts` with new route and new `src/routes/health.ts`
+6. **Branch:** Creates `codespar/task-abc123`
+7. **Commits:** 2 file changes committed
+8. **PR:** Opens PR #15
+
+### Agent Response
+
+```
+Task completed:
+- Branch: codespar/task-abc123
+- Files changed:
+  - src/routes/index.ts (modified)
+  - src/routes/health.ts (new)
+- PR: https://github.com/acme/api/pull/15
+
+The health check endpoint returns:
+  - Server status
+  - Uptime
+  - Timestamp
+```
+
+### Follow-Up
+
+After the PR is created, you can ask the Review Agent to analyze it:
+
+```
+@codespar review PR #15
+```
+
+## Limitations
+
+Understanding the Dev Agent's limitations helps set appropriate expectations:
+
+| Limitation | Value | Reason |
+|-----------|-------|--------|
+| **Max files read** | 5 | Keeps context window manageable and API costs predictable |
+| **Max file size** | 20 KB | Prevents loading large generated files or minified bundles |
+| **Max output tokens** | 4,000 | Balances response quality with latency and cost |
+| **No binary files** | — | Cannot read or generate images, compiled assets, etc. |
+| **No cross-repo changes** | — | Each task operates on a single repository |
+| **No interactive mode** | — | Cannot ask clarifying questions mid-task (uses best judgment) |
+
+### When the Dev Agent Struggles
+
+- **Very large refactors** spanning more than 5 files — break these into smaller tasks
+- **Tasks requiring runtime testing** — the agent generates code but cannot execute it
+- **Ambiguous instructions** — be specific about file paths and expected behavior
+- **Framework-specific boilerplate** — mention the framework explicitly (e.g., "using Fastify" or "in the Next.js app router")
+
+## Tips for Best Results
+
+1. **Be specific:** Instead of "fix the bug", say "fix the auth timeout in src/auth/session.ts — sessions expire after 30 seconds instead of 24 hours"
+2. **Mention file paths:** If you know which files need changes, include the paths in your instruction
+3. **One task at a time:** Keep instructions focused on a single, well-defined change
+4. **Reference existing patterns:** "Add a health check endpoint following the same pattern as src/routes/status.ts"
+5. **Review the PR:** Always review the generated PR before merging — the agent is a coding assistant, not a replacement for code review
+
+## Next Steps
+
+- [Task Agent](/docs/agents/task-agent) — architecture and execution modes
+- [Review Agent](/docs/agents/review-agent) — automated PR analysis
+- [Dev Agent PR Guide](/docs/guides/dev-agent-prs) — practical guide for using the Dev Agent
+- [Commands](/docs/commands) — full command reference

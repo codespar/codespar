@@ -1,0 +1,18 @@
+{
+  "title": "Guides",
+  "pages": [
+    "index",
+    "configure-project",
+    "link-repository",
+    "dev-agent-prs",
+    "review-prs",
+    "deploy-pipeline",
+    "approval-system",
+    "webhook-monitoring",
+    "smart-responses",
+    "multi-channel",
+    "multi-tenant",
+    "production-deploy",
+    "cli"
+  ]
+}

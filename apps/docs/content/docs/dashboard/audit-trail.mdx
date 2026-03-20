@@ -1,0 +1,228 @@
+---
+title: Audit Trail
+description: The dashboard's immutable event log — searchable, filterable, hash-chain verified, with real-time updates and expandable event details.
+---
+
+# Audit Trail
+
+The Audit Trail page at `/dashboard/audit` provides a complete, immutable record of every action taken by agents, users, and the system. Every entry is part of a cryptographic hash chain, making the log tamper-evident and verifiable.
+
+## Header
+
+The page header displays:
+
+```
+Audit Trail
+Immutable event log · Hash chain integrity · 2,847 events
+
+                                        [Chain verified ✓]
+```
+
+| Element | Description |
+|---------|-------------|
+| **Title** | "Audit Trail" |
+| **Subtitle** | Description with total event count |
+| **Chain verified badge** | Green badge confirming hash chain integrity. The dashboard verifies the chain on initial load by checking that each entry's hash correctly references the previous entry. |
+
+## Filters
+
+Two rows of filter controls appear below the header:
+
+### Type Filters
+
+Filter events by category. Each filter shows its event count:
+
+| Filter | Dot Color | Description |
+|--------|-----------|-------------|
+| All | — | Show all events (default) |
+| Tasks | Agent Green (`#10B981`) | Task execution events: `task.start`, `task.complete`, `task.fail` |
+| Reviews | Channel Purple (`#8B5CF6`) | Review events: `review.start`, `review.complete`, `review.approve` |
+| Deploys | Alert Amber (`#F59E0B`) | Deploy events: `deploy.request`, `deploy.approve`, `deploy.execute` |
+| Incidents | Critical Red (`#EF4444`) | Incident events: `incident.detect`, `incident.investigate`, `incident.resolve` |
+
+Each filter button displays a colored dot (not an emoji) followed by the label and a count badge:
+
+```
+[● All (2,847)]  [● Tasks (1,203)]  [● Reviews (892)]  [● Deploys (445)]  [● Incidents (307)]
+```
+
+### Risk Filters
+
+Filter events by risk level using pill-shaped buttons:
+
+| Filter | Dot Color | Description |
+|--------|-----------|-------------|
+| All | — | Show all risk levels (default) |
+| Low | Agent Green (`#10B981`) | Low-risk events (formatting, linting, status checks) |
+| Medium | Alert Amber (`#F59E0B`) | Medium-risk events (code changes, PR reviews) |
+| High | Critical Red (`#EF4444`) | High-risk events (deploy requests, config changes) |
+| Critical | Deep Red (`#DC2626`) | Critical events (production deploys, security incidents) |
+
+```
+[● All]  [● Low]  [● Medium]  [● High]  [● Critical]
+```
+
+### Search Bar
+
+A search input below the filters searches across multiple fields:
+
+- **Actor** — who performed the action
+- **Action** — the event type
+- **Detail** — the event description
+- **Project** — the associated project name
+- **Event ID** — the unique event identifier
+
+Search is performed client-side on the currently loaded events and triggers a server-side search for broader results when the user presses Enter.
+
+```
+🔍 Search events by actor, action, detail, project, or event ID...
+```
+
+## Event Table
+
+The main content area is a table displaying audit events. Events are ordered newest-first.
+
+### Table Columns
+
+| Column | Description | Width |
+|--------|-------------|-------|
+| Risk | Colored dot indicating risk level | 40px |
+| Time | Relative timestamp (e.g., "2m ago", "1h ago") | 80px |
+| Actor | Who performed the action, color-coded by type | 150px |
+| Action | Event type in monospace font | 160px |
+| Detail | Truncated event description (max 60 characters) | Flexible |
+| Risk | Risk level badge (LOW, MEDIUM, HIGH, CRITICAL) | 80px |
+| Result | Outcome badge (SUCCESS, FAILURE, PENDING) | 80px |
+| Expand | Chevron to expand row details | 40px |
+
+### Actor Color Coding
+
+| Actor Type | Text Color | Example |
+|------------|-----------|---------|
+| Agent | Signal Blue (`#3B82F6`) | "project-agent", "review-agent" |
+| User | Chalk (`#F5F5F7`) | "Sarah Chen", "U0123ABC" |
+| System | Slate (`#6B7280`) | "System", "webhook" |
+
+The `formatActor` function resolves Slack UIDs to human-readable display names. For example, `U0ABC123XY` becomes "Sarah Chen" if that mapping exists. Otherwise, the raw UID is displayed.
+
+### Action Badges
+
+Action types are displayed in monospace (`JetBrains Mono`) font with a subtle background:
+
+```
+task.complete    review.start    deploy.request    incident.detect
+```
+
+### Risk Badges
+
+| Level | Color | Background |
+|-------|-------|------------|
+| LOW | Agent Green | `rgba(16, 185, 129, 0.1)` |
+| MEDIUM | Alert Amber | `rgba(245, 158, 11, 0.1)` |
+| HIGH | Critical Red | `rgba(239, 68, 68, 0.1)` |
+| CRITICAL | Deep Red | `rgba(220, 38, 38, 0.2)` |
+
+### Result Badges
+
+| Result | Color | Description |
+|--------|-------|-------------|
+| SUCCESS | Agent Green (`#10B981`) | Action completed successfully |
+| FAILURE | Critical Red (`#EF4444`) | Action failed |
+| PENDING | Alert Amber (`#F59E0B`) | Action awaiting approval or completion |
+
+### Example Table Row
+
+```
+● 3m ago  Sarah Chen  task.complete  "Added health check endpoint at /api/h…"  LOW  SUCCESS  ▸
+```
+
+## Expandable Rows
+
+Clicking the chevron (or anywhere on the row) expands it to show full event details:
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│ ● 3m ago  Sarah Chen  task.complete  "Added health…"  LOW  │
+├─────────────────────────────────────────────────────────────┤
+│ Event ID:   evt-a1b2c3d4-e5f6-7890-abcd-ef1234567890       │
+│ Timestamp:  2025-03-20T14:32:15.847Z                        │
+│ Project:    codespar/codespar                                │
+│ Hash:       sha256:9f86d08...c7e8c                           │
+│ Full Detail: Added health check endpoint at /api/health     │
+│              that returns server status, uptime, and         │
+│              database connectivity information.              │
+└─────────────────────────────────────────────────────────────┘
+```
+
+| Field | Description |
+|-------|-------------|
+| **Event ID** | Unique UUID for this event |
+| **Timestamp** | Full ISO 8601 timestamp |
+| **Project** | Associated repository (owner/repo format) |
+| **Hash** | SHA-256 hash that chains to the previous event, providing tamper evidence |
+| **Full Detail** | Complete, un-truncated event description |
+
+## Pagination
+
+The audit trail uses server-side pagination:
+
+```
+← Previous    Page 1 of 143    Next →
+```
+
+- **Page size:** 20 events per page
+- **Previous / Next** buttons navigate between pages
+- **Page indicator** shows current page and total page count
+- Filters and search are applied server-side, so pagination reflects the filtered result set
+
+## LIVE Indicator
+
+When the dashboard is connected to a live backend and actively polling for new events, a **LIVE** indicator appears in the top-right corner of the audit trail:
+
+```
+● LIVE
+```
+
+The dot pulses gently to indicate active polling. New events appear at the top of the table automatically without requiring a page refresh.
+
+When the backend is unreachable or polling is paused, the indicator disappears.
+
+## Hash Chain Verification
+
+The audit trail's hash chain provides tamper evidence. Each event's hash is computed from:
+
+1. The event's own data (ID, timestamp, actor, action, detail, risk, result)
+2. The hash of the previous event
+
+```
+hash(event_n) = SHA-256(event_n.data + hash(event_n-1))
+```
+
+The "Chain verified" badge in the header confirms that the dashboard has validated the chain for all displayed events. If a chain break is detected (a hash doesn't match the expected value), the badge changes to a red warning:
+
+```
+[Chain broken ✕]
+```
+
+This would indicate that an event has been modified or deleted outside of normal operation.
+
+## API Endpoints
+
+The audit trail page interacts with these endpoints:
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `GET /api/audit` | GET | Fetch paginated audit events |
+| `GET /api/audit?type=tasks` | GET | Filter by event type |
+| `GET /api/audit?risk=high` | GET | Filter by risk level |
+| `GET /api/audit?search=deploy` | GET | Search events |
+| `GET /api/audit?page=2&limit=20` | GET | Paginate results |
+| `POST /api/audit/:id/approve` | POST | Approve a pending action |
+
+All requests include the `x-org-id` header for tenant isolation.
+
+## Next Steps
+
+- [Agent Detail](/docs/dashboard/agent-detail) — view activity for a specific agent
+- [Settings](/docs/dashboard/settings) — configure team roles and policies
+- [Security](/docs/configuration/security) — learn about RBAC and approval flows

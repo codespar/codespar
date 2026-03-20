@@ -1,0 +1,208 @@
+---
+title: Dashboard Overview Page
+description: The main dashboard view — stat cards, agent cards with live status, activity feed, and setup guidance for new deployments.
+---
+
+# Dashboard Overview Page
+
+The Overview page is the default landing page when you open the dashboard at `/dashboard`. It gives you an at-a-glance picture of your entire CodeSpar deployment — how many agents are running, what they're doing, and what needs your attention.
+
+## Header Bar
+
+The top of the page displays a summary row with three counters and a system health indicator:
+
+| Element | Description | Example |
+|---------|-------------|---------|
+| Agent count | Total number of agents across all types | "6 Agents" |
+| Project count | Number of linked repositories | "3 Projects" |
+| Channel count | Number of active messaging channels | "4 Channels" |
+| System indicator | Overall health status | "All systems operational" (green dot) |
+
+The system indicator turns amber if any agent is in an error state, and red if the backend API is unreachable.
+
+## Stat Cards
+
+Below the header, four stat cards provide key metrics at a glance:
+
+### Agents Card
+
+- **Primary value:** Total agent count (e.g., "6")
+- **Breakdown:** Active and error counts shown as secondary text (e.g., "4 active, 1 error")
+- **Visual:** Miniature status breakdown with colored segments
+
+### Tasks Today Card
+
+- **Primary value:** Number of tasks executed today (e.g., "23")
+- **Delta indicator:** Comparison to the previous day, shown as a positive or negative change (e.g., "+5 from yesterday")
+- **Visual:** Small trend arrow (up = green, down = neutral gray)
+
+### Approvals Card
+
+- **Primary value:** Number of pending approvals (e.g., "3")
+- **Urgency:** If approvals are pending, the card border highlights in amber
+- **Action:** Clicking navigates to the audit trail filtered to pending approvals
+
+### Build Success Card
+
+- **Primary value:** Build success rate over the last 24 hours (e.g., "94%")
+- **Visual:** Percentage shown prominently with a subtle progress ring
+- **Color:** Green above 90%, amber between 70-90%, red below 70%
+
+## Agent Cards
+
+The main section of the Overview page displays a grid of **agent cards** — one for each agent in the selected project. These cards are the primary way to monitor agent activity.
+
+### Card Layout
+
+Each agent card contains:
+
+```
+┌────────────────────────────────────────────┐
+│ Project Agent                ACTIVE  slack  │
+│ codespar/codespar                          │
+│                                            │
+│ Tasks: 12 (+3)              ████▃▃▂▁      │
+│                                            │
+│ Autonomy: ●●●○○○  L3                      │
+│ Last active: 2 minutes ago                 │
+└────────────────────────────────────────────┘
+```
+
+### Card Elements
+
+| Element | Description | Details |
+|---------|-------------|---------|
+| **Agent name** | Name of the agent | e.g., "Project Agent", "Review Agent" |
+| **Status badge** | Current state | `Active` (green), `Idle` (gray), `Paused` (amber), `Error` (red) |
+| **Channel badge** | Connected channel | `Slack` (purple), `WhatsApp` (green), `Discord` (blue), `Telegram` (cyan) |
+| **Project name** | Linked repository | e.g., "codespar/codespar" |
+| **Task count** | Tasks executed | Count with delta from previous period (e.g., "12 (+3)") |
+| **Sparkline** | Activity trend | Tiny bar chart showing recent task volume |
+| **Autonomy dots** | Current autonomy level | 6 dots representing L0-L5, filled dots indicate current level |
+| **Last active** | Time since last activity | Relative timestamp (e.g., "2 minutes ago", "1 hour ago") |
+
+### Status Badges
+
+| Status | Color | Meaning |
+|--------|-------|---------|
+| `Active` | Agent Green (`#10B981`) | Agent is currently processing a task |
+| `Idle` | Idle Gray (`#9CA3AF`) | Agent is running but waiting for input |
+| `Paused` | Alert Amber (`#F59E0B`) | Agent has been manually suspended |
+| `Error` | Critical Red (`#EF4444`) | Agent encountered an unrecoverable error |
+
+### Channel Badges
+
+| Channel | Color | Icon |
+|---------|-------|------|
+| Slack | Channel Purple (`#8B5CF6`) | Slack logo |
+| WhatsApp | Agent Green (`#10B981`) | WhatsApp logo |
+| Discord | Signal Blue (`#3B82F6`) | Discord logo |
+| Telegram | Cyan (`#06B6D4`) | Telegram logo |
+
+### Autonomy Dots
+
+The autonomy level is displayed as six dots, where filled dots represent the current level:
+
+- `●○○○○○` — L0 (Passive)
+- `●●○○○○` — L1 (Notify)
+- `●●●○○○` — L2 (Suggest)
+- `●●●●○○` — L3 (Auto-Low)
+- `●●●●●○` — L4 (Auto-Med)
+- `●●●●●●` — L5 (Full Auto)
+
+### Interaction
+
+Clicking an agent card navigates to the [Agent Detail page](/docs/dashboard/agent-detail) for that agent, where you can view detailed stats, activity history, configuration, and perform actions like suspend or restart.
+
+## Live Feed
+
+Below the agent cards, the **Live Feed** section shows recent audit trail entries in real time. This is a condensed view of the full [Audit Trail](/docs/dashboard/audit-trail).
+
+### Feed Entry Format
+
+Each entry in the live feed shows:
+
+```
+● 2m ago  task-agent-01  task.complete  "Added health check endpoint"  LOW  SUCCESS
+```
+
+| Element | Description |
+|---------|-------------|
+| **Risk dot** | Colored dot indicating risk level: green (low), amber (medium), red (high), pulsing red (critical) |
+| **Time** | Relative timestamp |
+| **Actor** | Who performed the action. The `formatActor` function resolves Slack UIDs (e.g., `U0123ABC`) to display names (e.g., "Sarah Chen") |
+| **Action badge** | The action type in monospace font (e.g., `task.complete`, `deploy.request`, `review.approve`) |
+| **Detail** | Truncated description of the event |
+| **Result badge** | Outcome: `SUCCESS` (green), `FAILURE` (red), `PENDING` (amber) |
+
+### Pending Approvals
+
+When an entry has a `PENDING` result (e.g., a deploy awaiting approval), an **Approve** button appears next to it. Clicking the button opens a confirmation dialog where you can approve the action directly from the dashboard.
+
+### Actor Name Resolution
+
+The `formatActor` function handles different actor formats:
+
+```typescript
+function formatActor(actor: string): string {
+  // Slack UID: resolve to display name
+  if (actor.startsWith("U") && actor.length === 11) {
+    return slackUserMap.get(actor) ?? actor;
+  }
+
+  // Agent ID: show friendly name
+  if (actor.startsWith("agent-")) {
+    return agentNameMap.get(actor) ?? actor;
+  }
+
+  // System actor
+  if (actor === "system") {
+    return "System";
+  }
+
+  return actor;
+}
+```
+
+Actor names are color-coded in the feed:
+
+- **Blue** — agent actors
+- **White** — human user actors
+- **Gray** — system actors
+
+## Setup Banner
+
+If no project has been linked yet, the Overview page displays a **Setup Banner** at the top of the page instead of the agent cards and stats:
+
+```
+┌──────────────────────────────────────────────────────┐
+│                                                       │
+│   Welcome to CodeSpar Dashboard                      │
+│                                                       │
+│   No project is linked yet. Connect a repository     │
+│   and configure your channels to get started.         │
+│                                                       │
+│   [Go to Setup →]                                    │
+│                                                       │
+└──────────────────────────────────────────────────────┘
+```
+
+Clicking "Go to Setup" navigates to `/dashboard/setup` where you can configure channels and link a repository. See the [Setup page documentation](/docs/dashboard/setup) for details.
+
+## Data Flow
+
+The Overview page fetches data from three API endpoints, all polled via the `usePolling` hook:
+
+| Endpoint | Data | Poll Interval |
+|----------|------|---------------|
+| `GET /api/agents` | Agent list with status, channel, tasks, autonomy | 5 seconds |
+| `GET /api/audit?limit=20` | Recent audit entries for the live feed | 5 seconds |
+| `GET /api/project` | Project info, linked repo, build stats | 30 seconds |
+
+All requests include the `x-org-id` header for multi-tenant isolation.
+
+## Next Steps
+
+- [Agent Detail](/docs/dashboard/agent-detail) — click an agent card to see detailed stats and configuration
+- [Audit Trail](/docs/dashboard/audit-trail) — view the full searchable event log
+- [Setup](/docs/dashboard/setup) — configure channels and link a project

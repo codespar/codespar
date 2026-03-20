@@ -1,0 +1,187 @@
+---
+title: Smart Responses
+description: How CodeSpar handles open-ended questions using Claude — context-aware, multilingual answers that leverage agent memory, audit history, and project state.
+---
+
+# Smart Responses
+
+When you ask CodeSpar an open-ended question instead of a structured command, the agent uses **Smart Responses** — context-aware answers powered by Claude that draw on the agent's full knowledge of your project.
+
+## When Smart Responses Activate
+
+The agent detects an open-ended question when **all three conditions** are met:
+
+1. **Contains a question mark** — the message includes `?`
+2. **Longer than 25 characters** — short messages like "status?" are handled as commands
+3. **NLU confidence below 1.0** — the natural language understanding engine is not fully confident that the message maps to a structured command
+
+When these conditions are met, the agent routes the message to the Smart Response handler instead of the command parser.
+
+### Examples That Trigger Smart Responses
+
+```
+"What's the status of our CI pipeline?"                    → Smart Response
+"Can you explain why the last build failed?"               → Smart Response
+"Quais são os últimos PRs que foram mergeados?"            → Smart Response
+"How many tasks has the agent completed this week?"        → Smart Response
+"What changes were deployed to production yesterday?"      → Smart Response
+```
+
+### Examples That Do NOT Trigger Smart Responses
+
+```
+"status"                        → Parsed as `status` command
+"@codespar deploy staging"      → Parsed as `deploy` command
+"review PR #42"                 → Parsed as `review` command
+"yes"                           → Parsed as confirmation
+```
+
+## How It Works
+
+When a Smart Response is triggered, the agent follows this process:
+
+### Step 1: Build Agent Context
+
+The agent assembles a comprehensive context object from its current state:
+
+```typescript
+interface SmartContext {
+  // Agent information
+  agentId: string;
+  agentType: string;
+  status: string;
+  autonomyLevel: number;
+  uptime: number;
+
+  // Project information
+  project: {
+    repo: string;
+    branch: string;
+    lastBuild: BuildResult | null;
+    openPRs: number;
+  };
+
+  // Recent activity
+  recentAudit: AuditEntry[];   // Last 20 audit entries
+  recentTasks: TaskResult[];   // Last 10 task results
+
+  // Memory statistics
+  memory: {
+    vectorCount: number;
+    lastIndexed: string;
+    topModules: string[];
+  };
+}
+```
+
+### Step 2: Send to Claude
+
+The context and the user's question are sent to Claude Sonnet (configurable via `SMART_MODEL`):
+
+```typescript
+const response = await anthropic.messages.create({
+  model: process.env.SMART_MODEL ?? "claude-sonnet-4-20250514",
+  max_tokens: 2000,
+  system: `You are a CodeSpar agent assistant. You have access to the following context about the current project and agent state. Answer the user's question based on this context. Be concise, specific, and helpful. Respond in the same language the user used.`,
+  messages: [
+    {
+      role: "user",
+      content: `## Agent Context\n${JSON.stringify(context, null, 2)}\n\n## Question\n${userMessage}`,
+    },
+  ],
+});
+```
+
+### Step 3: Return Response
+
+Claude's response is sent back to the user through whatever channel they used (Slack, WhatsApp, Discord, Telegram, CLI).
+
+## Multilingual Support
+
+Smart Responses work in **any language**. The system prompt instructs Claude to respond in the same language the user used. This means:
+
+### English
+
+```
+User: What's the status of our CI pipeline?
+
+CodeSpar: The CI pipeline is healthy. The last 10 builds on main all passed,
+with the most recent completing 12 minutes ago in 2m 15s. The current build
+success rate over the last 24 hours is 94% (17/18 builds passed). The one
+failure was a flaky test in user.service.test.ts that passed on retry.
+```
+
+### Portuguese
+
+```
+User: Quais são os últimos PRs que foram mergeados?
+
+CodeSpar: Nos últimos 7 dias, 5 PRs foram mergeados no branch main:
+
+1. PR #42 — "Add rate limiting" (Sarah Chen, mergeado há 2h)
+2. PR #41 — "Fix auth timeout" (Marcus Lee, mergeado há 1 dia)
+3. PR #40 — "Update dependencies" (dependabot, mergeado há 2 dias)
+4. PR #39 — "Refactor user service" (Ana Costa, mergeado há 3 dias)
+5. PR #38 — "Add health check endpoint" (Sarah Chen, mergeado há 5 dias)
+
+Todos os PRs passaram no CI antes do merge.
+```
+
+### Spanish
+
+```
+User: Puedes explicar por qué falló el último build?
+
+CodeSpar: El último build falló hace 15 minutos en el step de test.
+El error fue un TypeError en src/services/user.service.ts línea 47:
+"Cannot read property 'email' of null". Esto parece estar relacionado
+con el commit def5678 que modificó el middleware de autenticación.
+La sesión expirada retorna null en vez de un objeto de usuario,
+y el servicio no maneja ese caso.
+```
+
+## Context Sources
+
+Smart Responses are more useful than generic AI chat because they draw on real project data:
+
+| Source | What It Provides | Example Use |
+|--------|-----------------|-------------|
+| **Agent status** | Current state, uptime, autonomy level | "Is the agent running?" |
+| **Recent audit** | Last 20 actions (tasks, reviews, deploys) | "What happened in the last hour?" |
+| **Build history** | CI results, failure details | "Why did the last build fail?" |
+| **PR data** | Open/merged PRs, review status | "What PRs are open?" |
+| **Memory stats** | Vector count, indexed files, modules | "What does the agent know about our codebase?" |
+| **Task results** | Recent coding tasks, file changes | "What was the last thing the agent did?" |
+
+## Memory Integration
+
+Smart Response conversations are stored in the agent's vector memory. This means:
+
+1. **Context builds over time** — the agent remembers previous questions and can reference them
+2. **Team patterns emerge** — the agent learns what questions the team frequently asks
+3. **Knowledge compounds** — answers about the codebase improve as the agent indexes more code
+
+## Configuration
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `SMART_MODEL` | `claude-sonnet-4-20250514` | Claude model for Smart Responses |
+
+### Model Selection
+
+The default model (Claude Sonnet) balances speed and quality for conversational responses. For deployments where latency is critical, you can use a faster model. For complex analytical questions, a more capable model may provide better answers.
+
+## Limitations
+
+| Limitation | Detail |
+|-----------|--------|
+| **Context window** | Only the last 20 audit entries and 10 task results are included |
+| **No real-time data** | Cannot query external systems (databases, monitoring tools) directly |
+| **Latency** | Response time depends on Claude API latency (typically 2-5 seconds) |
+| **Cost** | Each Smart Response requires a Claude API call |
+
+## Next Steps
+
+- [Natural Language Commands](/docs/commands/natural-language) — how CodeSpar parses structured commands from natural language
+- [Autonomy Levels](/docs/commands/autonomy) — configure agent proactivity
+- [Agent Architecture](/docs/agents) — how agents process messages

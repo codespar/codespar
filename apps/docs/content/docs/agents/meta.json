@@ -1,0 +1,13 @@
+{
+  "title": "Agents",
+  "pages": [
+    "index",
+    "project-agent",
+    "dev-agent",
+    "task-agent",
+    "review-agent",
+    "deploy-agent",
+    "incident-agent",
+    "coordinator-agent"
+  ]
+}

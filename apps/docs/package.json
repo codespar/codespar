@@ -11,7 +11,7 @@
     "fumadocs-core": "16.7.1",
     "fumadocs-mdx": "14.2.11",
     "fumadocs-ui": "16.7.1",
-    "next": "15.4.11",
+    "next": "^16.2.1-canary.3",
     "react": "19.3.0-canary-b4546cd0-20260318",
     "react-dom": "19.3.0-canary-b4546cd0-20260318",
     "tailwindcss": "^4.0.0"

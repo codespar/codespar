@@ -1,0 +1,277 @@
+---
+title: Agent Detail Page
+description: Deep dive into a single agent — uptime, task stats, memory usage, activity charts, autonomy control, activity timeline, context and memory inspection, and configuration.
+---
+
+# Agent Detail Page
+
+The Agent Detail page provides a comprehensive view of a single agent. You reach this page by clicking an agent card on the [Overview page](/docs/dashboard/overview) or by navigating directly to `/dashboard/agents/:id`.
+
+## Header
+
+The agent detail header displays the agent's identity and status at a glance:
+
+```
+┌──────────────────────────────────────────────────────┐
+│ ⬡  Project Agent              ACTIVE    slack        │
+│    Persistent agent for codespar/codespar            │
+└──────────────────────────────────────────────────────┘
+```
+
+| Element | Description |
+|---------|-------------|
+| **Icon** | Agent type icon (hexagon for project, gear for task, eye for review, rocket for deploy, siren for incident, grid for coordinator) |
+| **Name** | Agent display name |
+| **Status badge** | Current state with semantic color: `Active` (green), `Idle` (gray), `Paused` (amber), `Error` (red) |
+| **Channel badge** | Connected messaging channel (Slack, WhatsApp, Discord, Telegram) |
+| **Description** | Agent type description and linked project name |
+
+## Stat Cards
+
+Five stat cards are displayed below the header, providing key metrics for this agent:
+
+### Uptime
+
+- **Visual:** Donut chart showing uptime percentage
+- **Calculation:** Derived from `uptimeMs` — the number of milliseconds the agent has been running since last restart
+- **Display:** Percentage with hours/days in secondary text (e.g., "99.7% — 14d 6h")
+- **Color:** Green above 99%, amber between 95-99%, red below 95%
+
+### Tasks
+
+- **Primary value:** Total tasks executed by this agent
+- **Secondary:** Tasks executed today (e.g., "8 today")
+- **Trend:** Small delta indicator compared to previous day
+
+### Memory
+
+- **Primary value:** Current heap memory usage in MB
+- **Visual:** Simple bar indicating usage relative to the system limit
+- **Color:** Green under 256MB, amber between 256-512MB, red above 512MB
+
+### Build Rate
+
+- **Primary value:** Percentage of successful builds associated with this agent's projects
+- **Secondary:** Sparkline showing build success trend over the last 7 days
+- **Fallback:** When no build data is available (e.g., no CI configured), the card displays "N/A" with a muted explanation: "No build data available"
+
+### Last Active
+
+- **Primary value:** Relative time since the agent last processed a message or event
+- **Display:** Human-readable format (e.g., "3 minutes ago", "1 hour ago", "2 days ago")
+- **Color:** Green if within the last 5 minutes, amber if within 1 hour, gray if older
+
+## 24-Hour Activity Chart
+
+Below the stat cards, a **bar chart** shows the agent's activity over the past 24 hours, broken down by hour. Each bar represents the number of events processed in that hour.
+
+```
+Events
+  12 │          ██
+  10 │       ██ ██ ██
+   8 │    ██ ██ ██ ██ ██
+   6 │ ██ ██ ██ ██ ██ ██ ██
+   4 │ ██ ██ ██ ██ ██ ██ ██ ██
+   2 │ ██ ██ ██ ██ ██ ██ ██ ██ ██
+   0 └──────────────────────────────
+     00  03  06  09  12  15  18  21  Now
+```
+
+The chart uses Signal Blue (`#3B82F6`) for the bars and updates on each polling cycle.
+
+## Autonomy Level Control
+
+The autonomy section displays the agent's current autonomy level as an **interactive horizontal bar** with six segments (L0 through L5):
+
+```
+Autonomy Level
+┌─────┬─────┬─────┬─────┬─────┬─────┐
+│ L0  │ L1  │ L2  │ L3  │ L4  │ L5  │
+│Pass.│Notif│Sugg.│Auto │Auto │Full │
+│     │     │     │ Low │ Med │Auto │
+└─────┴─────┴─────┴─────┴─────┴─────┘
+                    ▲
+              Current: L3 (Auto-Low)
+```
+
+### Changing Autonomy
+
+Clicking a different level segment opens a confirmation dialog:
+
+```
+Change Autonomy Level
+
+Are you sure you want to change the autonomy level
+from L3 (Auto-Low) to L4 (Auto-Med)?
+
+At L4, the agent will auto-execute medium-risk actions
+including bug fixes and PR reviews.
+
+[Cancel]  [Confirm Change]
+```
+
+On confirmation, the dashboard sends a request to the backend:
+
+```bash
+POST /api/agents/:id/action
+Content-Type: application/json
+
+{
+  "action": "set_autonomy",
+  "params": {
+    "level": 4
+  }
+}
+```
+
+The change is logged in the audit trail and reflected immediately in the autonomy bar.
+
+## Tabs
+
+The agent detail page has three tabs below the autonomy section: **Activity**, **Context & Memory**, and **Configuration**.
+
+### Activity Tab
+
+The Activity tab shows a chronological timeline of all events related to this agent. Each entry includes:
+
+| Element | Description |
+|---------|-------------|
+| **Risk dot** | Colored dot: green (low), amber (medium), red (high), pulsing red (critical) |
+| **Timestamp** | Relative time (e.g., "5 minutes ago") with full ISO timestamp on hover |
+| **Actor** | Resolved display name via `formatActor` (Slack UIDs resolved to names) |
+| **Action** | Event type in monospace (e.g., `task.start`, `task.complete`, `review.submit`) |
+| **Detail** | Full description of the event |
+| **Result** | `SUCCESS`, `FAILURE`, or `PENDING` badge |
+| **Hash** | Truncated hash chain value, shown on hover for audit verification |
+
+Example timeline:
+
+```
+● 2m ago   Sarah Chen       task.complete    "Added /api/health endpoint"       SUCCESS
+● 5m ago   project-agent    task.start       "Executing: add health endpoint"   SUCCESS
+● 8m ago   Sarah Chen       command.receive  "@codespar instruct add health…"   SUCCESS
+● 15m ago  System           webhook.receive  "workflow_run: CI passed"          SUCCESS
+● 22m ago  review-agent     review.complete  "PR #42: Low risk, 3 suggestions"  SUCCESS
+```
+
+The timeline supports infinite scroll — older events load automatically as you scroll down.
+
+#### Hash Chain
+
+Every audit entry includes a cryptographic hash that chains to the previous entry, forming an immutable audit log. The hash is visible on hover and can be verified against the backend for tamper detection.
+
+### Context & Memory Tab
+
+The Context & Memory tab provides visibility into the agent's internal knowledge:
+
+#### Vector Store Stats
+
+| Metric | Description | Example |
+|--------|-------------|---------|
+| Total vectors | Number of stored memory vectors | "1,247 vectors" |
+| Storage size | Approximate memory footprint | "48 MB" |
+| Last indexed | When the store was last updated | "3 minutes ago" |
+
+#### Module Graph
+
+A summary of the agent's understanding of the codebase structure:
+
+- **Files indexed** — number of source files the agent has read
+- **Dependencies mapped** — import/require relationships tracked
+- **Key modules** — top 5 most-referenced modules
+
+#### Team Knowledge
+
+Information the agent has learned about the team:
+
+- **Team members** — names and roles the agent has observed
+- **Coding conventions** — patterns the agent has detected
+- **Review preferences** — merge rules, required approvals, etc.
+
+#### CI/CD Patterns
+
+Build and deployment intelligence:
+
+- **Average build time** — based on observed workflow runs
+- **Common failure points** — frequently failing tests or steps
+- **Deploy frequency** — how often deploys happen
+
+### Configuration Tab
+
+The Configuration tab displays and allows editing of agent-specific settings:
+
+#### Execution Constraints
+
+| Setting | Description | Default |
+|---------|-------------|---------|
+| Max files per task | Maximum number of files the Task Agent can modify in a single PR | 5 |
+| Max file size | Maximum file size the agent will read (KB) | 20 |
+| Max tokens | Maximum Claude output tokens per request | 4,000 |
+| Branch prefix | Prefix for branches created by the agent | `codespar/` |
+
+#### Alert Configuration
+
+Toggle switches for notification preferences:
+
+| Alert | Description | Default |
+|-------|-------------|---------|
+| Build failures | Notify when CI builds fail | On |
+| PR opened | Notify when new PRs are opened | On |
+| Deploy complete | Notify when deploys finish | On |
+| Error state | Notify when agent enters error state | On |
+| Daily summary | Send a daily activity summary | Off |
+
+Each toggle immediately updates the agent configuration via the API.
+
+## Agent Actions
+
+At the top right of the page, two action buttons are available:
+
+### Suspend / Resume
+
+- **Suspend:** Pauses the agent. It stops processing messages and events but retains its state. The status badge changes to `Paused` (amber).
+- **Resume:** Restarts a paused agent. It begins processing messages again from where it left off.
+
+```bash
+POST /api/agents/:id/action
+{
+  "action": "suspend"  // or "resume"
+}
+```
+
+### Restart
+
+Forces a full restart of the agent — shuts it down and reinitializes it with its current configuration. Useful when an agent is in an error state or behaving unexpectedly.
+
+```bash
+POST /api/agents/:id/action
+{
+  "action": "restart"
+}
+```
+
+A confirmation dialog is shown before restarting:
+
+```
+Restart Agent
+
+Are you sure you want to restart "Project Agent"?
+The agent will be briefly unavailable during restart.
+
+[Cancel]  [Restart]
+```
+
+## Data Flow
+
+The agent detail page polls two endpoints:
+
+| Endpoint | Data | Poll Interval |
+|----------|------|---------------|
+| `GET /api/agents/:id` | Agent status, stats, config, memory info | 5 seconds |
+| `GET /api/audit?agentId=:id&limit=50` | Agent-specific audit entries | 5 seconds |
+
+## Next Steps
+
+- [Audit Trail](/docs/dashboard/audit-trail) — view the full event log across all agents
+- [Settings](/docs/dashboard/settings) — configure channels, team, and policies
+- [Autonomy Levels](/docs/commands/autonomy) — learn more about the L0-L5 system

@@ -1,0 +1,191 @@
+---
+title: Dashboard Overview
+description: The CodeSpar Dashboard — a Next.js 15 web application for monitoring agents, reviewing audit trails, managing projects, and configuring your CodeSpar deployment.
+---
+
+# Dashboard
+
+The CodeSpar Dashboard is a web application available at `codespar.dev/dashboard` that provides real-time visibility into your agents, projects, and activity. It is the visual command center for everything happening across your CodeSpar deployment.
+
+## Architecture
+
+The dashboard is a **Next.js 15** application using the App Router and React Server Components where possible. Client Components are used only for interactive elements that require browser APIs — polling, charts, form state, and navigation transitions.
+
+| Layer | Technology | Purpose |
+|-------|-----------|---------|
+| **Framework** | Next.js 15 (App Router) | Routing, SSR, server components |
+| **Authentication** | Clerk | Login, signup, organizations, RBAC |
+| **Styling** | Tailwind CSS | Dark theme matching CodeSpar brand |
+| **Data Fetching** | Custom `usePolling` hook | Real-time updates from the backend API |
+| **State** | React state + URL params | No external state library needed |
+
+## Authentication
+
+The dashboard uses **Clerk** for authentication with custom-built login and signup forms. Rather than using Clerk's pre-built `<SignIn />` component, CodeSpar implements custom forms using the `useSignIn` and `useSignUp` hooks for full control over the UI.
+
+### Supported Auth Methods
+
+- **Email + password** — custom form with validation
+- **GitHub OAuth** — one-click login for developers
+
+### Custom Login Flow
+
+```typescript
+import { useSignIn } from "@clerk/nextjs";
+
+function LoginForm() {
+  const { signIn, setActive } = useSignIn();
+
+  async function handleSubmit(email: string, password: string) {
+    const result = await signIn.create({
+      identifier: email,
+      password,
+    });
+
+    if (result.status === "complete") {
+      await setActive({ session: result.createdSessionId });
+    }
+  }
+}
+```
+
+The login and signup pages follow the CodeSpar dark theme — Obsidian (`#0D0F17`) background, Signal Blue (`#3B82F6`) accents, and Inter typography.
+
+## Multi-Tenant Architecture
+
+CodeSpar uses **Clerk Organizations** for multi-tenancy. Each organization maps to an isolated namespace in the backend, ensuring complete data separation between teams.
+
+### How It Works
+
+1. When a user logs in, they select (or are assigned to) an organization
+2. The dashboard reads the active organization ID from Clerk
+3. Every API request includes an `x-org-id` header with the organization ID
+4. The backend filters all data (agents, projects, audit events) by this org ID
+
+```typescript
+async function fetchWithOrg(path: string, orgId: string) {
+  return fetch(`${API_URL}${path}`, {
+    headers: {
+      "Content-Type": "application/json",
+      "x-org-id": orgId,
+    },
+  });
+}
+```
+
+This means a team at Company A never sees agents, projects, or audit entries belonging to Company B — even if they share the same CodeSpar deployment.
+
+## Theme
+
+The dashboard uses the CodeSpar dark theme throughout:
+
+| Token | Value | Usage |
+|-------|-------|-------|
+| Background | `#0D0F17` (Obsidian) | Page background, sidebar |
+| Surface | `#1E1E2E` (Graphite) | Cards, panels, modals |
+| Elevated | `#252538` | Code blocks, secondary surfaces |
+| Text primary | `#F5F5F7` (Chalk) | Headings, body text |
+| Text secondary | `#6B7280` (Slate) | Labels, metadata |
+| Accent | `#3B82F6` (Signal Blue) | Buttons, links, active states |
+| Border | `#2A2A3E` | Card borders, dividers |
+
+## Sidebar Navigation
+
+The dashboard sidebar is the primary navigation element, visible on all pages. It contains:
+
+### Organization Switcher
+
+At the top of the sidebar, the **OrganizationSwitcher** (from Clerk) lets users switch between organizations. The active organization determines which data is displayed throughout the dashboard.
+
+### Project Selector
+
+Below the org switcher, a dropdown allows selecting the active project. All dashboard views filter by the selected project.
+
+### Navigation Links
+
+| Link | Route | Description |
+|------|-------|-------------|
+| Overview | `/dashboard` | Agent cards, stat cards, live feed |
+| Audit Trail | `/dashboard/audit` | Immutable event log with search and filters |
+| Settings | `/dashboard/settings` | Channels, team, policies, general config |
+| Team | `/dashboard/team` | Team members, roles, invitations |
+| Setup | `/dashboard/setup` | Channel configuration, project linking |
+
+### Agent List
+
+The sidebar displays a list of all agents for the selected project. Each agent entry shows:
+
+- **Name** — e.g., "Project Agent", "Task Agent #3"
+- **Status dot** — colored indicator matching agent state:
+  - Green dot: Active
+  - Gray dot: Idle
+  - Amber dot: Paused
+  - Red dot: Error
+- Clicking an agent navigates to its [detail page](/docs/dashboard/agent-detail)
+
+### User Info
+
+At the bottom of the sidebar:
+
+- User avatar and name (from Clerk)
+- **Sign Out** button
+
+## Real-Time Data
+
+The dashboard uses a custom `usePolling` hook to fetch live data from the backend API at regular intervals. This provides near-real-time updates without the complexity of WebSockets.
+
+```typescript
+function usePolling<T>(
+  fetcher: () => Promise<T>,
+  intervalMs: number = 5000
+): { data: T | null; loading: boolean; error: Error | null } {
+  const [data, setData] = useState<T | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<Error | null>(null);
+
+  useEffect(() => {
+    let active = true;
+
+    async function poll() {
+      try {
+        const result = await fetcher();
+        if (active) {
+          setData(result);
+          setLoading(false);
+        }
+      } catch (err) {
+        if (active) setError(err as Error);
+      }
+    }
+
+    poll(); // Initial fetch
+    const interval = setInterval(poll, intervalMs);
+
+    return () => {
+      active = false;
+      clearInterval(interval);
+    };
+  }, [fetcher, intervalMs]);
+
+  return { data, loading, error };
+}
+```
+
+When the dashboard is connected to a live backend, a **LIVE** indicator appears in the header, confirming that data is being polled in real time.
+
+## Pages
+
+| Page | Description | Guide |
+|------|-------------|-------|
+| [Overview](/docs/dashboard/overview) | Agent cards, stat summaries, live feed | Primary landing page |
+| [Agent Detail](/docs/dashboard/agent-detail) | Deep dive into a single agent's stats, activity, and configuration | Click any agent card |
+| [Audit Trail](/docs/dashboard/audit-trail) | Searchable, filterable immutable event log | Hash chain verified |
+| [Settings](/docs/dashboard/settings) | Channels, team, policies, general configuration | Four-tab layout |
+| [Setup](/docs/dashboard/setup) | Initial channel and project configuration | Onboarding flow |
+
+## Next Steps
+
+- [Dashboard Overview Page](/docs/dashboard/overview) — understand the main dashboard view
+- [Agent Detail](/docs/dashboard/agent-detail) — monitor individual agents
+- [Audit Trail](/docs/dashboard/audit-trail) — search and filter the event log
+- [Production Deploy Guide](/docs/guides/production-deploy) — deploy the dashboard to Vercel

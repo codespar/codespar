@@ -1,6 +1,6 @@
 ---
 title: GitHub Webhooks
-description: How CodeSpar receives and processes GitHub webhook events for push, pull request, and workflow run events, triggering automated agent responses.
+description: Complete reference for how CodeSpar receives and processes GitHub webhook events — supported event types, payload mapping to CIEvent, agent triggering behavior, auto-configuration, and testing.
 ---
 
 # GitHub Webhooks
@@ -13,17 +13,247 @@ CodeSpar receives GitHub webhook events to trigger automated agent responses. Wh
 POST /webhooks/github
 ```
 
-This endpoint receives all GitHub webhook events. CodeSpar processes three event types and ignores the rest.
+This is the single endpoint that receives all GitHub webhook events. CodeSpar inspects the `X-GitHub-Event` header to determine the event type, processes the payload, maps it to an internal `CIEvent`, and routes it to the appropriate agent.
 
-### Supported Events
+### Webhook URL Format
 
-| Event | GitHub Action | CodeSpar Behavior |
-|-------|--------------|-------------------|
-| `push` | Code pushed to branch | Updates project context, triggers notifications at L1+ |
-| `pull_request` | PR opened, updated, closed | Triggers ReviewAgent on open (L3+), notifications at L1+ |
-| `workflow_run` | CI/CD workflow completes | Triggers IncidentAgent on failure (L3+), notifications at L1+ |
+```
+https://<your-domain>/webhooks/github
+```
 
-## Auto-Configuration
+For example, if `WEBHOOK_BASE_URL=https://codespar.example.com`:
+
+```
+https://codespar.example.com/webhooks/github
+```
+
+---
+
+## Supported Events
+
+CodeSpar processes four GitHub event types and ignores the rest:
+
+| GitHub Event | GitHub Action / Trigger | CodeSpar Behavior |
+|-------------|------------------------|-------------------|
+| `workflow_run` | CI/CD workflow completes | Maps to `CIEvent`, triggers Incident Agent on failure |
+| `pull_request` | PR opened, updated, closed, merged | Maps to `CIEvent`, triggers Review Agent on open |
+| `push` | Code pushed to branch | Maps to `CIEvent`, updates project context |
+| `check_run` | Check suite completes | Maps to `CIEvent`, supplements workflow run data |
+
+---
+
+## The `CIEvent` Type
+
+All incoming GitHub webhook payloads are normalized into a common `CIEvent` type before being processed by agents:
+
+```typescript
+interface CIEvent {
+  type: "workflow_run" | "pull_request" | "push" | "check_run";
+  repo: string;          // "owner/name" format (e.g., "codespar/codespar")
+  branch: string;        // Branch name (e.g., "main", "feature/auth")
+  status: string;        // Event-specific status (e.g., "completed", "opened")
+  conclusion?: string;   // Outcome: "success", "failure", "cancelled", etc.
+  details: string;       // Human-readable summary of the event
+}
+```
+
+### How Events Map to CIEvent
+
+#### `workflow_run` Event
+
+```json
+// GitHub payload (simplified)
+{
+  "action": "completed",
+  "workflow_run": {
+    "name": "CI",
+    "status": "completed",
+    "conclusion": "failure",
+    "head_branch": "main",
+    "head_sha": "abc1234",
+    "html_url": "https://github.com/codespar/codespar/actions/runs/123"
+  },
+  "repository": {
+    "full_name": "codespar/codespar"
+  }
+}
+```
+
+Maps to:
+
+```json
+{
+  "type": "workflow_run",
+  "repo": "codespar/codespar",
+  "branch": "main",
+  "status": "completed",
+  "conclusion": "failure",
+  "details": "Workflow 'CI' failed on main (abc1234)"
+}
+```
+
+#### `pull_request` Event
+
+```json
+// GitHub payload (simplified)
+{
+  "action": "opened",
+  "pull_request": {
+    "number": 42,
+    "title": "feat: add rate limiting",
+    "user": { "login": "alice" },
+    "head": { "ref": "feature/rate-limiting" },
+    "base": { "ref": "main" }
+  },
+  "repository": {
+    "full_name": "codespar/codespar"
+  }
+}
+```
+
+Maps to:
+
+```json
+{
+  "type": "pull_request",
+  "repo": "codespar/codespar",
+  "branch": "feature/rate-limiting",
+  "status": "opened",
+  "conclusion": null,
+  "details": "PR #42 'feat: add rate limiting' opened by alice"
+}
+```
+
+#### `push` Event
+
+```json
+// GitHub payload (simplified)
+{
+  "ref": "refs/heads/main",
+  "repository": {
+    "full_name": "codespar/codespar"
+  },
+  "head_commit": {
+    "id": "abc1234",
+    "message": "feat: add rate limiting",
+    "author": { "username": "alice" },
+    "timestamp": "2024-01-15T14:30:00Z"
+  }
+}
+```
+
+Maps to:
+
+```json
+{
+  "type": "push",
+  "repo": "codespar/codespar",
+  "branch": "main",
+  "status": "pushed",
+  "conclusion": null,
+  "details": "Push to main by alice: feat: add rate limiting"
+}
+```
+
+#### `check_run` Event
+
+```json
+// GitHub payload (simplified)
+{
+  "action": "completed",
+  "check_run": {
+    "name": "lint",
+    "status": "completed",
+    "conclusion": "success",
+    "head_sha": "abc1234"
+  },
+  "repository": {
+    "full_name": "codespar/codespar"
+  }
+}
+```
+
+Maps to:
+
+```json
+{
+  "type": "check_run",
+  "repo": "codespar/codespar",
+  "branch": "main",
+  "status": "completed",
+  "conclusion": "success",
+  "details": "Check 'lint' passed (abc1234)"
+}
+```
+
+---
+
+## What Triggers Each Agent
+
+When a `CIEvent` is created, the Project Agent evaluates it against the current autonomy level and decides whether to spawn an ephemeral agent.
+
+### Build Failure → Incident Agent
+
+When a `workflow_run` event has `conclusion: "failure"`:
+
+| Autonomy Level | Behavior |
+|-------|----------|
+| L0 | Ignored |
+| L1 | Notification sent: "Build failed on main" |
+| L2 | Notification + suggestion: "I can investigate this failure. Approve?" |
+| L3+ | **Incident Agent spawned automatically** — fetches workflow logs, analyzes the failure, identifies root cause, and reports findings to connected channels |
+
+```
+@codespar: 🔴 Build failed on main
+
+Workflow: CI
+Commit: abc1234 by @alice
+URL: https://github.com/codespar/codespar/actions/runs/123
+
+🔍 Investigating...
+
+Root cause: Test "user.auth.timeout" failed — expected 30000ms timeout
+but received 120000ms after config change in commit abc1234.
+
+Suggestion: Update test expectation to match new config.
+Approve auto-fix? → @codespar approve sg-x1y2z3
+```
+
+### PR Opened → Review Agent
+
+When a `pull_request` event has `status: "opened"`:
+
+| Autonomy Level | Behavior |
+|-------|----------|
+| L0 | Ignored |
+| L1 | Notification: "New PR #42 opened by @alice" |
+| L2 | Notification + suggestion: "I can review this PR. Approve?" |
+| L3+ | **Review Agent spawned automatically** — reads the PR diff, analyzes code quality, checks for bugs, and posts a review comment on GitHub and in connected channels |
+
+### PR Merged → Notification
+
+When a `pull_request` event has `status: "closed"` and `merged: true`:
+
+| Autonomy Level | Behavior |
+|-------|----------|
+| L0 | Ignored |
+| L1+ | Notification: "PR #42 merged into main by @alice" |
+
+No agent is spawned for merge events — they are informational only.
+
+### Push → Context Update
+
+When a `push` event is received:
+
+| Autonomy Level | Behavior |
+|-------|----------|
+| L0 | Ignored |
+| L1+ | Notification: "Push to main by @alice: feat: add rate limiting" |
+| L3+ | Project context (vector store) is updated with the new commit information |
+
+---
+
+## Auto-Webhook Configuration
 
 When you link a repository via `@codespar link` or the [Project API](/docs/api/projects), CodeSpar automatically creates a GitHub webhook if these conditions are met:
 
@@ -34,24 +264,32 @@ The webhook is configured to send:
 - `push` events
 - `pull_request` events
 - `workflow_run` events
+- `check_run` events
 
-The webhook URL will be:
-
-```
-{WEBHOOK_BASE_URL}/webhooks/github
-```
-
-### Example
-
-If `WEBHOOK_BASE_URL=https://codespar.example.com`, the webhook URL is:
+### Auto-Configuration Flow
 
 ```
-https://codespar.example.com/webhooks/github
+User: @codespar link codespar/codespar
+
+CodeSpar:
+  1. Validate repo exists and token has access     ✅
+  2. Create project config                          ✅
+  3. Create GitHub webhook:
+     URL: https://codespar.example.com/webhooks/github
+     Events: push, pull_request, workflow_run, check_run
+     Content-Type: application/json                 ✅
+  4. Associate agent with project                   ✅
+
+Result: ✅ Linked to codespar/codespar (webhook configured)
 ```
+
+If the token lacks `admin:repo_hook` permission, the project is still linked but without a webhook. The user must configure the webhook manually.
+
+---
 
 ## Manual Configuration
 
-If auto-configuration is not available (e.g., no admin permissions), you can manually configure the webhook in GitHub:
+If auto-configuration is not available (e.g., no admin permissions), configure the webhook manually in GitHub:
 
 1. Go to your repository on GitHub
 2. Navigate to **Settings** > **Webhooks** > **Add webhook**
@@ -62,92 +300,15 @@ If auto-configuration is not available (e.g., no admin permissions), you can man
 | **Payload URL** | `https://your-codespar-instance.com/webhooks/github` |
 | **Content type** | `application/json` |
 | **Secret** | (optional, not currently validated) |
-| **Events** | Select: `Pushes`, `Pull requests`, `Workflow runs` |
+| **Events** | Select: `Pushes`, `Pull requests`, `Workflow runs`, `Check runs` |
 
-## Payload Processing
+4. Click **Add webhook**
 
-### Push Events
-
-When CodeSpar receives a `push` event, it maps the payload to an internal `CIEvent`:
-
-```json
-{
-  "type": "push",
-  "repo": "codespar/codespar",
-  "branch": "main",
-  "commit": "abc1234",
-  "author": "alice",
-  "message": "feat: add rate limiting",
-  "timestamp": "2024-01-15T14:30:00Z"
-}
-```
-
-**Agent behavior by autonomy level:**
-
-| Level | Behavior |
-|-------|----------|
-| L0 | Ignored |
-| L1+ | Notification sent to connected channels |
-| L3+ | Project context updated automatically |
-
-### Pull Request Events
-
-When a `pull_request` event is received with action `opened` or `synchronize`:
-
-```json
-{
-  "type": "pull_request",
-  "repo": "codespar/codespar",
-  "action": "opened",
-  "prNumber": 42,
-  "title": "feat: add rate limiting",
-  "author": "alice",
-  "branch": "feature/rate-limiting",
-  "baseBranch": "main",
-  "timestamp": "2024-01-15T14:28:00Z"
-}
-```
-
-**Agent behavior by autonomy level:**
-
-| Level | Behavior |
-|-------|----------|
-| L0 | Ignored |
-| L1 | Notification: "New PR #42 opened by @alice" |
-| L2 | Notification + suggestion: "I can review this PR. Approve?" |
-| L3+ | ReviewAgent spawned automatically, review posted to channel and GitHub |
-
-### Workflow Run Events
-
-When a `workflow_run` event is received with status `completed`:
-
-```json
-{
-  "type": "workflow_run",
-  "repo": "codespar/codespar",
-  "workflowName": "CI",
-  "status": "failure",
-  "conclusion": "failure",
-  "branch": "main",
-  "commit": "abc1234",
-  "url": "https://github.com/codespar/codespar/actions/runs/123",
-  "timestamp": "2024-01-15T14:32:00Z"
-}
-```
-
-**Agent behavior by autonomy level:**
-
-| Level | Behavior |
-|-------|----------|
-| L0 | Ignored |
-| L1 | Notification: "Build failed on main" |
-| L2 | Notification + suggestion: "I can investigate this failure. Approve?" |
-| L3+ | IncidentAgent spawned automatically on failure, investigation starts |
-| L1+ (success) | Notification: "Build passed on main" |
+---
 
 ## Testing Webhooks
 
-You can test the webhook endpoint by sending a simulated event:
+You can test the webhook endpoint by sending simulated events with `curl`.
 
 ### Simulate a Push Event
 
@@ -220,9 +381,29 @@ curl -X POST http://localhost:3000/webhooks/github \
   }'
 ```
 
+### Simulate a Check Run
+
+```bash
+curl -X POST http://localhost:3000/webhooks/github \
+  -H "Content-Type: application/json" \
+  -H "X-GitHub-Event: check_run" \
+  -d '{
+    "action": "completed",
+    "check_run": {
+      "name": "lint",
+      "status": "completed",
+      "conclusion": "success",
+      "head_sha": "abc1234"
+    },
+    "repository": {
+      "full_name": "codespar/codespar"
+    }
+  }'
+```
+
 ### Expected Response
 
-All webhook events return a `200 OK` with a processing confirmation:
+All webhook events return `200 OK` with a processing confirmation:
 
 ```json
 {
@@ -245,8 +426,52 @@ Unrecognized events return `200 OK` with `processed: false`:
 }
 ```
 
+---
+
+## Webhook Payload Processing Flow
+
+```
+┌──────────────────────────────────────────────────┐
+│  GitHub sends POST /webhooks/github              │
+│  Header: X-GitHub-Event: workflow_run            │
+└────────────────────┬─────────────────────────────┘
+                     │
+                     ▼
+┌──────────────────────────────────────────────────┐
+│  Parse event type from X-GitHub-Event header     │
+│  Validate payload structure                      │
+└────────────────────┬─────────────────────────────┘
+                     │
+                     ▼
+┌──────────────────────────────────────────────────┐
+│  Map to CIEvent                                  │
+│  { type, repo, branch, status, conclusion }      │
+└────────────────────┬─────────────────────────────┘
+                     │
+                     ▼
+┌──────────────────────────────────────────────────┐
+│  Find Project Agent for repo                     │
+│  Check autonomy level                            │
+└────────────────────┬─────────────────────────────┘
+                     │
+        ┌────────────┼────────────┐
+        ▼            ▼            ▼
+   L0: ignore   L1-L2: notify  L3+: auto-act
+                                  │
+                          ┌───────┴───────┐
+                          ▼               ▼
+                   Build failure?     PR opened?
+                          │               │
+                          ▼               ▼
+                   Spawn Incident   Spawn Review
+                   Agent            Agent
+```
+
+---
+
 ## Next Steps
 
 - [Link a Repository](/docs/guides/link-repository) — Set up webhook auto-configuration
-- [Review PRs Guide](/docs/guides/review-prs) — Auto-review setup
+- [Review PRs Guide](/docs/guides/review-prs) — Auto-review setup with Review Agent
+- [Graduated Autonomy](/docs/commands/autonomy) — Control what agents do automatically
 - [Configuration](/docs/configuration) — `WEBHOOK_BASE_URL` and related env vars

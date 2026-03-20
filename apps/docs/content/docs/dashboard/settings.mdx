@@ -1,0 +1,212 @@
+---
+title: Dashboard Settings
+description: Configure channels, team members, autonomy policies, and general project settings from the dashboard Settings page.
+---
+
+# Dashboard Settings
+
+The Settings page at `/dashboard/settings` is organized into four tabs: **Channels**, **Team**, **Policies**, and **General**. Each tab manages a different aspect of your CodeSpar deployment.
+
+## Channels Tab
+
+The Channels tab displays the status of all configured messaging channels and provides controls for managing connections.
+
+### Channel Cards
+
+Each channel is displayed as a card with the following information:
+
+```
+┌────────────────────────────────────┐
+│ Slack                   Connected  │
+│ Bot: @codespar                     │
+│ Workspace: Acme Corp               │
+│ Connected: 14 days ago             │
+│                                    │
+│ [Reconnect]  [Disconnect]         │
+└────────────────────────────────────┘
+```
+
+| Field | Description |
+|-------|-------------|
+| **Channel name** | Slack, WhatsApp, Discord, or Telegram |
+| **Status** | `Connected` (green), `Disconnected` (red), or `Connecting` (amber) |
+| **Bot name** | The bot's display name in the channel |
+| **Workspace/Group** | The connected workspace, group, or server name |
+| **Connected since** | How long the channel has been active |
+
+### Actions
+
+| Button | Description |
+|--------|-------------|
+| **Reconnect** | Re-establishes the channel connection. Useful when a token has been rotated or the connection was interrupted. |
+| **Disconnect** | Removes the channel configuration. Agents will no longer send or receive messages on this channel. |
+
+### Channel Status Indicators
+
+| Status | Color | Meaning |
+|--------|-------|---------|
+| Connected | Agent Green (`#10B981`) | Channel is active and receiving messages |
+| Disconnected | Critical Red (`#EF4444`) | Channel is configured but not connected |
+| Connecting | Alert Amber (`#F59E0B`) | Connection is being established |
+| Not Configured | Slate (`#6B7280`) | Channel has not been set up yet |
+
+Channels that are not yet configured display a "Configure" button that links to the [Setup page](/docs/dashboard/setup).
+
+## Team Tab
+
+The Team tab manages team members and their roles using Clerk's organization membership system.
+
+### Member List
+
+Each team member is displayed with:
+
+| Field | Description |
+|-------|-------------|
+| **Avatar** | Profile picture from Clerk |
+| **Name** | Full name |
+| **Email** | Email address |
+| **Role** | Organization role (Owner, Admin, Member) |
+| **Joined** | When they joined the organization |
+
+### Roles (RBAC)
+
+CodeSpar uses role-based access control through Clerk Organizations:
+
+| Role | Permissions |
+|------|------------|
+| **Owner** | Full access. Can delete the organization, manage billing, and change any setting. |
+| **Admin** | Can manage agents, approve deploys, change policies, and invite members. Cannot delete the organization. |
+| **Member** | Can view dashboards, trigger tasks, and approve actions (if allowed by policy). Cannot change settings. |
+
+### Inviting Members
+
+To invite a new team member:
+
+1. Click the **"Invite Member"** button
+2. Enter their email address
+3. Select a role (Admin or Member)
+4. Click **"Send Invite"**
+
+The invitation is sent via Clerk's built-in email system. The invited user receives an email with a link to join the organization.
+
+```typescript
+import { useOrganization } from "@clerk/nextjs";
+
+function InviteForm() {
+  const { organization } = useOrganization();
+
+  async function handleInvite(email: string, role: string) {
+    await organization.inviteMember({
+      emailAddress: email,
+      role,
+    });
+  }
+}
+```
+
+### Managing Roles
+
+Organization Owners and Admins can change a member's role by clicking the role dropdown next to their name. Role changes take effect immediately.
+
+## Policies Tab
+
+The Policies tab configures autonomy levels, risk thresholds, and approval requirements.
+
+### Autonomy Level Per Agent
+
+A table lists each agent with its current autonomy level and a control to change it:
+
+| Agent | Current Level | Control |
+|-------|---------------|---------|
+| Project Agent | L2 (Suggest) | Dropdown: L0-L5 |
+| Review Agent | L3 (Auto-Low) | Dropdown: L0-L5 |
+| Deploy Agent | L1 (Notify) | Dropdown: L0-L5 |
+
+Changing the autonomy level sends a `set_autonomy` action to the backend and logs the change in the audit trail.
+
+### Risk Thresholds
+
+Configure what risk levels require approval:
+
+| Setting | Description | Default |
+|---------|-------------|---------|
+| Auto-approve Low risk | Skip approval for low-risk actions | On (at L3+) |
+| Auto-approve Medium risk | Skip approval for medium-risk actions | Off |
+| Always require approval for High | Require approval even at L5 | On |
+| Always require approval for Critical | Require approval even at L5 | On (cannot be disabled) |
+
+### Approval Quorum
+
+Configure how many approvals are needed before an action executes:
+
+| Environment | Quorum | Description |
+|-------------|--------|-------------|
+| Staging | 1 | One team member approval required |
+| Production | 2 | Two team member approvals required |
+
+The quorum values can be adjusted using number inputs. The minimum quorum for production is 1 (cannot be set to 0).
+
+### Self-Approval Blocking
+
+A toggle that controls whether the person who requested an action can also approve it:
+
+- **On (default):** The requester cannot approve their own request
+- **Off:** Any team member can approve, including the requester
+
+This is a security feature to enforce separation of duties.
+
+## General Tab
+
+The General tab contains project-level settings and notification preferences.
+
+### Project Settings
+
+| Setting | Description | Example |
+|---------|-------------|---------|
+| **Project name** | Display name for the project in the dashboard | "CodeSpar Core" |
+| **Webhook URL** | The URL where GitHub sends webhook events | `https://api.codespar.dev/webhooks/github` |
+
+The project name is editable inline. The webhook URL is read-only but includes a "Copy" button.
+
+### Notification Preferences
+
+Toggle switches for email and in-app notifications:
+
+| Notification | Description | Default |
+|-------------|-------------|---------|
+| Build failures | Email when a CI build fails | On |
+| Deploy requests | Email when a deploy needs approval | On |
+| Agent errors | Email when an agent enters error state | On |
+| Daily digest | Daily summary email of all activity | Off |
+| Weekly report | Weekly activity and metrics report | Off |
+
+### Danger Zone
+
+At the bottom of the General tab, a "Danger Zone" section with destructive actions:
+
+| Action | Description | Confirmation |
+|--------|-------------|-------------|
+| **Unlink Repository** | Removes the GitHub repository link and deletes the webhook | Double confirmation required |
+| **Reset Agents** | Restarts all agents and clears their in-memory state | Double confirmation required |
+
+Both actions require typing the project name to confirm.
+
+## API Endpoints
+
+The Settings page interacts with these endpoints:
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `GET /api/channels` | GET | List channel configurations and status |
+| `POST /api/channels/:id/reconnect` | POST | Reconnect a channel |
+| `DELETE /api/channels/:id` | DELETE | Disconnect a channel |
+| `GET /api/agents` | GET | List agents with autonomy levels |
+| `POST /api/agents/:id/action` | POST | Update autonomy level |
+| `GET /api/project` | GET | Get project settings |
+| `PATCH /api/project` | PATCH | Update project settings |
+
+## Next Steps
+
+- [Setup](/docs/dashboard/setup) — initial channel and project configuration
+- [Audit Trail](/docs/dashboard/audit-trail) — review all changes made in settings
+- [Multi-Tenant Guide](/docs/guides/multi-tenant) — configure organizations

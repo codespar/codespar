@@ -1,0 +1,243 @@
+---
+title: CLI Interface
+description: Use CodeSpar from the command line — an interactive REPL for testing, development, and direct agent interaction without configuring external messaging channels.
+---
+
+# CLI Interface
+
+The CLI (Command Line Interface) is a built-in channel that lets you interact with CodeSpar directly from your terminal. It requires no external setup — no Slack app, no Discord bot, no WhatsApp QR code. It is always available and is the fastest way to test commands and develop with CodeSpar.
+
+## When to Use the CLI
+
+| Use Case | Why CLI |
+|----------|---------|
+| **Testing commands** | Instant feedback without switching to a messaging app |
+| **Local development** | Test agent behavior while developing CodeSpar itself |
+| **Debugging** | See raw agent responses without channel formatting |
+| **Quick tasks** | Run a single command without opening Slack/Discord |
+| **CI/CD scripting** | Automate CodeSpar commands in build pipelines |
+
+## Starting the CLI
+
+### From the Development Environment
+
+If you have the CodeSpar repository cloned and built:
+
+```bash
+npm run start
+```
+
+This starts the server with all configured channels, including the CLI. The CLI REPL appears in your terminal after the server starts.
+
+### Direct Execution
+
+You can also start the CLI channel directly:
+
+```bash
+node packages/channels/cli/dist/index.js
+```
+
+### Expected Startup Output
+
+```
+  code<spar> CLI v0.1.0
+  ─────────────────────
+
+  Agent: Project Agent (agent-proj-001)
+  Status: ACTIVE
+  Autonomy: L1 (Notify)
+  Channels: cli
+
+  Type a command or ask a question. Type "exit" to quit.
+
+  codespar>
+```
+
+## Interactive REPL
+
+The CLI provides an interactive REPL (Read-Eval-Print Loop). You type commands and see responses directly in the terminal.
+
+### Basic Commands
+
+All commands work exactly the same as in Slack, WhatsApp, Discord, or Telegram — without the `@codespar` prefix:
+
+```
+codespar> status
+
+Project Status
+──────────────────
+Project: acme/backend-api
+Branch: main
+Last build: passed (5m ago)
+Active agents: 1 (Project Agent)
+Autonomy: L1 (Notify)
+```
+
+```
+codespar> help
+
+Available Commands
+──────────────────
+status      Show project and agent status
+link        Link a GitHub repository
+unlink      Unlink the current repository
+instruct    Execute a coding task
+fix         Fix a bug (alias for instruct)
+review      Review a pull request
+deploy      Deploy to an environment
+approve     Approve a pending action
+reject      Reject a pending action
+autonomy    Set autonomy level (L0-L5)
+agents      List all agents
+memory      Show memory/context stats
+audit       Show recent audit entries
+help        Show this help message
+```
+
+### Linking a Repository
+
+```
+codespar> link codespar/codespar
+
+Repository Linked
+──────────────────
+Repo: codespar/codespar
+Branch: main (default)
+Webhook: configured
+Stars: 1,234
+Last commit: abc1234 (2h ago)
+```
+
+### Executing a Task
+
+```
+codespar> instruct add a health check endpoint at /api/health
+
+Searching for relevant code...
+Found 3 files: src/routes/index.ts, src/server.ts, src/routes/status.ts
+Analyzing with Claude Sonnet...
+
+Task completed:
+- Branch: codespar/task-abc123
+- Files changed:
+  - src/routes/health.ts (new)
+  - src/routes/index.ts (modified)
+- PR: https://github.com/codespar/codespar/pull/15
+```
+
+### Reviewing a PR
+
+```
+codespar> review PR #15
+
+Fetching PR #15...
+Analyzing diff (3 files, +47/-2 lines)...
+
+Review: PR #15 — "Add health check endpoint"
+──────────────────
+Risk: LOW
+Files: 2 changed
+Author: codespar-bot
+
+Summary:
+- New health check endpoint at /api/health
+- Returns server status, uptime, and timestamp
+- Route properly registered in index.ts
+
+Verdict: APPROVE
+No issues found. Clean implementation following existing patterns.
+```
+
+### Setting Autonomy
+
+```
+codespar> autonomy L3
+
+Autonomy Updated
+──────────────────
+Previous: L1 (Notify)
+Current:  L3 (Auto-Low)
+
+At L3, the agent will auto-execute low-risk actions
+(formatting, linting) and notify after completion.
+```
+
+### Viewing Audit Trail
+
+```
+codespar> audit
+
+Recent Events (last 10)
+──────────────────
+● 2m ago   You          command.receive  "instruct add health check"  LOW     SUCCESS
+● 2m ago   task-agent   task.start       "Executing: add health…"     LOW     SUCCESS
+● 1m ago   task-agent   task.complete    "Added health check"         LOW     SUCCESS
+● 1m ago   You          command.receive  "review PR #15"              LOW     SUCCESS
+● 45s ago  review-agent review.complete  "PR #15: Low risk, approve"  LOW     SUCCESS
+```
+
+### Asking Questions (Smart Responses)
+
+```
+codespar> What files were changed in the last task?
+
+The last task (completed 2 minutes ago) changed 2 files:
+
+1. src/routes/health.ts (new) — Health check endpoint handler that
+   returns server status, uptime, and a timestamp.
+
+2. src/routes/index.ts (modified) — Added the health route import
+   and registration.
+
+These changes are in PR #15: https://github.com/codespar/codespar/pull/15
+```
+
+## Differences from Chat Channels
+
+| Aspect | CLI | Chat Channels |
+|--------|-----|---------------|
+| **Prefix** | No prefix needed | `@codespar` prefix required |
+| **Formatting** | Plain text with ASCII formatting | Rich formatting (Slack blocks, Discord embeds) |
+| **Notifications** | Printed to terminal as they arrive | Pushed to the messaging platform |
+| **Multi-user** | Single user | Multiple team members |
+| **Approval flow** | You can approve your own requests | Self-approval blocking applies |
+| **Persistence** | Session ends when you exit | Channels are always connected |
+
+## Exiting
+
+To exit the CLI:
+
+```
+codespar> exit
+
+Goodbye.
+```
+
+Or press `Ctrl+C` at any time.
+
+## Environment Variables
+
+The CLI uses the same environment variables as the rest of CodeSpar. At minimum:
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `ANTHROPIC_API_KEY` | For AI features | Claude API key |
+| `GITHUB_TOKEN` | For repo tasks | GitHub personal access token |
+
+Channel-specific variables (`ENABLE_SLACK`, etc.) are not needed for CLI-only usage.
+
+## Use in Scripts
+
+The CLI can be used non-interactively for scripting:
+
+```bash
+echo "status" | node packages/channels/cli/dist/index.js
+```
+
+This is useful for CI/CD pipelines or cron jobs that need to trigger CodeSpar actions programmatically.
+
+## Next Steps
+
+- [Configure a Project](/docs/guides/configure-project) — full setup guide
+- [Command Reference](/docs/commands) — all available commands
+- [Channel Configuration](/docs/channels) — set up Slack, Discord, WhatsApp, or Telegram

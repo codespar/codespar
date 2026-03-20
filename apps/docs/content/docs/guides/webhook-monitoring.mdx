@@ -1,0 +1,261 @@
+---
+title: Webhook Monitoring
+description: How CodeSpar monitors GitHub webhooks — build failures, PR events, push notifications, and how to configure manual webhooks when auto-config is unavailable.
+---
+
+# Webhook Monitoring
+
+CodeSpar monitors your GitHub repository via webhooks to react to builds, pull requests, and pushes in real time. When a CI build fails, the Incident Agent investigates. When a PR is opened, the Review Agent can auto-review. All of this happens without manual intervention.
+
+## Auto-Configuration
+
+When you link a repository with `@codespar link owner/repo`, CodeSpar automatically creates a GitHub webhook if two conditions are met:
+
+1. **`WEBHOOK_BASE_URL` is set** — the public URL of your CodeSpar instance
+2. **`GITHUB_TOKEN` has `admin:repo_hook` scope** — permission to create webhooks
+
+### What Gets Created
+
+| Setting | Value |
+|---------|-------|
+| **Payload URL** | `{WEBHOOK_BASE_URL}/webhooks/github` |
+| **Content type** | `application/json` |
+| **Events** | `push`, `pull_request`, `workflow_run` |
+| **Active** | `true` |
+
+### Verification
+
+After linking, verify the webhook is active:
+
+```
+@codespar status
+```
+
+```
+Project Status
+──────────────────
+Project: acme/backend-api
+Branch: main
+Webhook: configured
+Last build: passed (5m ago)
+```
+
+You can also check in GitHub at **Settings > Webhooks** for your repository.
+
+## Events Monitored
+
+CodeSpar listens for three types of GitHub webhook events:
+
+### `workflow_run` — CI Builds
+
+Triggered when a GitHub Actions workflow completes (success or failure).
+
+#### On Build Success
+
+The agent sends a brief notification to your connected channels:
+
+```
+Build Passed
+──────────────────
+Workflow: CI
+Branch: main
+Commit: abc1234 — "Add health check endpoint"
+Duration: 2m 15s
+```
+
+At L1+ autonomy, notifications are sent automatically. At L0, the agent stays silent.
+
+#### On Build Failure
+
+The agent activates the **Incident Agent** to investigate:
+
+```
+Build Failed — Investigating
+──────────────────
+Workflow: CI
+Branch: main
+Commit: def5678 — "Update auth middleware"
+Failed step: test
+
+Incident Agent is analyzing the failure...
+```
+
+The Incident Agent then:
+
+1. Fetches the workflow logs
+2. Identifies the failing test or step
+3. Correlates the failure with recent commits
+4. Posts a root cause analysis
+
+```
+Root Cause Analysis
+──────────────────
+Workflow: CI — test step failed
+Error: TypeError: Cannot read property 'email' of null
+File: src/services/user.service.ts:47
+
+Recent changes:
+- def5678 "Update auth middleware" (2m ago) — modified auth/session.ts
+- abc1234 "Add health check" (1h ago) — added routes/health.ts
+
+Likely cause: The auth middleware change in def5678 may have
+broken the user lookup in user.service.ts when the session
+is expired.
+
+Suggested fix: Check for null user in user.service.ts before
+accessing .email property.
+```
+
+At L3+ autonomy, the Incident Agent may automatically create a fix PR using the Dev Agent.
+
+### `pull_request` — Pull Requests
+
+Triggered when a PR is opened, updated, or merged.
+
+#### PR Opened
+
+At L3+ autonomy, the **Review Agent** automatically reviews the PR:
+
+```
+Auto-Review: PR #42
+──────────────────
+Title: Add rate limiting to API endpoints
+Author: sarah-chen
+Risk: MEDIUM
+Files changed: 3
+
+Review:
+- rate-limiter.ts: Good implementation, uses sliding window.
+- routes/api.ts: Consider adding rate limit headers to responses.
+- test/rate-limit.test.ts: Missing test for burst requests.
+
+Overall: Approve with suggestions. 2 non-blocking comments.
+```
+
+At L1-L2, the agent notifies the team about the new PR without auto-reviewing.
+
+#### PR Merged
+
+A notification is sent to connected channels:
+
+```
+PR Merged
+──────────────────
+PR #42: "Add rate limiting to API endpoints"
+Author: sarah-chen
+Merged by: marcus-lee
+Branch: feature/rate-limiting → main
+```
+
+### `push` — Commits
+
+Triggered when commits are pushed to the repository.
+
+```
+Push: 3 commits to main
+──────────────────
+- abc1234 "Add health check endpoint" (Sarah Chen)
+- def5678 "Fix typo in README" (Marcus Lee)
+- ghi9012 "Update dependencies" (dependabot)
+```
+
+Push notifications are concise and do not trigger any agent actions beyond the notification.
+
+## What Triggers What
+
+| Event | Condition | Agent Action |
+|-------|-----------|-------------|
+| Build failure | Always | Incident Agent investigates, posts root cause |
+| Build success | L1+ autonomy | Notification to channels |
+| PR opened | L3+ autonomy | Review Agent auto-reviews |
+| PR opened | L1-L2 autonomy | Notification only |
+| PR merged | L1+ autonomy | Notification to channels |
+| Push | L1+ autonomy | Commit count notification |
+
+## Manual Webhook Setup
+
+If auto-configuration is not available (missing `WEBHOOK_BASE_URL` or insufficient token permissions), you can set up the webhook manually.
+
+### Step 1: Go to Repository Settings
+
+Navigate to your repository on GitHub and click **Settings > Webhooks > Add webhook**.
+
+### Step 2: Configure the Webhook
+
+| Field | Value |
+|-------|-------|
+| **Payload URL** | `https://your-codespar-instance.com/webhooks/github` |
+| **Content type** | `application/json` |
+| **Secret** | (optional) A shared secret for request verification |
+
+### Step 3: Select Events
+
+Choose **"Let me select individual events"** and check:
+
+- **Pushes** — commit notifications
+- **Pull requests** — PR opened, updated, merged events
+- **Workflow runs** — CI build completion events
+
+### Step 4: Activate
+
+Ensure **"Active"** is checked, then click **"Add webhook"**.
+
+### Step 5: Verify
+
+Push a commit or open a PR and check that your CodeSpar instance receives the webhook. You can monitor deliveries in GitHub at **Settings > Webhooks > Recent Deliveries**.
+
+If deliveries show errors:
+
+- **502/503:** Your CodeSpar instance may be down or unreachable
+- **404:** Verify the payload URL is correct (should end with `/webhooks/github`)
+- **Timeout:** Ensure your instance can respond within GitHub's 10-second timeout
+
+## Webhook Security
+
+### Signature Verification
+
+If you set a webhook secret in GitHub, CodeSpar will verify the `X-Hub-Signature-256` header on each delivery. This prevents spoofed webhook events.
+
+Configure the secret via environment variable:
+
+```bash
+GITHUB_WEBHOOK_SECRET=your-secret-here
+```
+
+### IP Filtering
+
+For additional security, you can restrict incoming webhooks to [GitHub's IP ranges](https://api.github.com/meta). This is typically done at the network/firewall level.
+
+## Troubleshooting
+
+### No Notifications After Push
+
+1. Check webhook deliveries in GitHub (**Settings > Webhooks > Recent Deliveries**)
+2. Verify your CodeSpar instance is publicly accessible
+3. Confirm the channel is connected and agent autonomy is L1+
+4. Check server logs for webhook processing errors
+
+### Incident Agent Not Investigating Failures
+
+1. Verify `ANTHROPIC_API_KEY` is configured (required for root cause analysis)
+2. Check that the webhook event is `workflow_run` with `conclusion: failure`
+3. Ensure the agent is not in a paused or error state
+
+### Duplicate Notifications
+
+GitHub may retry webhook deliveries if the first response times out. Ensure your CodeSpar instance responds to webhooks within 10 seconds. The webhook handler is idempotent — duplicate deliveries are detected and ignored.
+
+## Environment Variables
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `WEBHOOK_BASE_URL` | For auto-config | Public URL of your CodeSpar instance |
+| `GITHUB_TOKEN` | Yes | Token with `repo` and optionally `admin:repo_hook` scope |
+| `GITHUB_WEBHOOK_SECRET` | No | Shared secret for webhook signature verification |
+
+## Next Steps
+
+- [Link a Repository](/docs/guides/link-repository) — set up repository linking
+- [Incident Agent](/docs/agents/incident-agent) — how build failure investigation works
+- [Review Agent](/docs/agents/review-agent) — automated PR review
+- [Webhook API](/docs/api/webhooks) — webhook endpoint reference

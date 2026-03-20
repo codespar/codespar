@@ -1,11 +1,23 @@
 ---
 title: Project API
-description: API endpoints for linking GitHub repositories, listing projects, creating projects with auto-webhook configuration, and removing projects.
+description: Complete API reference for managing projects — checking linked repositories, linking repos with auto-webhook configuration, listing and creating projects with org scoping, and deleting projects.
 ---
 
 # Project API
 
 Manage project links between CodeSpar agents and GitHub repositories. When a repository is linked, CodeSpar automatically configures webhooks (if `WEBHOOK_BASE_URL` is set) to receive push, pull request, and workflow events.
+
+## Endpoints Overview
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/project?agentId=<id>` | Check if an agent has a linked project |
+| `POST` | `/api/project/link` | Link a repository to an agent |
+| `GET` | `/api/projects` | List all projects (scoped by org) |
+| `POST` | `/api/projects` | Create a new project with agent |
+| `DELETE` | `/api/projects/:id` | Delete a project and its agent |
+
+---
 
 ## Check Linked Project
 
@@ -14,6 +26,12 @@ Check which repository is linked to a specific agent.
 ```
 GET /api/project?agentId=<agent-id>
 ```
+
+### Query Parameters
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `agentId` | string | Yes | The agent identifier to check |
 
 ### Request
 
@@ -26,7 +44,7 @@ curl "http://localhost:3000/api/project?agentId=agent-proj-abc123"
 ```json
 {
   "linked": true,
-  "project": {
+  "config": {
     "id": "proj-001",
     "name": "codespar",
     "repo": "codespar/codespar",
@@ -43,24 +61,25 @@ curl "http://localhost:3000/api/project?agentId=agent-proj-abc123"
 
 ```json
 {
-  "linked": false,
-  "project": null
+  "linked": false
 }
 ```
 
-### Response Schema
+### `ProjectConfig` Type
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `linked` | boolean | Whether a repo is linked |
-| `project.id` | string | Project identifier |
-| `project.name` | string | Project display name (derived from repo) |
-| `project.repo` | string | GitHub repo in `owner/name` format |
-| `project.repoUrl` | string | Full GitHub URL |
-| `project.defaultBranch` | string | Default branch (e.g., `main`) |
-| `project.webhookConfigured` | boolean | Whether the GitHub webhook was auto-configured |
-| `project.linkedAt` | string | ISO 8601 timestamp of when the link was created |
-| `project.linkedBy` | string | Identity of who linked the repo |
+```typescript
+interface ProjectConfig {
+  id: string;              // Unique project identifier (e.g., "proj-001")
+  name: string;            // Display name, derived from repo name
+  repo: string;            // GitHub repo in "owner/name" format
+  repoUrl: string;         // Full GitHub URL
+  defaultBranch: string;   // Default branch (e.g., "main", "master")
+  webhookConfigured: boolean; // Whether GitHub webhook was auto-configured
+  webhookId?: number;      // GitHub webhook ID (if auto-configured)
+  linkedAt: string;        // ISO 8601 timestamp of when the link was created
+  linkedBy: string;        // Identity of who linked (e.g., "slack:U1234ABCD")
+}
+```
 
 ---
 
@@ -77,7 +96,7 @@ POST /api/project/link
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `agentId` | string | Yes | Agent to link the repo to |
-| `repo` | string | Yes | GitHub repo (`owner/name` or full URL) |
+| `repo` | string | Yes | GitHub repo in `owner/name` format, or a full GitHub URL |
 
 ### Request
 
@@ -105,20 +124,38 @@ curl -X POST http://localhost:3000/api/project/link \
 
 ```json
 {
-  "id": "proj-001",
-  "name": "codespar",
-  "repo": "codespar/codespar",
-  "repoUrl": "https://github.com/codespar/codespar",
-  "defaultBranch": "main",
-  "webhookConfigured": true,
-  "webhookId": 123456789,
-  "linkedAt": "2024-01-15T13:30:00Z"
+  "success": true,
+  "config": {
+    "id": "proj-001",
+    "name": "codespar",
+    "repo": "codespar/codespar",
+    "repoUrl": "https://github.com/codespar/codespar",
+    "defaultBranch": "main",
+    "webhookConfigured": true,
+    "webhookId": 123456789,
+    "linkedAt": "2024-01-15T13:30:00Z",
+    "linkedBy": "api"
+  }
 }
 ```
 
+### What Happens During Linking
+
+1. CodeSpar validates the repository exists and `GITHUB_TOKEN` has access
+2. The repo's default branch is detected
+3. A project configuration record is created
+4. If `WEBHOOK_BASE_URL` is set and the token has `admin:repo_hook` scope, a GitHub webhook is auto-configured to send `push`, `pull_request`, `workflow_run`, and `check_run` events to `{WEBHOOK_BASE_URL}/webhooks/github`
+5. The agent is associated with the project
+
 ### Error Responses
 
-**Repository not found or no access:**
+**Repository not found or no access (404):**
+
+```bash
+curl -X POST http://localhost:3000/api/project/link \
+  -H "Content-Type: application/json" \
+  -d '{"agentId": "agent-001", "repo": "nonexistent/repo"}'
+```
 
 ```json
 {
@@ -128,7 +165,7 @@ curl -X POST http://localhost:3000/api/project/link \
 }
 ```
 
-**Already linked:**
+**Already linked (409):**
 
 ```json
 {
@@ -138,7 +175,7 @@ curl -X POST http://localhost:3000/api/project/link \
 }
 ```
 
-**Missing GitHub token:**
+**Missing GitHub token (400):**
 
 ```json
 {
@@ -152,21 +189,27 @@ curl -X POST http://localhost:3000/api/project/link \
 
 ## List All Projects
 
-Retrieve all projects, optionally scoped to an organization.
+Retrieve all projects. When the `x-org-id` header is provided, results are scoped to that organization.
 
 ```
 GET /api/projects
 ```
 
+### Headers
+
+| Header | Required | Description |
+|--------|----------|-------------|
+| `x-org-id` | No | Organization ID to scope results. Without this header, all projects across all orgs are returned. |
+
 ### Request
 
 ```bash
+# All projects
 curl http://localhost:3000/api/projects
 ```
 
-With multi-tenant scoping:
-
 ```bash
+# Projects scoped to an organization
 curl http://localhost:3000/api/projects \
   -H "x-org-id: org-acme-corp"
 ```
@@ -174,32 +217,51 @@ curl http://localhost:3000/api/projects \
 ### Response
 
 ```json
-[
-  {
-    "id": "proj-001",
-    "name": "codespar",
-    "repo": "codespar/codespar",
-    "repoUrl": "https://github.com/codespar/codespar",
-    "defaultBranch": "main",
-    "webhookConfigured": true,
-    "agentId": "agent-proj-abc123",
-    "agentStatus": "ACTIVE",
-    "orgId": "org-acme-corp",
-    "createdAt": "2024-01-15T13:30:00Z"
-  },
-  {
-    "id": "proj-002",
-    "name": "frontend",
-    "repo": "acme/frontend",
-    "repoUrl": "https://github.com/acme/frontend",
-    "defaultBranch": "main",
-    "webhookConfigured": true,
-    "agentId": "agent-proj-def456",
-    "agentStatus": "IDLE",
-    "orgId": "org-acme-corp",
-    "createdAt": "2024-01-16T09:00:00Z"
-  }
-]
+{
+  "projects": [
+    {
+      "id": "proj-001",
+      "name": "codespar",
+      "repo": "codespar/codespar",
+      "repoUrl": "https://github.com/codespar/codespar",
+      "defaultBranch": "main",
+      "webhookConfigured": true,
+      "agentId": "agent-proj-abc123",
+      "agentStatus": "ACTIVE",
+      "orgId": "org-acme-corp",
+      "createdAt": "2024-01-15T13:30:00Z"
+    },
+    {
+      "id": "proj-002",
+      "name": "frontend",
+      "repo": "acme/frontend",
+      "repoUrl": "https://github.com/acme/frontend",
+      "defaultBranch": "main",
+      "webhookConfigured": true,
+      "agentId": "agent-proj-def456",
+      "agentStatus": "IDLE",
+      "orgId": "org-acme-corp",
+      "createdAt": "2024-01-16T09:00:00Z"
+    }
+  ]
+}
+```
+
+### `ProjectListEntry` Type
+
+```typescript
+interface ProjectListEntry {
+  id: string;                 // Unique project identifier
+  name: string;               // Display name
+  repo: string;               // GitHub repo "owner/name"
+  repoUrl: string;            // Full GitHub URL
+  defaultBranch: string;      // Default branch name
+  webhookConfigured: boolean; // Whether webhook is set up
+  agentId: string;            // Associated agent ID
+  agentStatus: string;        // Agent state: "ACTIVE", "IDLE", "ERROR"
+  orgId?: string;             // Organization ID (if multi-tenant)
+  createdAt: string;          // ISO 8601 creation timestamp
+}
 ```
 
 ---
@@ -212,14 +274,18 @@ Create a new project with an associated agent. If `WEBHOOK_BASE_URL` and `GITHUB
 POST /api/projects
 ```
 
+### Headers
+
+| Header | Required | Description |
+|--------|----------|-------------|
+| `x-org-id` | No | Organization to create the project in |
+
 ### Request Body
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `name` | string | Yes | Display name for the project |
-| `repo` | string | Yes | GitHub repo (`owner/name`) |
-| `orgId` | string | No | Organization ID (for multi-tenant) |
-| `autonomyLevel` | number | No | Initial autonomy level (default: 1) |
+| `repo` | string | Yes | GitHub repo in `owner/name` format |
+| `name` | string | No | Display name for the project. If omitted, derived from the repo name. |
 
 ### Request
 
@@ -228,9 +294,18 @@ curl -X POST http://localhost:3000/api/projects \
   -H "Content-Type: application/json" \
   -H "x-org-id: org-acme-corp" \
   -d '{
-    "name": "API Service",
     "repo": "acme/api-service",
-    "autonomyLevel": 2
+    "name": "API Service"
+  }'
+```
+
+Minimal request (name auto-derived from repo):
+
+```bash
+curl -X POST http://localhost:3000/api/projects \
+  -H "Content-Type: application/json" \
+  -d '{
+    "repo": "acme/api-service"
   }'
 ```
 
@@ -239,29 +314,43 @@ curl -X POST http://localhost:3000/api/projects \
 ```json
 {
   "id": "proj-003",
-  "name": "API Service",
-  "repo": "acme/api-service",
-  "repoUrl": "https://github.com/acme/api-service",
-  "defaultBranch": "main",
-  "webhookConfigured": true,
-  "webhookId": 987654321,
   "agentId": "agent-proj-ghi789",
-  "agentStatus": "ACTIVE",
-  "autonomyLevel": 2,
+  "repo": "acme/api-service",
   "orgId": "org-acme-corp",
-  "createdAt": "2024-01-17T10:00:00Z"
+  "webhookUrl": "https://codespar.example.com/webhooks/github",
+  "webhookConfigured": true
 }
 ```
+
+### What Happens During Creation
+
+1. CodeSpar validates the repository exists and is accessible
+2. A new Project Agent is spawned for the project
+3. A project record is created (scoped to the org if `x-org-id` is provided)
+4. If `WEBHOOK_BASE_URL` is set, a webhook is auto-configured on the GitHub repository
+5. The agent starts monitoring the repository based on its autonomy level
 
 ---
 
 ## Delete Project
 
-Remove a project and its associated agent. This also removes the GitHub webhook if one was configured.
+Remove a project, its associated agent, and the GitHub webhook (if one was configured).
 
 ```
 DELETE /api/projects/:id
 ```
+
+### Path Parameters
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `id` | string | Project ID to delete |
+
+### Headers
+
+| Header | Required | Description |
+|--------|----------|-------------|
+| `x-org-id` | No | Organization scope (ensures you can only delete projects in your org) |
 
 ### Request
 
@@ -269,7 +358,7 @@ DELETE /api/projects/:id
 curl -X DELETE http://localhost:3000/api/projects/proj-003
 ```
 
-With multi-tenant scoping:
+With organization scoping:
 
 ```bash
 curl -X DELETE http://localhost:3000/api/projects/proj-003 \
@@ -280,12 +369,21 @@ curl -X DELETE http://localhost:3000/api/projects/proj-003 \
 
 ```json
 {
-  "deleted": true,
-  "id": "proj-003",
-  "webhookRemoved": true,
-  "agentTerminated": true
+  "success": true,
+  "removed": {
+    "id": "proj-003",
+    "agentTerminated": true,
+    "webhookRemoved": true
+  }
 }
 ```
+
+### What Happens During Deletion
+
+1. The associated Project Agent is terminated (and any ephemeral agents it spawned)
+2. The GitHub webhook is removed from the repository (if it was auto-configured)
+3. The project record is deleted from storage
+4. An audit log entry is created for the deletion
 
 ### Error Response
 
@@ -297,8 +395,11 @@ curl -X DELETE http://localhost:3000/api/projects/proj-003 \
 }
 ```
 
+---
+
 ## Next Steps
 
 - [Agent API](/docs/api/agents) — Manage agent lifecycle
 - [Webhook API](/docs/api/webhooks) — GitHub webhook processing
+- [Channel API](/docs/api/channels) — Manage messaging channels
 - [Link a Repository Guide](/docs/guides/link-repository) — Step-by-step guide

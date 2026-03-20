@@ -1,11 +1,11 @@
 ---
 title: Task Agent
-description: The ephemeral agent that executes coding tasks — reading code, generating changes with Claude, creating branches, and opening pull requests.
+description: The ephemeral agent that executes coding tasks — searching code, reading files, generating changes with Claude, parsing structured output, creating branches, and opening pull requests.
 ---
 
 # Task Agent
 
-The Task Agent is the **coding workhorse** of CodeSpar. It's an ephemeral agent spawned whenever a user requests a code change — from fixing a bug to adding a feature. It reads your codebase, generates changes using Claude, creates a branch, commits the changes, and opens a pull request.
+The Task Agent is the **coding workhorse** of CodeSpar. It is an ephemeral agent spawned whenever a user requests a code change — from fixing a bug to adding a feature. It reads your codebase, generates changes using Claude, creates a branch, commits the changes, and opens a pull request.
 
 ## Characteristics
 
@@ -14,6 +14,7 @@ The Task Agent is the **coding workhorse** of CodeSpar. It's an ephemeral agent 
 | **Lifecycle** | Ephemeral — spawned per task, terminates on completion |
 | **Spawned by** | Project Agent, on `fix`, `implement`, `refactor` commands |
 | **AI Model** | Claude Sonnet (configurable via `TASK_MODEL`) |
+| **Default Model** | `claude-sonnet-4-20250514` |
 | **Color** | Agent Green (`#10B981`) |
 
 ## ClaudeBridge
@@ -49,7 +50,7 @@ class ClaudeBridge {
 
 ### Generic Mode: `execute()`
 
-For tasks that don't require repository access — answering questions, generating snippets, explaining concepts:
+For tasks that do not require repository access — answering questions, generating snippets, explaining concepts:
 
 ```typescript
 async execute(task: string): Promise<AgentResponse> {
@@ -58,112 +59,236 @@ async execute(task: string): Promise<AgentResponse> {
 }
 ```
 
-This mode is used when no repository is linked or the task doesn't involve code changes.
+This mode is used when no repository is linked or the task does not involve code changes.
 
 ### Repository Mode: `executeWithRepo()`
 
-For tasks that modify code in a linked GitHub repository. This is the primary mode and follows a structured flow:
+For tasks that modify code in a linked GitHub repository. This is the primary mode and follows a structured, six-step flow. The rest of this page documents this flow in detail.
 
-```typescript
-async executeWithRepo(task: string, repo: RepoConfig): Promise<AgentResponse> {
-  // 1. Search for relevant code
-  const relevantFiles = await this.searchCode(repo, task);
+---
 
-  // 2. Read file contents
-  const fileContents = await this.readFiles(repo, relevantFiles);
+## The `executeWithRepo` Flow — Step by Step
 
-  // 3. Send to Claude with full context
-  const changes = await this.claudeBridge.generateChanges({
-    task,
-    files: fileContents,
-    repoStructure: await this.getRepoTree(repo),
-  });
+When a user sends a command like `@codespar fix the auth timeout in login.ts`, the Task Agent executes the following pipeline:
 
-  // 4. Create a branch
-  const branch = await this.createBranch(repo, task);
-
-  // 5. Commit changes
-  await this.commitChanges(repo, branch, changes);
-
-  // 6. Open a pull request
-  const pr = await this.openPullRequest(repo, branch, task, changes);
-
-  return {
-    message: formatTaskResult(pr, changes),
-  };
-}
+```
+Search Code → Read Files → Claude Generates Changes → Parse ===FILE:=== Blocks → Create Branch → Commit → Open PR
 ```
 
-### Step-by-Step: `executeWithRepo` Flow
+### Step 1: Search for Relevant Code
 
-#### Step 1: Search Code
+The agent searches the repository for files relevant to the task using keyword extraction and the GitHub Code Search API.
 
-The agent searches the repository for files relevant to the task. It uses GitHub's code search API and filename pattern matching:
+#### Keyword Extraction
+
+Keywords are extracted from the task instruction by removing common stop words and keeping significant terms:
+
+```
+Input:  "fix the auth timeout in login.ts — sessions expire too fast"
+Keywords: ["auth", "timeout", "login", "sessions", "expire"]
+```
+
+These keywords are joined and passed to GitHub's code search:
 
 ```typescript
 async searchCode(repo: RepoConfig, task: string): Promise<string[]> {
-  // Extract keywords from the task description
   const keywords = extractKeywords(task);
 
-  // Search via GitHub API
   const results = await this.github.searchCode({
     query: `${keywords.join("+")} repo:${repo.owner}/${repo.name}`,
   });
 
-  // Also check common patterns (test files, configs)
-  const related = inferRelatedFiles(results, task);
-
-  return [...results, ...related];
+  // Take the top 5 most relevant files
+  return results.slice(0, 5);
 }
 ```
 
-#### Step 2: Read Files
+#### File Selection Rules
 
-Fetches the full content of relevant files via the GitHub API:
+- **Maximum files:** 5 files are selected from search results
+- **Maximum size per file:** 20KB each (files larger than 20KB are truncated or skipped)
+- **Priority:** Files that match more keywords rank higher
+
+#### Fallback: File Tree Search
+
+If the GitHub Code Search API returns no results (e.g., the keywords are too generic, or the repository is small/new), the agent falls back to using the repository file tree:
+
+```typescript
+async searchCodeFallback(repo: RepoConfig): Promise<string[]> {
+  const tree = await this.github.getTree(repo.owner, repo.name);
+
+  // Filter for code files only
+  const codeFiles = tree.filter((file) =>
+    /\.(ts|js|tsx|jsx|py|go|rs|java|rb|php)$/.test(file.path)
+  );
+
+  // Return up to 5 files, prioritizing src/ directory
+  return codeFiles
+    .sort((a, b) => {
+      const aInSrc = a.path.startsWith("src/") ? 0 : 1;
+      const bInSrc = b.path.startsWith("src/") ? 0 : 1;
+      return aInSrc - bInSrc;
+    })
+    .slice(0, 5)
+    .map((f) => f.path);
+}
+```
+
+The fallback looks for `.ts`, `.js`, `.tsx`, `.jsx`, `.py`, `.go`, `.rs`, `.java`, `.rb`, and `.php` files, prioritizing files in the `src/` directory.
+
+### Step 2: Read File Contents
+
+Once relevant files are identified, the agent fetches their full content via the GitHub API:
 
 ```typescript
 async readFiles(repo: RepoConfig, paths: string[]): Promise<FileContent[]> {
   return Promise.all(
-    paths.map(async (path) => ({
-      path,
-      content: await this.github.getFileContent(repo.owner, repo.name, path),
-    }))
+    paths.map(async (path) => {
+      const content = await this.github.getFileContent(
+        repo.owner,
+        repo.name,
+        path
+      );
+      // Truncate to 20KB to stay within context limits
+      return {
+        path,
+        content: content.slice(0, 20 * 1024),
+      };
+    })
   );
 }
 ```
 
-#### Step 3: Generate Changes with Claude
+Each file is capped at 20KB. For files near or over this limit, the content is truncated with a comment indicating the truncation.
 
-Sends the task description and file contents to Claude, which returns structured code changes:
+### Step 3: Generate Changes with Claude
+
+The agent constructs a system prompt and sends it to Claude along with the task description and file contents.
+
+#### System Prompt Format
+
+The system prompt tells Claude how to format its response using the `===FILE:===` block convention:
+
+```
+You are a senior software engineer. You will receive a task and the contents of
+relevant source files from a repository.
+
+Your job is to implement the requested changes. For each file you modify or create,
+output the COMPLETE file content wrapped in the following format:
+
+===FILE: path/to/file.ts===
+// complete file content here
+===END===
+
+Rules:
+- Output the COMPLETE file content, not just the diff
+- Include ALL files that need to be modified
+- If creating a new file, use the full path
+- Do not include files that are not modified
+- After all ===FILE:=== blocks, write a brief summary of changes
+```
+
+#### User Prompt Format
+
+The user prompt includes the task and all file contents:
+
+```
+Task: fix the auth timeout in login.ts — sessions expire too fast
+
+Repository: codespar/codespar
+Branch: main
+
+=== File: src/auth/login.ts ===
+import { createSession } from './session';
+// ... full file content ...
+
+=== File: src/auth/session.ts ===
+export function createSession(user: User) {
+// ... full file content ...
+
+=== File: src/config/auth.config.ts ===
+export const AUTH_CONFIG = {
+// ... full file content ...
+
+Please implement the requested changes.
+```
+
+#### Claude's Response
+
+Claude returns one or more `===FILE:===` blocks with the complete modified file contents:
+
+```
+I've identified the issue. The session timeout is set to 30 seconds in the auth
+config, which is far too short. I've increased it to 2 hours and added a session
+refresh mechanism.
+
+===FILE: src/config/auth.config.ts===
+export const AUTH_CONFIG = {
+  sessionTimeout: 7200000, // 2 hours in milliseconds (was 30000)
+  refreshWindow: 900000,   // Refresh if less than 15 minutes remaining
+  maxSessionAge: 86400000, // Hard cap at 24 hours
+};
+===END===
+
+===FILE: src/auth/session.ts===
+import { AUTH_CONFIG } from '../config/auth.config';
+
+export function createSession(user: User) {
+  return {
+    userId: user.id,
+    createdAt: Date.now(),
+    expiresAt: Date.now() + AUTH_CONFIG.sessionTimeout,
+  };
+}
+
+export function shouldRefreshSession(session: Session): boolean {
+  const timeRemaining = session.expiresAt - Date.now();
+  return timeRemaining < AUTH_CONFIG.refreshWindow;
+}
+===END===
+```
+
+### Step 4: Parse `===FILE:===` Blocks
+
+The agent parses Claude's response to extract file paths and contents using a regex:
 
 ```typescript
-// Claude receives:
-// - The task description ("fix the login timeout bug")
-// - Full contents of relevant files
-// - Repository structure (tree of files)
-// - Project conventions (from .codespar config if present)
+function parseCodeChanges(response: string): ParsedFile[] {
+  const regex = /===FILE:\s*(.+?)===\n([\s\S]*?)===END===/g;
+  const files: ParsedFile[] = [];
 
-// Claude returns structured changes:
-interface CodeChanges {
-  files: Array<{
-    path: string;
-    action: "create" | "modify" | "delete";
-    content: string;
-  }>;
-  summary: string;
-  reasoning: string;
+  let match;
+  while ((match = regex.exec(response)) !== null) {
+    files.push({
+      path: match[1].trim(),
+      content: match[2].trimEnd(),
+    });
+  }
+
+  return files;
 }
 ```
 
-#### Step 4: Create Branch
+The regex `/===FILE:\s*(.+?)===\n([\s\S]*?)===END===/g` captures:
+- **Group 1:** The file path (e.g., `src/config/auth.config.ts`)
+- **Group 2:** The complete file content between the `===FILE:===` and `===END===` markers
 
-Creates a new branch from the default branch:
+If Claude's response contains no `===FILE:===` blocks (e.g., it responded with an explanation instead of code), the agent reports that no code changes were generated.
+
+### Step 5: Create Branch and Commit
+
+The agent creates a new branch from the repository's default branch:
 
 ```typescript
-async createBranch(repo: RepoConfig, task: string): Promise<string> {
-  const branchName = generateBranchName(task);
-  // e.g., "fix/auth-timeout" or "feat/add-retry-logic"
+async createBranchAndCommit(
+  repo: RepoConfig,
+  taskId: string,
+  files: ParsedFile[],
+  summary: string
+): Promise<string> {
+  const branchName = `codespar/${taskId}`;
 
+  // Get the SHA of the default branch
   const defaultBranch = await this.github.getDefaultBranch(
     repo.owner,
     repo.name
@@ -174,56 +299,140 @@ async createBranch(repo: RepoConfig, task: string): Promise<string> {
     defaultBranch
   );
 
-  await this.github.createBranch(repo.owner, repo.name, branchName, sha);
+  // Create the branch
+  await this.github.createRef(
+    repo.owner,
+    repo.name,
+    `refs/heads/${branchName}`,
+    sha
+  );
 
-  return branchName;
-}
-```
-
-#### Step 5: Commit Changes
-
-Commits all generated changes to the new branch:
-
-```typescript
-async commitChanges(
-  repo: RepoConfig,
-  branch: string,
-  changes: CodeChanges
-): Promise<void> {
-  for (const file of changes.files) {
+  // Commit each file
+  for (const file of files) {
     await this.github.createOrUpdateFile(
       repo.owner,
       repo.name,
       file.path,
       file.content,
-      `${changes.summary}\n\nGenerated by CodeSpar Task Agent`,
-      branch
+      `${summary}\n\nGenerated by CodeSpar Task Agent`,
+      branchName
     );
   }
+
+  return branchName;
 }
 ```
 
-#### Step 6: Open Pull Request
+#### Branch Naming Convention
 
-Creates a PR with a detailed description:
+Branches are named `codespar/<taskId>`, where `<taskId>` is the unique identifier assigned to the task when it is created. Examples:
+
+```
+codespar/task-a1b2c3d4
+codespar/task-x9y8z7w6
+```
+
+This naming convention makes it easy to identify CodeSpar-generated branches and clean them up after merge.
+
+### Step 6: Open Pull Request
+
+The agent creates a pull request with a detailed description:
 
 ```typescript
 async openPullRequest(
   repo: RepoConfig,
   branch: string,
   task: string,
-  changes: CodeChanges
+  files: ParsedFile[],
+  summary: string
 ): Promise<PullRequest> {
+  const body = [
+    `## Task`,
+    `> ${task}`,
+    ``,
+    `## Changes`,
+    summary,
+    ``,
+    `## Files Modified`,
+    ...files.map((f) => `- \`${f.path}\``),
+    ``,
+    `---`,
+    `*Generated by [CodeSpar](https://codespar.com) Task Agent*`,
+  ].join("\n");
+
   return this.github.createPullRequest({
     owner: repo.owner,
     repo: repo.name,
-    title: changes.summary,
-    body: formatPRBody(task, changes),
+    title: summary,
+    body,
     head: branch,
     base: await this.github.getDefaultBranch(repo.owner, repo.name),
   });
 }
 ```
+
+The PR description includes:
+- The original task instruction (as a quote block)
+- A summary of changes (generated by Claude)
+- A list of all modified files
+- Attribution to CodeSpar
+
+---
+
+## Complete Flow Diagram
+
+```
+┌──────────────────────────────────────────────────┐
+│  User: @codespar fix auth timeout in login.ts    │
+└────────────────────┬─────────────────────────────┘
+                     │
+                     ▼
+┌──────────────────────────────────────────────────┐
+│  Step 1: Search Code                             │
+│  Extract keywords: [auth, timeout, login]        │
+│  GitHub Code Search → top 5 files                │
+│  Fallback: file tree (.ts/.js/.tsx files)        │
+└────────────────────┬─────────────────────────────┘
+                     │
+                     ▼
+┌──────────────────────────────────────────────────┐
+│  Step 2: Read Files                              │
+│  Fetch content via GitHub API                    │
+│  Cap at 20KB per file                            │
+└────────────────────┬─────────────────────────────┘
+                     │
+                     ▼
+┌──────────────────────────────────────────────────┐
+│  Step 3: Claude Generates Changes                │
+│  System prompt: ===FILE:=== format instructions  │
+│  User prompt: task + file contents               │
+│  Model: TASK_MODEL (default claude-sonnet)       │
+└────────────────────┬─────────────────────────────┘
+                     │
+                     ▼
+┌──────────────────────────────────────────────────┐
+│  Step 4: Parse ===FILE:=== Blocks                │
+│  Regex: /===FILE:\s*(.+?)===\n([\s\S]*?)===END===/g │
+│  Extract: file path + complete content           │
+└────────────────────┬─────────────────────────────┘
+                     │
+                     ▼
+┌──────────────────────────────────────────────────┐
+│  Step 5: Create Branch + Commit                  │
+│  Branch: codespar/<taskId>                       │
+│  Commit each file to the branch                  │
+└────────────────────┬─────────────────────────────┘
+                     │
+                     ▼
+┌──────────────────────────────────────────────────┐
+│  Step 6: Open Pull Request                       │
+│  Title: summary from Claude                      │
+│  Body: task, changes, file list                  │
+│  Base: default branch (main)                     │
+└──────────────────────────────────────────────────┘
+```
+
+---
 
 ## Example Interaction
 
@@ -239,19 +448,21 @@ CodeSpar: 🔍 Searching for auth-related code...
           🤖 Analyzing with Claude Sonnet...
 
           ✅ Fix ready:
-          → Branch: fix/auth-session-timeout
-          → PR #87: Increase session timeout from 30s to 120s
+          → Branch: codespar/task-a1b2c3d4
+          → PR #87: Increase session timeout and add refresh logic
           → Files changed: 2
-            • src/auth/login.ts (line 47: timeout 30000 → 120000)
-            • src/auth/session.ts (line 12: added session refresh logic)
+            • src/config/auth.config.ts (timeout 30s → 2h)
+            • src/auth/session.ts (added session refresh logic)
           → Risk: low
 
           Review PR: https://github.com/org/repo/pull/87
 ```
 
+---
+
 ## Simulation Mode
 
-When no Anthropic API key is configured (`ANTHROPIC_API_KEY` is not set), the Task Agent falls back to **simulation mode**. It goes through the same flow but returns a simulated response instead of calling Claude:
+When no Anthropic API key is configured (`ANTHROPIC_API_KEY` is not set), the Task Agent falls back to **simulation mode**. It goes through the same flow — searching code, reading files, creating branches, opening PRs — but returns simulated code changes instead of calling Claude:
 
 ```typescript
 async generateChanges(context: TaskContext): Promise<CodeChanges> {
@@ -268,26 +479,52 @@ async generateChanges(context: TaskContext): Promise<CodeChanges> {
 }
 ```
 
-This is useful for testing the full flow (branch creation, PR opening) without incurring API costs.
+Simulation mode is useful for:
+- **Testing the full flow** (branch creation, PR opening) without incurring API costs
+- **Development and debugging** of the Task Agent itself
+- **CI/CD pipelines** that need to validate the integration without real API calls
+
+In simulation mode, branches and PRs are still created on GitHub (if `GITHUB_TOKEN` is set), but the PR body will indicate that changes are simulated.
+
+---
 
 ## Environment Variables
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
 | `ANTHROPIC_API_KEY` | No | — | Anthropic API key. Without it, runs in simulation mode. |
-| `TASK_MODEL` | No | `claude-sonnet-4-20250514` | Claude model to use for code generation |
+| `TASK_MODEL` | No | `claude-sonnet-4-20250514` | Claude model to use for code generation. |
+| `GITHUB_TOKEN` | Yes | — | GitHub token with `repo` scope for branch/PR operations. |
 
 ## Configuration Tips
 
 ### Model Selection
 
-The default model (`claude-sonnet-4-20250514`) balances speed and quality for most coding tasks. For complex refactors or architecture-level changes, you can switch to a more capable model by setting `TASK_MODEL`.
+The default model (`claude-sonnet-4-20250514`) balances speed and quality for most coding tasks. For complex refactors or architecture-level changes, you can switch to a more capable model:
 
-### Context Window
+```bash
+# Use Opus for maximum quality (higher cost, slower)
+TASK_MODEL=claude-opus-4-20250514
+
+# Use Haiku for simple tasks (lower cost, faster, lower quality)
+TASK_MODEL=claude-haiku-4-5-20251001
+```
+
+### Context Window Management
 
 The Task Agent is selective about which files it sends to Claude to stay within context limits. It prioritizes:
 
-1. Files directly mentioned in the task description
-2. Files found via code search matching task keywords
-3. Files imported by the above (one level of dependency)
-4. Test files corresponding to modified source files
+1. **Files directly mentioned** in the task description (e.g., "fix login.ts")
+2. **Files found via code search** matching task keywords
+3. **Maximum 5 files**, each capped at 20KB
+4. **Total context** stays well under the model's context window
+
+If your task requires changes across many files, consider breaking it into smaller, focused tasks (e.g., "fix the auth timeout" then "update the auth tests").
+
+---
+
+## Next Steps
+
+- [Project Agent](/docs/agents/project-agent) — The persistent agent that spawns Task Agents
+- [Review Agent](/docs/agents/review-agent) — Automated PR review
+- [Command Reference](/docs/commands) — `fix`, `instruct`, and other commands that trigger Task Agent

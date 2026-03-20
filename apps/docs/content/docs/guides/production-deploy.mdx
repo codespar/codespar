@@ -1,0 +1,267 @@
+---
+title: Production Deployment
+description: Deploy CodeSpar to production — backend on Railway, dashboard on Vercel, and docs site on Vercel, with environment configuration and monitoring.
+---
+
+# Production Deployment
+
+This guide covers deploying the full CodeSpar stack to production: the backend API on Railway, the dashboard on Vercel, and the docs site on Vercel.
+
+**Estimated time:** 30-45 minutes
+
+## Architecture Overview
+
+The production deployment consists of three separately deployed services:
+
+```
+┌─────────────────────┐    ┌──────────────────────┐    ┌──────────────────────┐
+│ Backend (Railway)    │    │ Dashboard (Vercel)    │    │ Docs (Vercel)        │
+│ codespar/codespar    │◄───│ codespar/codespar-web │    │ codespar/codespar    │
+│ Fastify API          │    │ Next.js 15            │    │ Fumadocs MDX         │
+│ Agent runtime        │    │ Clerk auth            │    │ apps/docs            │
+│ Channel bridges      │    │ Dashboard UI          │    │                      │
+│ Webhook receiver     │    │                       │    │                      │
+└─────────────────────┘    └──────────────────────┘    └──────────────────────┘
+        ▲                           │
+        │                           │
+  GitHub Webhooks          API calls (x-org-id)
+  Slack/Discord/etc.
+```
+
+## Part 1: Backend on Railway
+
+The backend is the core of CodeSpar — it runs the agents, processes webhooks, and bridges messaging channels.
+
+### Step 1: Fork the Repository
+
+Fork [codespar/codespar](https://github.com/codespar/codespar) to your GitHub account. This gives you control over the deployment source.
+
+### Step 2: Create a Railway Project
+
+1. Go to [railway.app](https://railway.app) and sign in
+2. Click **"New Project"**
+3. Select **"Deploy from GitHub Repo"**
+4. Choose your forked `codespar/codespar` repository
+5. Railway will detect the project and begin deploying
+
+### Step 3: Configure Environment Variables
+
+In Railway, go to your service's **Variables** tab and add:
+
+#### Required
+
+| Variable | Description | Example |
+|----------|-------------|---------|
+| `PORT` | Server port (Railway sets this automatically) | `3000` |
+| `ANTHROPIC_API_KEY` | Anthropic API key for Claude | `sk-ant-api03-...` |
+| `GITHUB_TOKEN` | GitHub PAT with `repo` + `admin:repo_hook` scopes | `ghp_...` |
+
+#### Channel Configuration
+
+Enable at least one channel:
+
+| Variable | Description |
+|----------|-------------|
+| `ENABLE_SLACK` | `true` to enable Slack |
+| `SLACK_BOT_TOKEN` | Slack Bot User OAuth Token (`xoxb-...`) |
+| `SLACK_SIGNING_SECRET` | Slack app signing secret |
+| `ENABLE_DISCORD` | `true` to enable Discord |
+| `DISCORD_BOT_TOKEN` | Discord bot token |
+| `ENABLE_TELEGRAM` | `true` to enable Telegram |
+| `TELEGRAM_BOT_TOKEN` | Telegram bot token from BotFather |
+| `ENABLE_WHATSAPP` | `true` to enable WhatsApp |
+
+#### Webhook Configuration
+
+| Variable | Description | Example |
+|----------|-------------|---------|
+| `WEBHOOK_BASE_URL` | Your Railway public URL | `https://codespar-prod.up.railway.app` |
+
+Set `WEBHOOK_BASE_URL` to your Railway deployment URL so that webhooks are auto-configured when linking repositories.
+
+### Step 4: Deploy
+
+Click **"Deploy"** in Railway. The build process will:
+
+1. Install dependencies
+2. Build the TypeScript project
+3. Start the Fastify server
+
+Deployment typically takes 2-3 minutes.
+
+### Step 5: Verify
+
+Once deployed, verify the backend is running:
+
+```bash
+curl https://your-railway-url.up.railway.app/api/health
+```
+
+Expected response:
+
+```json
+{
+  "status": "ok",
+  "uptime": 12345,
+  "agents": 0,
+  "channels": ["slack"]
+}
+```
+
+### Step 6: Custom Domain (Optional)
+
+In Railway, go to **Settings > Domains** and add a custom domain:
+
+1. Add your domain (e.g., `api.codespar.dev`)
+2. Configure DNS with the CNAME record Railway provides
+3. Wait for SSL certificate provisioning (automatic)
+4. Update `WEBHOOK_BASE_URL` to use your custom domain
+
+## Part 2: Dashboard on Vercel
+
+The dashboard is the web UI for monitoring and managing your CodeSpar deployment.
+
+### Step 1: Connect the Repository
+
+1. Go to [vercel.com](https://vercel.com) and sign in
+2. Click **"Add New Project"**
+3. Import the `codespar/codespar-web` repository (this is the private marketing + dashboard repo)
+4. Vercel will detect the Next.js framework automatically
+
+### Step 2: Configure Environment Variables
+
+In Vercel's project settings, add these variables:
+
+| Variable | Description | Example |
+|----------|-------------|---------|
+| `NEXT_PUBLIC_API_URL` | Backend API URL (your Railway URL) | `https://codespar-prod.up.railway.app` |
+| `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` | Clerk publishable key | `pk_live_...` |
+| `CLERK_SECRET_KEY` | Clerk secret key | `sk_live_...` |
+
+### Clerk Setup
+
+If you have not yet set up Clerk:
+
+1. Create an account at [clerk.com](https://clerk.com)
+2. Create a new application
+3. Enable **Email** and **GitHub OAuth** as sign-in methods
+4. Under **Organizations**, enable the Organizations feature
+5. Copy the publishable key and secret key to Vercel
+
+### Step 3: Deploy
+
+Click **"Deploy"**. Vercel will build the Next.js application and deploy it to its Edge Network.
+
+### Step 4: Verify
+
+Visit your Vercel deployment URL. You should see the CodeSpar login page. After signing in:
+
+1. Create an organization (or select an existing one)
+2. Navigate to `/dashboard`
+3. Verify that the dashboard loads and displays the setup banner (if no project is linked yet)
+
+### Step 5: Custom Domain (Optional)
+
+In Vercel, go to **Settings > Domains** and add your custom domain (e.g., `codespar.dev`).
+
+## Part 3: Docs Site on Vercel
+
+The docs site is part of the public `codespar/codespar` repository, under the `apps/docs` directory.
+
+### Step 1: Create a Separate Vercel Project
+
+1. In Vercel, click **"Add New Project"**
+2. Import the `codespar/codespar` repository (same as the backend, but different build)
+3. Set the **Root Directory** to `apps/docs`
+4. Vercel will detect the Next.js framework
+
+### Step 2: Configure Build Settings
+
+| Setting | Value |
+|---------|-------|
+| **Framework** | Next.js |
+| **Root Directory** | `apps/docs` |
+| **Build Command** | (default — Vercel auto-detects) |
+| **Output Directory** | (default — `.next`) |
+
+### Step 3: Deploy
+
+Click **"Deploy"**. The docs site builds independently from the backend.
+
+### Step 4: Custom Domain
+
+Add a subdomain for docs (e.g., `docs.codespar.dev`) in Vercel's domain settings.
+
+## Monitoring
+
+### Railway Logs
+
+Monitor the backend in real time via Railway's log viewer:
+
+1. Go to your Railway project
+2. Click on the service
+3. Select the **"Logs"** tab
+4. Filter by level (info, warn, error) if needed
+
+Key things to watch for:
+
+- Agent startup messages ("Project Agent initialized")
+- Channel connection messages ("Slack bridge connected")
+- Webhook delivery processing
+- Error messages from Claude API calls
+
+### Vercel Analytics
+
+Vercel provides built-in analytics for the dashboard and docs sites:
+
+- **Web Analytics** — page views, unique visitors, top pages
+- **Speed Insights** — Core Web Vitals (LCP, FID, CLS)
+- **Function Logs** — server-side function execution logs
+
+Enable these in Vercel's project settings under the **Analytics** tab.
+
+### Dashboard Monitoring
+
+Once deployed, the CodeSpar dashboard itself is your primary monitoring tool:
+
+- **Overview page** — agent status, task counts, build success rate
+- **Agent Detail** — individual agent metrics, uptime, memory
+- **Audit Trail** — complete event history
+
+## Updating
+
+### Backend Updates
+
+To update the backend:
+
+1. Pull the latest changes from `codespar/codespar` into your fork
+2. Railway will automatically redeploy on push to the default branch
+3. Verify the health endpoint after deployment
+
+### Dashboard Updates
+
+Dashboard updates deploy automatically when changes are pushed to the `codespar/codespar-web` repository. Vercel handles zero-downtime deployments with its immutable deployment model.
+
+### Docs Updates
+
+Docs updates deploy automatically when changes are pushed to `apps/docs` in the `codespar/codespar` repository.
+
+## Production Checklist
+
+Before going live, verify:
+
+- [ ] Backend health endpoint returns `ok`
+- [ ] At least one channel is connected and responding to `@codespar status`
+- [ ] A repository is linked and webhook is active
+- [ ] Dashboard login works with Clerk
+- [ ] Dashboard shows agent status and live data
+- [ ] Docs site is accessible and renders correctly
+- [ ] Custom domains have SSL certificates provisioned
+- [ ] `WEBHOOK_BASE_URL` uses the final production URL
+- [ ] `NEXT_PUBLIC_API_URL` points to the correct backend URL
+
+## Next Steps
+
+- [Configure a Project](/docs/guides/configure-project) — link your first repository
+- [Dashboard Overview](/docs/dashboard/overview) — monitor your deployment
+- [Webhook Monitoring](/docs/guides/webhook-monitoring) — verify webhook delivery

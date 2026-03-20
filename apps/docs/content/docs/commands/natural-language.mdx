@@ -1,13 +1,15 @@
 ---
 title: Natural Language Understanding
-description: How CodeSpar interprets natural language messages and routes them to the correct command using a tiered NLU pipeline.
+description: How CodeSpar interprets natural language messages and routes them to the correct command using a three-tier NLU pipeline — regex matching, Haiku classification, and Sonnet smart responses.
 ---
 
 # Natural Language Understanding
 
 CodeSpar agents understand natural language in addition to explicit commands. You do not need to memorize command syntax — just describe what you want in plain language, and the agent will figure out the right action.
 
-## NLU Pipeline
+This page explains the full NLU pipeline in detail: how each tier works, when each model is invoked, how open questions are detected, and how costs are optimized.
+
+## The Three-Tier Pipeline
 
 CodeSpar uses a three-tier strategy to interpret messages, optimizing for speed and cost:
 
@@ -16,11 +18,33 @@ Message → Regex Match → Claude Haiku NLU → Claude Sonnet Smart Response
           (fast, free)   (fast, cheap)       (slower, comprehensive)
 ```
 
-### Tier 1: Regex Match (instant, free)
+Each tier acts as a fallback for the previous one. The pipeline short-circuits as soon as a tier produces a confident result, meaning most messages never reach Tier 3.
+
+### How It Works in Practice
+
+When a user sends `@codespar deploy staging`, the pipeline processes it as follows:
+
+1. **Tier 1 (Regex):** The message matches the pattern `/^deploy\s+(\S+)/i`, extracting `staging` as the target. Confidence is 1.0. The command executes immediately — no LLM is called.
+
+When a user sends `@codespar quantos PRs temos abertos?`, the pipeline processes it differently:
+
+1. **Tier 1 (Regex):** No English regex pattern matches the Portuguese text. Falls through.
+2. **Tier 2 (Haiku NLU):** The message is sent to Claude Haiku. It returns `{ intent: "prs", confidence: 0.95, arguments: { filter: "open" } }`. Confidence is high but below 1.0, and the message contains `?`.
+3. **Tier 3 (Sonnet Smart):** Because the message contains a question mark and NLU confidence is below 1.0, it is also eligible for Sonnet. However, since the NLU confidence (0.95) exceeds the classification threshold, the classified intent (`prs`) executes directly. Sonnet is not called.
+
+When a user sends `@codespar what's the best approach for handling rate limiting?`:
+
+1. **Tier 1 (Regex):** No match.
+2. **Tier 2 (Haiku NLU):** Returns `{ intent: "smart", confidence: 0.4, arguments: {} }`. Low confidence — this is a conversational question, not a command.
+3. **Tier 3 (Sonnet Smart):** Message contains `?`, is longer than 25 characters, and NLU confidence is well below 1.0. All three open-question criteria are met. Sonnet receives the full project context and generates a comprehensive response.
+
+---
+
+## Tier 1: Regex Match (instant, free)
 
 The agent first attempts to match the message against a set of regex patterns for each command. This handles explicit commands and common variations with zero latency and zero API cost.
 
-**Examples that match via regex:**
+### Examples That Match via Regex
 
 ```
 @codespar status          → status intent (exact match)
@@ -28,23 +52,54 @@ The agent first attempts to match the message against a set of regex patterns fo
 @codespar review PR #42   → review intent (pattern match)
 @codespar logs 20         → logs intent (pattern match)
 @codespar autonomy L3     → autonomy intent (pattern match)
+@codespar help            → help intent (exact match)
+@codespar kill            → kill intent (exact match)
+@codespar link org/repo   → link intent (pattern match)
 ```
 
-If a regex matches with high confidence, the command executes immediately without calling any LLM.
+If a regex matches with high confidence, the command executes immediately without calling any LLM. This tier handles approximately 40% of all traffic in teams that primarily use explicit command syntax.
 
-### Tier 2: Claude Haiku NLU (fast, cheap)
+### Limitations
 
-When regex does not match, the message is sent to Claude Haiku for intent classification. The NLU model returns a structured response with:
+Regex patterns are defined for English command syntax only. Non-English messages (Portuguese, Spanish, etc.) almost always fall through to Tier 2. This is by design — maintaining regex patterns for every language would be brittle and hard to maintain, while Claude Haiku handles multilingual classification natively.
 
-- **intent** — the matched command (e.g., `status`, `deploy`, `review`)
-- **confidence** — a score from 0.0 to 1.0
-- **arguments** — extracted parameters (e.g., `{ target: "staging" }`)
+---
 
-**Examples that route through Haiku NLU:**
+## Tier 2: Claude Haiku NLU (fast, cheap)
+
+When regex does not match, the message is sent to Claude Haiku for intent classification. The NLU model receives a structured prompt with the list of available intents and returns a JSON response:
+
+```json
+{
+  "intent": "prs",
+  "confidence": 0.95,
+  "arguments": { "filter": "open" }
+}
+```
+
+### Response Fields
+
+- **intent** — the matched command (e.g., `status`, `deploy`, `review`, `prs`, `fix`)
+- **confidence** — a score from 0.0 to 1.0 indicating how certain the model is
+- **arguments** — extracted parameters (e.g., `{ target: "staging" }`, `{ filter: "open" }`)
+
+### Confidence Threshold Behavior
+
+The confidence score determines what happens next:
+
+| Confidence | Behavior |
+|------------|----------|
+| `1.0` | Execute the classified intent immediately. No further processing. |
+| `≥ 0.8` (high) | Execute the classified intent. Sonnet is not called. |
+| `0.5 – 0.79` (medium) | Execute the classified intent, but if the message also triggers open-question detection (see below), Sonnet may be called instead. |
+| `< 0.5` (low) | Do not execute the classified intent. Route to Sonnet for a conversational response. |
+
+The threshold between "execute classified intent" and "route to Sonnet" is not a single hard cutoff — it interacts with open-question detection criteria.
+
+### English Examples
 
 | Natural Language Input | Detected Intent | Confidence | Arguments |
 |----------------------|-----------------|------------|-----------|
-| "quantos PRs temos?" | `prs` | 0.95 | `{ filter: "open" }` |
 | "can you review the latest PR?" | `review` | 0.92 | `{ target: "latest" }` |
 | "deploy to staging please" | `deploy` | 0.98 | `{ target: "staging" }` |
 | "what's the build status?" | `status` | 0.96 | `{ scope: "build" }` |
@@ -54,69 +109,135 @@ When regex does not match, the message is sent to Claude Haiku for intent classi
 | "link this to our API repo" | `link` | 0.88 | `{}` |
 | "stop everything now" | `kill` | 0.93 | `{}` |
 | "set autonomy to level 2" | `autonomy` | 0.96 | `{ level: 2 }` |
+
+### Portuguese Examples
+
+| Natural Language Input | Detected Intent | Confidence | Arguments |
+|----------------------|-----------------|------------|-----------|
+| "quantos PRs temos abertos?" | `prs` | 0.95 | `{ filter: "open" }` |
+| "fazer deploy no staging" | `deploy` | 0.93 | `{ target: "staging" }` |
+| "revisar o PR 42" | `review` | 0.91 | `{ target: "42" }` |
+| "qual o status do build?" | `status` | 0.96 | `{ scope: "build" }` |
 | "aprovar o deploy" | `approve` | 0.90 | `{}` |
 | "lista os pull requests fechados" | `prs` | 0.92 | `{ filter: "closed" }` |
+| "corrigir o bug de autenticação" | `fix` | 0.89 | `{ issue: "bug de autenticação" }` |
+| "mostra os logs recentes" | `logs` | 0.88 | `{ count: 10 }` |
+| "quem sou eu?" | `whoami` | 0.94 | `{}` |
+| "vincular ao repositório acme/api" | `link` | 0.86 | `{ repo: "acme/api" }` |
 
-If the confidence is 1.0 or above the configured threshold, the command executes immediately.
+### Spanish Examples
 
-### Tier 3: Claude Sonnet Smart Response (comprehensive)
+| Natural Language Input | Detected Intent | Confidence | Arguments |
+|----------------------|-----------------|------------|-----------|
+| "cuántos PRs hay abiertos?" | `prs` | 0.93 | `{ filter: "open" }` |
+| "desplegar en staging" | `deploy` | 0.91 | `{ target: "staging" }` |
+| "revisar el PR más reciente" | `review` | 0.90 | `{ target: "latest" }` |
+| "cuál es el estado del build?" | `status` | 0.94 | `{ scope: "build" }` |
+| "arreglar el error de login" | `fix` | 0.88 | `{ issue: "error de login" }` |
+| "mostrar los logs" | `logs` | 0.87 | `{}` |
+| "aprobar el despliegue" | `approve` | 0.89 | `{}` |
+| "establecer autonomía en nivel 3" | `autonomy` | 0.85 | `{ level: 3 }` |
 
-A message is routed to Claude Sonnet when any of the following conditions are met:
+### Detailed Example: Portuguese Command Flow
 
-- The message contains a question mark (`?`)
-- The message is longer than 25 characters
-- NLU confidence is below 1.0
+When a user sends:
 
-Sonnet receives the full project context (linked repo, recent activity, agent state) and generates a thoughtful response. This handles open-ended questions, complex requests, and conversational interactions.
+```
+@codespar quantos PRs temos abertos?
+```
 
-**Examples that route to Sonnet:**
+The full processing flow is:
+
+1. **Regex Tier:** No English pattern matches `quantos PRs temos abertos?`. Falls through.
+2. **Haiku NLU:** Receives the message and classifies it:
+   - Intent: `prs` (maps to the "list pull requests" command)
+   - Confidence: `0.95`
+   - Arguments: `{ filter: "open" }` (extracted from "abertos" = "open")
+3. **Decision:** Confidence is 0.95 (high). Even though the message contains `?` and is longer than 25 characters (two open-question triggers), the high confidence means the classified intent is trusted. The `prs` command executes.
+4. **Result:** The agent lists open PRs from the linked repository and responds in the same language:
+
+```
+📋 Pull Requests Abertos (3)
+
+#87  fix: auth timeout          @alice    2h ago
+#85  feat: rate limiting        @bob      1d ago
+#82  chore: update deps         @charlie  3d ago
+```
+
+---
+
+## Tier 3: Claude Sonnet Smart Response (comprehensive)
+
+When a message is not confidently classified as a known command, it is routed to Claude Sonnet for a comprehensive, contextual response.
+
+### Open Question Detection
+
+A message is classified as an "open question" when it meets **one or more** of these criteria:
+
+1. **Contains a question mark** (`?`) — indicates the user is asking, not commanding
+2. **Length exceeds 25 characters** — longer messages tend to be conversational or complex
+3. **NLU confidence below 1.0** — the model is not fully certain about the intent
+
+These criteria are evaluated together. In practice:
+
+- A short explicit command like `status` matches regex (Tier 1) and never reaches this check.
+- A message like `"deploy to staging"` matches regex or gets high NLU confidence, so it executes as a command even though it is longer than 25 characters.
+- A message like `"What's the best approach for implementing rate limiting in our API?"` fails regex, gets low NLU confidence (it is not a known command), contains `?`, and is well over 25 characters. All criteria point to Sonnet.
+
+The key insight: **the open-question criteria are tie-breakers when NLU confidence is ambiguous**, not absolute rules. A message with `?` that also has 0.98 NLU confidence for `deploy` will still execute the deploy command.
+
+### What Sonnet Receives
+
+When routed to Tier 3, Sonnet receives full project context:
+
+- The user's message
+- Linked repository name, default branch, and recent activity
+- Current agent state (autonomy level, active tasks)
+- Recent conversation history (last 5 messages)
+- Available commands and their descriptions
+
+This enables Sonnet to give project-aware answers, not generic responses.
+
+### Examples That Route to Sonnet
 
 ```
 "What's the best approach for implementing rate limiting in our API?"
 "Can you explain why the last 3 builds failed?"
 "How should we structure the database migration for the new user model?"
 "Compare the performance of our staging vs production environments"
+"Qual a melhor estratégia para migrar o banco de dados?"
+"¿Cómo debería estructurar los tests de integración?"
 ```
+
+---
 
 ## Multilingual Support
 
 CodeSpar's NLU pipeline supports multiple languages out of the box. Claude Haiku and Sonnet natively understand dozens of languages, so you can interact with your agent in whatever language is natural for your team.
 
-### Supported Languages (tested)
+### How Each Tier Handles Languages
 
-| Language | Example | Detected Intent |
-|----------|---------|-----------------|
-| English | "deploy to staging" | `deploy` |
-| Portuguese | "fazer deploy no staging" | `deploy` |
-| Spanish | "desplegar en staging" | `deploy` |
-| Portuguese | "quantos PRs abertos?" | `prs` |
-| Spanish | "cuántos PRs hay abiertos?" | `prs` |
-| Portuguese | "revisar o PR 42" | `review` |
-| English | "what's going on with the build?" | `status` |
-| Portuguese | "qual o status do build?" | `status` |
+| Tier | Multilingual Support |
+|------|---------------------|
+| Regex (Tier 1) | English only. Non-English messages fall through to Tier 2. |
+| Haiku NLU (Tier 2) | Full multilingual support. Claude Haiku understands Portuguese, Spanish, French, German, Japanese, and many more. |
+| Sonnet Smart (Tier 3) | Full multilingual support. Responds in the same language as the user's message. |
 
-The regex tier (Tier 1) primarily matches English command syntax. Non-English messages typically route through Haiku NLU (Tier 2) for intent detection.
+### Tested Languages
 
-## Configuration
+| Language | Example Command | Example Open Question |
+|----------|----------------|----------------------|
+| English | "deploy to staging" | "What's going on with the build?" |
+| Portuguese | "fazer deploy no staging" | "Por que o último build falhou?" |
+| Spanish | "desplegar en staging" | "¿Por qué falló el último build?" |
+| French | "déployer sur staging" | "Pourquoi le dernier build a échoué ?" |
+| German | "deploy auf staging" | "Warum ist der letzte Build fehlgeschlagen?" |
 
-### Environment Variables
+The agent responds in the same language the user writes in. If you ask in Portuguese, you get a Portuguese response.
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `NLU_MODEL` | `claude-haiku-4-5-20251001` | Model used for intent classification (Tier 2) |
-| `SMART_MODEL` | `claude-sonnet-4-20250514` | Model used for open-ended responses (Tier 3) |
+---
 
-You can override the NLU model to use a different provider or version:
-
-```bash
-# Use a specific Haiku version
-NLU_MODEL=claude-haiku-4-5-20251001
-
-# Use Sonnet for NLU (more accurate but slower and more expensive)
-NLU_MODEL=claude-sonnet-4-20250514
-```
-
-### How Intent Routing Works
+## Pipeline Flow Diagram
 
 ```
 ┌─────────────────────────────────────────────────────────┐
@@ -126,7 +247,7 @@ NLU_MODEL=claude-sonnet-4-20250514
               ▼
 ┌─────────────────────────┐
 │    Tier 1: Regex Match  │──── Match found ───▶ Execute Command
-│    (instant, free)      │
+│    (instant, $0)        │
 └─────────────┬───────────┘
               │ No match
               ▼
@@ -142,27 +263,90 @@ NLU_MODEL=claude-sonnet-4-20250514
 └─────────────────────────┘
 ```
 
-### Open Question Detection
+### Decision Logic Pseudocode
 
-A message is classified as an "open question" when it meets one or more of these criteria:
+```
+function routeMessage(message):
+  // Tier 1: Regex
+  regexResult = matchRegex(message)
+  if regexResult.matched:
+    return executeCommand(regexResult.intent, regexResult.args)
 
-1. **Contains a question mark** (`?`) — indicates the user is asking, not commanding
-2. **Length exceeds 25 characters** — longer messages tend to be conversational
-3. **NLU confidence below 1.0** — the model is not fully certain about the intent
+  // Tier 2: Haiku NLU
+  nluResult = classifyWithHaiku(message)
 
-Open questions bypass command execution entirely and are routed to Claude Sonnet for a contextual, conversational response.
+  // Check open-question criteria
+  isOpenQuestion = (
+    message.includes("?") OR
+    message.length > 25 OR
+    nluResult.confidence < 1.0
+  )
+
+  // High confidence → execute even if open-question criteria met
+  if nluResult.confidence >= 0.8 AND nluResult.intent !== "smart":
+    return executeCommand(nluResult.intent, nluResult.args)
+
+  // Medium confidence, not clearly an open question → execute
+  if nluResult.confidence >= 0.5 AND NOT isOpenQuestion:
+    return executeCommand(nluResult.intent, nluResult.args)
+
+  // Low confidence or open question → Sonnet
+  return generateSmartResponse(message, projectContext)
+```
+
+---
 
 ## Cost Optimization
 
-The three-tier pipeline is designed to minimize API costs:
+The three-tier pipeline is designed to minimize API costs while maintaining high accuracy.
 
-| Tier | Cost per Request | Typical % of Traffic |
-|------|-----------------|---------------------|
-| Regex | $0 | ~40% |
-| Haiku NLU | ~$0.001 | ~35% |
-| Sonnet Smart | ~$0.01 | ~25% |
+### Cost per Tier
 
-For teams that primarily use explicit commands, the majority of traffic stays at Tier 1 with zero LLM cost.
+| Tier | Model | Cost per Request | Latency | When Invoked |
+|------|-------|-----------------|---------|--------------|
+| Regex | None (string matching) | $0 | under 1ms | Every message (first check) |
+| Haiku NLU | `claude-haiku-4-5-20251001` | ~$0.001 | ~200ms | When regex does not match (~60% of messages) |
+| Sonnet Smart | `claude-sonnet-4-20250514` | ~$0.01 | ~1-3s | Open questions and low-confidence messages (~25% of messages) |
+
+### Typical Traffic Distribution
+
+| Tier | % of Traffic | Monthly Cost (1,000 msgs/day) |
+|------|-------------|-------------------------------|
+| Regex | ~40% | $0 |
+| Haiku NLU | ~35% | ~$10.50 |
+| Sonnet Smart | ~25% | ~$75.00 |
+| **Total** | 100% | **~$85.50** |
+
+For teams that primarily use explicit commands (e.g., `deploy staging`, `status`, `logs 20`), the regex tier handles most traffic and costs approach zero.
+
+### Cost Optimization Tips
+
+1. **Use explicit commands when possible.** `@codespar deploy staging` is free (regex match). `@codespar can you please deploy to the staging environment?` costs ~$0.001 (Haiku NLU).
+2. **Set `NLU_MODEL` to Haiku.** This is the default and is the most cost-effective for intent classification. Do not set it to Sonnet unless you need higher accuracy.
+3. **Sonnet costs scale with context.** Open questions send more context to Sonnet (repo info, recent activity). Keeping your project context lean reduces per-request cost.
+
+---
+
+## Configuration
+
+### Environment Variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `NLU_MODEL` | `claude-haiku-4-5-20251001` | Model used for intent classification (Tier 2) |
+| `SMART_MODEL` | `claude-sonnet-4-20250514` | Model used for open-ended responses (Tier 3) |
+
+You can override the NLU model to use a different provider or version:
+
+```bash
+# Use a specific Haiku version (default)
+NLU_MODEL=claude-haiku-4-5-20251001
+
+# Use Sonnet for NLU (more accurate but slower and more expensive)
+NLU_MODEL=claude-sonnet-4-20250514
+```
+
+---
 
 ## Debugging NLU
 
@@ -178,9 +362,21 @@ The activity log includes NLU routing decisions:
 [14:32] 📩 Message: "deploy to prod please"
         NLU: regex miss → haiku → intent:deploy (0.97)
         Action: deploy requested (target: production)
+
+[14:33] 📩 Message: "quantos PRs temos abertos?"
+        NLU: regex miss → haiku → intent:prs (0.95)
+        Action: listed 3 open PRs
+
+[14:35] 📩 Message: "what's the best way to handle auth?"
+        NLU: regex miss → haiku → intent:smart (0.40)
+        → routed to sonnet (open question detected)
+        Action: smart response generated (auth architecture advice)
 ```
+
+---
 
 ## Next Steps
 
 - [Command Reference](/docs/commands) — Full list of all 17 commands
 - [Graduated Autonomy](/docs/commands/autonomy) — Control auto-execution behavior
+- [Configuration](/docs/configuration) — All environment variables including model settings

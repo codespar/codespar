@@ -1,0 +1,268 @@
+---
+title: Approval System
+description: How to configure and use CodeSpar's cross-channel approval system — quorum rules, token-based approvals, self-approval blocking, and audit logging.
+---
+
+# Approval System
+
+CodeSpar's approval system ensures that high-risk actions (like production deployments) require explicit human authorization before execution. Approvals work across channels — you can approve from WhatsApp what was requested in Slack.
+
+## How It Works
+
+When an agent needs approval for an action, it follows this flow:
+
+```
+1. User requests action     →  @codespar deploy production
+2. Agent creates token      →  dp-abc123 (unique approval token)
+3. Broadcast request        →  Approval request sent to all team members
+4. Team members vote        →  @codespar approve dp-abc123
+5. Quorum met              →  Required number of approvals received
+6. Action executes          →  Deploy proceeds automatically
+```
+
+### Approval Tokens
+
+Every pending action gets a unique token with a prefix indicating the action type:
+
+| Prefix | Action Type | Example |
+|--------|-------------|---------|
+| `dp-` | Deploy | `dp-abc123` |
+| `rv-` | Review approval | `rv-def456` |
+| `tk-` | Task execution | `tk-ghi789` |
+| `cf-` | Config change | `cf-jkl012` |
+
+Tokens are short (8-12 characters) to make them easy to type in chat. They are unique across the entire system and expire after a configurable timeout.
+
+## Default Quorum
+
+The quorum is the minimum number of approvals needed before an action executes:
+
+| Environment | Default Quorum | Meaning |
+|-------------|---------------|---------|
+| **Staging** | 1 | One team member must approve |
+| **Production** | 2 | Two team members must approve |
+
+These defaults can be changed in the [Dashboard Settings](/docs/dashboard/settings) under the Policies tab.
+
+## Approval Flow: Step by Step
+
+### 1. Request an Action
+
+A team member requests a deployment:
+
+```
+@codespar deploy production
+```
+
+### 2. Agent Sends Approval Request
+
+The agent broadcasts an approval request to all configured channels:
+
+```
+Deploy Approval Required
+────────────────────────
+Environment: production
+Requester: Sarah Chen (Slack)
+Branch: main
+Commit: abc1234 — "Add health check endpoint"
+Risk: HIGH
+
+Quorum: 0/2 approvals needed
+
+To approve: @codespar approve dp-abc123
+To reject:  @codespar reject dp-abc123
+```
+
+This message appears in **all connected channels** (Slack, Discord, WhatsApp, Telegram), so any team member can respond regardless of which platform they use.
+
+### 3. First Approval
+
+A team member approves from any channel:
+
+```
+@codespar approve dp-abc123
+```
+
+The agent updates the status:
+
+```
+Deploy Approval Update
+────────────────────────
+Environment: production
+Approved by: Marcus Lee (Discord)
+Quorum: 1/2 approvals needed
+
+Waiting for 1 more approval...
+```
+
+### 4. Second Approval (Quorum Met)
+
+Another team member approves:
+
+```
+@codespar approve dp-abc123
+```
+
+The agent confirms quorum and executes the action:
+
+```
+Deploy Approved
+────────────────────────
+Environment: production
+Approved by:
+  1. Marcus Lee (Discord) — 2 minutes ago
+  2. Ana Costa (WhatsApp) — just now
+
+Quorum: 2/2 — Executing deploy...
+```
+
+### 5. Action Executes
+
+The deploy proceeds automatically, and the agent reports the result:
+
+```
+Deploy Complete
+────────────────────────
+Environment: production
+Status: SUCCESS
+Duration: 45s
+Deployed by: CodeSpar Deploy Agent
+```
+
+## Cross-Channel Approval
+
+One of CodeSpar's key features is that approvals work across messaging platforms. A deploy requested in Slack can be approved from WhatsApp, Discord, or Telegram.
+
+### How It Works
+
+| Step | Channel | Actor |
+|------|---------|-------|
+| Request | Slack | Sarah Chen requests deploy |
+| Approve | Discord | Marcus Lee approves |
+| Approve | WhatsApp | Ana Costa approves |
+| Execute | System | Deploy Agent runs the deploy |
+
+The approval token (`dp-abc123`) is the same across all channels. The agent tracks which channel each vote came from and includes this information in the audit trail.
+
+### Identity Resolution
+
+When a team member approves from a different channel than the requester, the agent resolves their identity using the cross-channel identity mapping. See the [Multi-Channel Guide](/docs/guides/multi-channel) for how to set up identity linking.
+
+## Self-Approval Blocking
+
+By default, the person who requested an action **cannot approve their own request**. This enforces separation of duties:
+
+```
+Sarah: @codespar deploy production
+Sarah: @codespar approve dp-abc123
+CodeSpar: Cannot approve your own request. Waiting for approval from another team member.
+```
+
+### Disabling Self-Approval Blocking
+
+If your team is small and self-approval blocking is impractical, you can disable it in the [Dashboard Settings](/docs/dashboard/settings) under the Policies tab:
+
+```
+Self-Approval Blocking: [Off]
+```
+
+When disabled, any team member (including the requester) can approve.
+
+## Rejection
+
+Any team member can reject a pending action:
+
+```
+@codespar reject dp-abc123
+```
+
+Rejection is immediate — it cancels the action regardless of how many approvals have been collected:
+
+```
+Deploy Rejected
+────────────────────────
+Environment: production
+Rejected by: Marcus Lee (Discord)
+Reason: "Not ready — migration script hasn't been tested yet"
+
+Action cancelled. No deploy will be executed.
+```
+
+### Rejection with Reason
+
+You can include a reason when rejecting:
+
+```
+@codespar reject dp-abc123 migration script hasn't been tested yet
+```
+
+The reason is included in the notification and audit trail.
+
+## Expiration
+
+Approval tokens expire after a configurable timeout. The default is **1 hour** for standard actions and **15 minutes** for critical actions.
+
+When a token expires:
+
+```
+Deploy Approval Expired
+────────────────────────
+Token: dp-abc123
+Environment: production
+Quorum: 1/2 (not met)
+Expired: 1 hour after request
+
+The action has been cancelled. Create a new request to try again.
+```
+
+### Configuring Expiration
+
+Expiration timeouts can be adjusted via environment variables:
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `APPROVAL_TIMEOUT_DEFAULT` | `3600` (1 hour) | Timeout for standard actions (seconds) |
+| `APPROVAL_TIMEOUT_CRITICAL` | `900` (15 min) | Timeout for critical actions (seconds) |
+
+## Audit Logging
+
+Every approval event is recorded in the immutable audit trail:
+
+| Event | Logged Data |
+|-------|-------------|
+| **Request created** | Token, action type, requester, channel, timestamp |
+| **Vote cast** | Token, voter, vote (approve/reject), channel, timestamp |
+| **Quorum met** | Token, all voters, channels, final timestamp |
+| **Action executed** | Token, result (success/failure), duration |
+| **Token expired** | Token, votes at expiration, timestamp |
+| **Rejection** | Token, rejector, reason, channel, timestamp |
+
+Each event includes the actor's identity, the channel it originated from, and a hash chain reference for tamper evidence. See the [Audit Trail](/docs/dashboard/audit-trail) documentation for details.
+
+## Configuration Summary
+
+| Setting | Location | Default |
+|---------|----------|---------|
+| Staging quorum | Dashboard Settings > Policies | 1 |
+| Production quorum | Dashboard Settings > Policies | 2 |
+| Self-approval blocking | Dashboard Settings > Policies | On |
+| Standard timeout | `APPROVAL_TIMEOUT_DEFAULT` env var | 1 hour |
+| Critical timeout | `APPROVAL_TIMEOUT_CRITICAL` env var | 15 minutes |
+
+## Safety Guardrails
+
+Regardless of autonomy level (even L5 Full Auto), certain actions **always** require approval:
+
+- Production deployments
+- Data migrations
+- Security-sensitive changes
+- Infrastructure modifications
+
+These guardrails cannot be disabled. They exist to protect against accidental or malicious actions.
+
+## Next Steps
+
+- [Deploy Pipeline](/docs/guides/deploy-pipeline) — orchestrate deployments with the Deploy Agent
+- [Multi-Channel Setup](/docs/guides/multi-channel) — enable cross-channel approvals
+- [Dashboard Audit Trail](/docs/dashboard/audit-trail) — review approval history
+- [Security](/docs/configuration/security) — RBAC and security configuration

@@ -1,6 +1,6 @@
 ---
 title: Security
-description: CodeSpar security architecture including RBAC roles, permission mapping, token-based approval system, audit trail integrity, identity resolution, and safety guardrails.
+description: CodeSpar security architecture including RBAC roles, permission mapping, token-based approval system, audit trail with hash chain integrity, cross-channel identity resolution, and safety guardrails.
 ---
 
 # Security
@@ -70,6 +70,8 @@ The complete list of permissions that map to command intents:
 | 14 | `manage:autonomy` | `autonomy` | medium |
 | 15 | `execute:kill` | `kill` | critical |
 
+---
+
 ## Approval System
 
 High-risk actions require explicit human approval before execution. The approval system is token-based with several safety mechanisms.
@@ -82,24 +84,28 @@ High-risk actions require explicit human approval before execution. The approval
 4. An authorized user approves with `@codespar approve dp-a1b2c3`
 5. The action executes
 
+### Approval Token Format and Prefixes
+
+Approval tokens follow the format `{prefix}-{random}`, where the prefix indicates the type of action being approved:
+
+| Prefix | Action | Example Token |
+|--------|--------|---------------|
+| `dp-` | Deploy | `dp-a1b2c3` |
+| `rb-` | Rollback | `rb-x9y8z7` |
+| `sg-` | Suggested action (auto-proposed by L2+ agents) | `sg-m4n5o6` |
+| `tk-` | Task execution (at certain autonomy levels) | `tk-p7q8r9` |
+| `kl-` | Kill switch (emergency stop) | `kl-j1k2l3` |
+
+The random portion is a cryptographically secure 6-character alphanumeric string, providing sufficient uniqueness for the token's 30-minute lifespan.
+
 ### Approval Token Properties
 
 | Property | Value |
 |----------|-------|
-| Format | `{prefix}-{random}` (e.g., `dp-a1b2c3`, `rb-x9y8z7`) |
-| Expiration | 30 minutes |
+| Format | `{prefix}-{random}` (e.g., `dp-a1b2c3`) |
+| Expiration | 30 minutes (configurable via `APPROVAL_TIMEOUT`) |
 | Single-use | Yes — token is invalidated after use |
 | Cross-channel | Yes — approve from any connected channel |
-
-### Prefixes
-
-| Prefix | Action |
-|--------|--------|
-| `dp-` | Deploy |
-| `rb-` | Rollback |
-| `sg-` | Suggested action |
-| `tk-` | Task execution (at certain autonomy levels) |
-| `kl-` | Kill switch |
 
 ### Safety Mechanisms
 
@@ -135,6 +141,8 @@ Approval tokens expire after 30 minutes (configurable). Expired tokens cannot be
 ❌ Approval token expired. Request the action again.
 ```
 
+---
+
 ## Audit Trail
 
 Every action in CodeSpar is recorded in an append-only audit log with cryptographic hash chain integrity.
@@ -151,13 +159,67 @@ Every action in CodeSpar is recorded in an append-only audit log with cryptograp
 
 ### Hash Chain Integrity
 
-Each audit entry includes a SHA-256 hash that chains to the previous entry:
+Each audit entry includes a SHA-256 hash that chains to the previous entry, creating a tamper-evident log.
+
+#### How It Works
+
+Every audit entry contains these fields for integrity verification:
+
+```typescript
+interface AuditEntry {
+  id: string;
+  timestamp: string;
+  actor: string;          // Identity ID or "system"
+  action: string;         // Command or event type
+  result: string;         // "success", "denied", "error"
+  metadata: object;       // Action-specific data
+  previousHash: string;   // Hash of the previous entry
+  hash: string;           // SHA-256 hash of this entry
+}
+```
+
+The hash for each entry is computed as:
 
 ```
-Entry N hash = SHA-256(Entry N-1 hash + timestamp + actor + action + result + metadata)
+Entry N hash = SHA-256(
+  Entry N-1 hash +
+  timestamp +
+  actor +
+  action +
+  result +
+  JSON.stringify(metadata)
+)
 ```
 
-This creates a tamper-evident chain: modifying any entry invalidates all subsequent hashes. See the [Audit API](/docs/api/audit) for verification details.
+#### Hash Chain Verification
+
+The chaining works as follows:
+
+1. **Entry 0** (genesis): `previousHash` is `"0"` (the initial seed). Its `hash` is `SHA-256("0" + timestamp + actor + action + result + metadata)`.
+2. **Entry 1**: `previousHash` is Entry 0's `hash`. Its `hash` includes Entry 0's hash in the computation.
+3. **Entry N**: `previousHash` is Entry N-1's `hash`. The chain continues.
+
+To verify the audit trail's integrity:
+
+```
+For each entry from 0 to N:
+  1. Recompute: expected = SHA-256(entry.previousHash + entry.timestamp + ...)
+  2. Compare: expected === entry.hash
+  3. Verify: entry.previousHash === previousEntry.hash
+```
+
+If any entry has been modified, its hash will not match the recomputed value, and all subsequent entries' `previousHash` fields will be invalid. This makes tampering detectable.
+
+#### Example Chain
+
+```
+Entry 0: hash="a3f2..." previousHash="0"
+Entry 1: hash="b7c1..." previousHash="a3f2..."
+Entry 2: hash="d9e4..." previousHash="b7c1..."
+Entry 3: hash="f1a8..." previousHash="d9e4..."
+```
+
+If Entry 1 is modified, its hash changes from `"b7c1..."` to something else. Entry 2's `previousHash` still says `"b7c1..."`, which no longer matches Entry 1's actual hash — tampering detected.
 
 ### Retention
 
@@ -167,21 +229,62 @@ This creates a tamper-evident chain: modifying any entry invalidates all subsequ
 | Storage | File-based (`.codespar/audit/`) or PostgreSQL |
 | Export | Available via Audit API pagination |
 
-## Identity Resolution
+---
 
-CodeSpar maintains a cross-channel identity system that links users across WhatsApp, Slack, Discord, and Telegram.
+## Cross-Channel Identity Resolution
 
-### How Identity Linking Works
+CodeSpar maintains a cross-channel identity system that links users across WhatsApp, Slack, Discord, and Telegram. This is critical for consistent RBAC enforcement, cross-channel approvals, and unified audit trails.
 
-1. A user sends a message from any channel (e.g., Slack)
-2. CodeSpar creates an identity record with the channel-specific ID
-3. The user registers: `@codespar register John Silva`
-4. From another channel (e.g., WhatsApp), the same user registers with the same name
-5. CodeSpar links both channel identities under a single identity record
+### How the Identity Store Works
+
+The identity store maintains a persistent mapping between channel-specific user IDs and a unified CodeSpar identity.
+
+#### Data Structure
+
+```typescript
+interface Identity {
+  id: string;                    // Unique identity ID (e.g., "identity-001")
+  displayName: string;           // Registered name (e.g., "John Silva")
+  role: string;                  // RBAC role (e.g., "maintainer")
+  channels: ChannelIdentity[];   // Linked channel accounts
+  registeredAt: string;          // ISO 8601 timestamp
+}
+
+interface ChannelIdentity {
+  channelType: string;    // "slack", "whatsapp", "discord", "telegram"
+  channelUserId: string;  // Platform-specific user ID
+  displayName: string;    // Platform-specific display name
+  linkedAt: string;       // When this channel was linked
+}
+```
+
+#### Registration and Linking Flow
+
+1. **First contact:** When a user sends any message from a channel, CodeSpar creates a temporary identity record with the channel-specific ID and a default `read-only` role.
+
+2. **Registration:** The user sends `@codespar register John Silva`. CodeSpar:
+   - Checks if an identity with display name "John Silva" already exists
+   - If not: creates a new identity with the display name and links the current channel
+   - If yes: links the current channel to the existing identity
+
+3. **Cross-channel linking:** The same user sends `@codespar register John Silva` from a different channel (e.g., WhatsApp after already registering from Slack). CodeSpar:
+   - Finds the existing identity with display name "John Silva"
+   - Adds the WhatsApp channel identity to the existing record
+   - Both channels are now linked under one identity
+
+4. **Identity resolution:** On every subsequent message, CodeSpar looks up the channel-specific user ID in the identity store. If found, the message is attributed to the resolved identity, and the identity's RBAC role is applied.
+
+#### Storage
+
+Identity records are stored in the identity store:
+
+- **File storage:** `.codespar/identities/` directory (one JSON file per identity)
+- **Database:** `identities` table when `DATABASE_URL` is configured
 
 ### Cross-Channel Capabilities
 
 With linked identities:
+
 - **Approve from any channel:** A deploy requested in Slack can be approved from WhatsApp
 - **Unified audit trail:** All actions across channels are attributed to the same identity
 - **Consistent permissions:** RBAC role applies regardless of which channel is used
@@ -195,9 +298,11 @@ curl "http://localhost:3000/api/identity?channelType=slack&channelUserId=U1234AB
 
 See the [Memory API](/docs/api/memory) for full details.
 
+---
+
 ## Safety Guardrails
 
-Regardless of autonomy level, RBAC role, or configuration, CodeSpar enforces hard safety guardrails:
+Regardless of autonomy level, RBAC role, or configuration, CodeSpar enforces hard safety guardrails.
 
 ### Never Auto-Executed
 
@@ -227,6 +332,25 @@ Approve with: @codespar approve dp-a1b2c3
 
 The only exception is `emergency_admin` for the `kill` command, which can be executed without approval to enable rapid incident response.
 
+---
+
+## Rate Limiting
+
+> **Note:** Rate limiting is not yet implemented. This is a roadmap item planned for a future release.
+
+The planned rate limiting system will enforce:
+
+| Limit | Planned Value | Scope |
+|-------|---------------|-------|
+| Commands per user per minute | 10 | Per identity |
+| API requests per minute | 60 | Per API key |
+| Webhook events per minute | 100 | Per repository |
+| Agent spawns per hour | 20 | Per project |
+
+Rate limiting will be configurable per organization and will apply to both chat commands and API requests.
+
+---
+
 ## Security Checklist
 
 When deploying CodeSpar to production:
@@ -242,8 +366,11 @@ When deploying CodeSpar to production:
 - [ ] Disable self-approval (`ALLOW_SELF_APPROVE=false`)
 - [ ] Review and test the kill switch procedure
 
+---
+
 ## Next Steps
 
 - [Graduated Autonomy](/docs/commands/autonomy) — Autonomy level details and RBAC interaction
 - [Audit API](/docs/api/audit) — Query and verify the audit trail
+- [Multi-Channel Setup](/docs/guides/multi-channel) — Cross-channel identity linking
 - [Configuration](/docs/configuration) — All environment variables

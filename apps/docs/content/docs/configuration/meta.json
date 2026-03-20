@@ -1,0 +1,9 @@
+{
+  "title": "Configuration",
+  "pages": [
+    "index",
+    "docker",
+    "railway",
+    "security"
+  ]
+}
