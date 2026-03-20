@@ -16,8 +16,8 @@
     "start": "node packages/channels/cli/dist/index.js"
   },
   "devDependencies": {
-    "react": "^19.3.0-canary-8b2e903a-20260320",
-    "react-dom": "^19.3.0-canary-8b2e903a-20260320",
+    "react": "^19.2.4",
+    "react-dom": "^19.2.4",
     "turbo": "^2.5.0",
     "typescript": "^5.8.0"
   }
