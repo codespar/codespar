@@ -1,8 +1,8 @@
 /**
  * Task Agent — Ephemeral agent that executes coding tasks.
  *
- * Uses ClaudeBridge to execute instructions via Claude Code CLI.
- * Falls back to simulation if Claude CLI is not available.
+ * Uses ClaudeBridge to execute instructions via Anthropic Messages API.
+ * Falls back to simulation if ANTHROPIC_API_KEY is not set.
  */
 
 import type {
@@ -55,7 +55,7 @@ export class TaskAgent implements Agent {
     this.startedAt = new Date();
     this.claudeAvailable = await this.bridge.isAvailable();
     if (this.claudeAvailable) {
-      console.log(`[${this.config.id}] Claude Code CLI detected`);
+      console.log(`[${this.config.id}] Anthropic API available`);
     }
     this._state = "IDLE";
   }
@@ -100,7 +100,8 @@ export class TaskAgent implements Agent {
         taskId,
         instruction,
         workDir,
-        timeout: 300_000,
+        projectContext: this.config.projectId || undefined,
+        timeout: 120_000,
       });
 
       task.status = result.status === "completed" ? "completed" : "failed";
@@ -117,13 +118,23 @@ export class TaskAgent implements Agent {
         ? `${result.durationMs}ms`
         : `${(result.durationMs / 1000).toFixed(1)}s`;
 
-      const mode = result.simulated ? " (simulated)" : "";
+      // For real (non-simulated) responses, format cleanly with full output
+      if (!result.simulated) {
+        return {
+          text: [
+            `[${this.config.id}] Task ${result.status}: ${taskId}`,
+            `  Instruction: ${instruction}`,
+            `  Duration: ${duration}`,
+            "",
+            result.output,
+          ].join("\n"),
+        };
+      }
 
       return {
         text: [
-          `[${this.config.id}] Task ${task.status}${mode}: ${taskId}`,
+          `[${this.config.id}] Task ${task.status} (simulated): ${taskId}`,
           `  Instruction: ${instruction}`,
-          `  Status: ${task.status}`,
           `  Duration: ${duration}`,
           `  Output: ${(task.output || "").slice(0, 500)}`,
         ].join("\n"),

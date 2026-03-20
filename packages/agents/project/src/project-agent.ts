@@ -257,9 +257,14 @@ export class ProjectAgent implements Agent {
             3,
             "conversation",
           );
-          const relevant = similar.filter((s) => s.score > 0.3);
-          if (relevant.length > 0) {
-            const lines = relevant.map(
+          // Only show results that look like task instructions (not status queries or help)
+          const taskSimilar = similar.filter((s) => {
+            if (s.score <= 0.4) return false;
+            const lower = s.entry.content.toLowerCase();
+            return lower.includes("instruct") || lower.includes("fix");
+          });
+          if (taskSimilar.length > 0) {
+            const lines = taskSimilar.map(
               (s) =>
                 `  - (${(s.score * 100).toFixed(0)}%) ${s.entry.content.split("\n")[0]}`,
             );

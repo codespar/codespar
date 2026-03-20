@@ -1,18 +1,15 @@
 /**
- * Claude Code Bridge — Executes instructions via Claude Code CLI.
+ * Claude Bridge — Executes coding instructions via Anthropic Messages API.
  *
- * Spawns `claude --print --dangerously-skip-permissions "instruction"`
- * as a child process. Falls back to simulation if CLI not available.
- *
- * MVP: runs on host. Future: runs in isolated Docker container.
+ * Instead of spawning Claude CLI (which requires local installation),
+ * this calls the Anthropic API directly. Works in any environment.
  */
-
-import { spawn } from "node:child_process";
 
 export interface ExecutionRequest {
   taskId: string;
   instruction: string;
   workDir: string;
+  projectContext?: string; // repo name, recent files, etc.
   timeout?: number;
   allowedTools?: string[];
   blockedPatterns?: string[];
@@ -27,92 +24,100 @@ export interface ExecutionResult {
   simulated: boolean;
 }
 
+const TASK_SYSTEM_PROMPT = `You are a senior software engineer working on a codebase. You receive coding instructions and produce high-quality code changes.
+
+When given an instruction:
+1. Analyze what needs to be done
+2. Describe the changes you would make (files to create/modify, what to add/remove)
+3. Write the actual code changes in a clear format
+4. Explain any trade-offs or considerations
+
+Be concise but thorough. Use code blocks with file paths. Focus on practical, production-ready code.`;
+
 export class ClaudeBridge {
-  private available: boolean | null = null;
+  private available: boolean = false;
 
-  /** Check if Claude Code CLI is installed. */
+  /** Check if the Anthropic API is available (API key is set). */
   async isAvailable(): Promise<boolean> {
-    if (this.available !== null) return this.available;
-
-    this.available = await new Promise<boolean>((resolve) => {
-      const proc = spawn("claude", ["--version"], { timeout: 5000 });
-      proc.on("close", (code) => resolve(code === 0));
-      proc.on("error", () => resolve(false));
-    });
-
+    this.available = !!process.env.ANTHROPIC_API_KEY;
     return this.available;
   }
 
-  /** Execute an instruction. Uses Claude CLI if available, otherwise simulates. */
+  /** Execute an instruction. Uses Anthropic API if key is set, otherwise simulates. */
   async execute(request: ExecutionRequest): Promise<ExecutionResult> {
-    const canRun = await this.isAvailable();
+    const apiKey = process.env.ANTHROPIC_API_KEY;
 
-    if (!canRun) {
+    if (!apiKey) {
       return this.simulate(request);
     }
 
-    return this.executeReal(request);
-  }
-
-  private async executeReal(request: ExecutionRequest): Promise<ExecutionResult> {
     const startTime = Date.now();
-    const timeout = request.timeout ?? 300_000;
+    const model = process.env.TASK_MODEL || "claude-sonnet-4-20250514";
 
-    return new Promise((resolve) => {
-      const proc = spawn(
-        "claude",
-        ["--print", "--dangerously-skip-permissions", request.instruction],
-        {
-          cwd: request.workDir,
-          timeout,
-          env: { ...process.env, CI: "true" },
-        }
-      );
+    try {
+      const userMessage = request.projectContext
+        ? `Project: ${request.projectContext}\n\nInstruction: ${request.instruction}`
+        : `Instruction: ${request.instruction}`;
 
-      let stdout = "";
-      let stderr = "";
-
-      proc.stdout.on("data", (data: Buffer) => {
-        stdout += data.toString();
+      const res = await fetch("https://api.anthropic.com/v1/messages", {
+        method: "POST",
+        headers: {
+          "x-api-key": apiKey,
+          "anthropic-version": "2023-06-01",
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          model,
+          max_tokens: 2000,
+          system: TASK_SYSTEM_PROMPT,
+          messages: [{ role: "user", content: userMessage }],
+        }),
+        signal: AbortSignal.timeout(request.timeout ?? 120000),
       });
 
-      proc.stderr.on("data", (data: Buffer) => {
-        stderr += data.toString();
-      });
-
-      proc.on("close", (code) => {
-        resolve({
-          taskId: request.taskId,
-          status: code === 0 ? "completed" : "failed",
-          output: (stdout || stderr || "(no output)").slice(0, 2000),
-          durationMs: Date.now() - startTime,
-          exitCode: code,
-          simulated: false,
-        });
-      });
-
-      proc.on("error", (err) => {
-        resolve({
+      if (!res.ok) {
+        const errText = await res.text().catch(() => "");
+        return {
           taskId: request.taskId,
           status: "failed",
-          output: `Execution error: ${err.message}`,
+          output: `API error: ${res.status} ${errText.slice(0, 200)}`,
           durationMs: Date.now() - startTime,
           exitCode: null,
           simulated: false,
-        });
-      });
-    });
+        };
+      }
+
+      const data = (await res.json()) as { content?: Array<{ text?: string }> };
+      const output = data.content?.[0]?.text || "(no output)";
+
+      return {
+        taskId: request.taskId,
+        status: "completed",
+        output: output.slice(0, 3000), // Limit output size
+        durationMs: Date.now() - startTime,
+        exitCode: 0,
+        simulated: false,
+      };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Unknown error";
+      return {
+        taskId: request.taskId,
+        status: message.includes("timeout") ? "timeout" : "failed",
+        output: `Execution error: ${message}`,
+        durationMs: Date.now() - startTime,
+        exitCode: null,
+        simulated: false,
+      };
+    }
   }
 
   private async simulate(request: ExecutionRequest): Promise<ExecutionResult> {
     const startTime = Date.now();
-    // Simulate a small delay
     await new Promise((r) => setTimeout(r, 100 + Math.random() * 200));
-
     return {
       taskId: request.taskId,
       status: "completed",
-      output: `[simulated] Claude CLI not found. Would execute: "${request.instruction}"`,
+      output: `[simulated] No ANTHROPIC_API_KEY. Would execute: "${request.instruction}"`,
       durationMs: Date.now() - startTime,
       exitCode: null,
       simulated: true,
