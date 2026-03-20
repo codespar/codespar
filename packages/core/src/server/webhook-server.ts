@@ -16,6 +16,7 @@ import * as path from "node:path";
 import Fastify, { type FastifyInstance } from "fastify";
 import cors from "@fastify/cors";
 import { parseGitHubWebhook, type CIEvent } from "../webhooks/github-handler.js";
+import { GitHubClient } from "../github/github-client.js";
 import type { AgentStatus, AgentState } from "../types/agent.js";
 import type { ChannelAdapter } from "../types/channel-adapter.js";
 import type { StorageProvider, ProjectConfig, ProjectListEntry } from "../storage/types.js";
@@ -327,13 +328,30 @@ export class WebhookServer {
           await this.agentFactory.createAgent(projectId, agentId, repo);
           await storage.addProject({ id: projectId, agentId, repo });
 
-          const port = this.port;
+          // Auto-configure GitHub webhook
+          const WEBHOOK_BASE_URL =
+            process.env.WEBHOOK_BASE_URL ||
+            "https://codespar-production.up.railway.app";
+          const webhookUrl = `${WEBHOOK_BASE_URL}/webhooks/github`;
+
+          const github = new GitHubClient();
+          let webhookConfigured = false;
+          if (github.isConfigured() && owner && repoName) {
+            const webhook = await github.createWebhook(
+              owner,
+              repoName,
+              webhookUrl,
+            );
+            webhookConfigured = !!webhook;
+          }
+
           return {
             id: projectId,
             agentId,
             repo,
             orgId,
-            webhookUrl: `http://localhost:${port}/webhooks/github`,
+            webhookUrl,
+            webhookConfigured,
           };
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);

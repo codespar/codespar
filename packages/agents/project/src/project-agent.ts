@@ -962,8 +962,39 @@ export class ProjectAgent implements Agent {
 
     await this.storage.setProjectConfig(this.config.id, config);
 
+    // Auto-configure GitHub webhook
+    const WEBHOOK_BASE_URL =
+      process.env.WEBHOOK_BASE_URL ||
+      "https://codespar-production.up.railway.app";
+    const webhookUrl = `${WEBHOOK_BASE_URL}/webhooks/github`;
+
+    let webhookStatus: string;
+    const { GitHubClient } = await import("@codespar/core");
+    const github = new GitHubClient();
+    if (github.isConfigured()) {
+      const webhook = await github.createWebhook(
+        parsed.owner,
+        parsed.name,
+        webhookUrl,
+      );
+      if (webhook) {
+        config.webhookConfigured = true;
+        await this.storage.setProjectConfig(this.config.id, config);
+        webhookStatus = `\n  \u2713 GitHub webhook configured automatically`;
+      } else {
+        webhookStatus = `\n  \u26a0 Could not auto-configure webhook (check GITHUB_TOKEN permissions).\n  Manual setup: ${webhookUrl}`;
+      }
+    } else {
+      webhookStatus = `\n  \u26a0 GITHUB_TOKEN not set. Configure webhook manually:\n  URL: ${webhookUrl}`;
+    }
+
     return {
-      text: `\u2713 [${this.config.id}] Project linked: ${parsed.owner}/${parsed.name}\n  Repository: ${parsed.url}\n  Agent: ${this.config.id} (L${this.config.autonomyLevel} ${this.autonomyLabel()})\n\n  Next steps:\n  1. Configure GitHub webhook:\n     URL: https://codespar-production.up.railway.app/webhooks/github\n     Events: workflow_run, pull_request, push\n  2. Your agent will start monitoring CI/CD events.`,
+      text: [
+        `\u2713 [${this.config.id}] Project linked: ${parsed.owner}/${parsed.name}`,
+        `  Repository: ${parsed.url}`,
+        `  Agent: ${this.config.id} (L${this.config.autonomyLevel} ${this.autonomyLabel()})`,
+        webhookStatus,
+      ].join("\n"),
     };
   }
 

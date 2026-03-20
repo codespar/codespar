@@ -155,6 +155,59 @@ export class GitHubClient {
     return { number: data.number as number, url: data.html_url as string };
   }
 
+  /** Create a webhook on a repo. Idempotent — returns existing hook if already configured. */
+  async createWebhook(
+    owner: string,
+    repo: string,
+    webhookUrl: string,
+    events: string[] = ["workflow_run", "pull_request", "push"],
+  ): Promise<{ id: number; url: string } | null> {
+    // Check if webhook already exists
+    const listRes = await fetch(
+      `${this.baseUrl}/repos/${owner}/${repo}/hooks`,
+      { headers: this.headers },
+    );
+    if (listRes.ok) {
+      const hooks = (await listRes.json()) as any[];
+      const existing = hooks.find((h: any) => h.config?.url === webhookUrl);
+      if (existing) {
+        console.log(`[github] Webhook already exists for ${owner}/${repo}`);
+        return { id: existing.id as number, url: existing.config.url as string };
+      }
+    }
+
+    // Create new webhook
+    const res = await fetch(
+      `${this.baseUrl}/repos/${owner}/${repo}/hooks`,
+      {
+        method: "POST",
+        headers: this.headers,
+        body: JSON.stringify({
+          name: "web",
+          active: true,
+          events,
+          config: {
+            url: webhookUrl,
+            content_type: "json",
+            insecure_ssl: "0",
+          },
+        }),
+      },
+    );
+
+    if (!res.ok) {
+      const err = await res.text().catch(() => "");
+      console.log(
+        `[github] Failed to create webhook: ${res.status} ${err.slice(0, 200)}`,
+      );
+      return null;
+    }
+
+    const data = (await res.json()) as any;
+    console.log(`[github] Webhook created for ${owner}/${repo}`);
+    return { id: data.id as number, url: data.config.url as string };
+  }
+
   /** Get the default branch name for a repo. */
   async getDefaultBranch(owner: string, repo: string): Promise<string> {
     const res = await fetch(
