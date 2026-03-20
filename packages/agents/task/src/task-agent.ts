@@ -13,8 +13,9 @@ import type {
   NormalizedMessage,
   ChannelResponse,
   ParsedIntent,
+  StorageProvider,
 } from "@codespar/core";
-import { ClaudeBridge, type ExecutionResult } from "@codespar/core";
+import { ClaudeBridge, GitHubClient, type ExecutionResult } from "@codespar/core";
 
 export interface TaskResult {
   taskId: string;
@@ -41,9 +42,11 @@ export class TaskAgent implements Agent {
   private executionHistory: TaskResult[] = [];
   private bridge: ClaudeBridge = new ClaudeBridge();
   private claudeAvailable: boolean = false;
+  private storage: StorageProvider | null;
 
-  constructor(config: AgentConfig) {
+  constructor(config: AgentConfig, storage?: StorageProvider) {
     this.config = { ...config, type: "task" };
+    this.storage = storage ?? null;
   }
 
   get state(): AgentState {
@@ -96,13 +99,33 @@ export class TaskAgent implements Agent {
     try {
       const workDir = process.env.CODESPAR_WORK_DIR || process.cwd();
 
-      const result: ExecutionResult = await this.bridge.execute({
-        taskId,
-        instruction,
-        workDir,
-        projectContext: this.config.projectId || undefined,
-        timeout: 120_000,
-      });
+      // When a linked repo exists and GitHub is configured, use repo-aware execution
+      // which reads actual code, sends context to Claude, and creates PRs.
+      let result: ExecutionResult;
+      const projectConfig = this.storage && this.config.projectId
+        ? await this.storage.getProjectConfig(this.config.projectId)
+        : null;
+      const github = new GitHubClient();
+
+      if (projectConfig && github.isConfigured()) {
+        result = await this.bridge.executeWithRepo({
+          taskId,
+          instruction,
+          workDir,
+          projectContext: this.config.projectId || undefined,
+          repoOwner: projectConfig.repoOwner,
+          repoName: projectConfig.repoName,
+          timeout: 120_000,
+        });
+      } else {
+        result = await this.bridge.execute({
+          taskId,
+          instruction,
+          workDir,
+          projectContext: this.config.projectId || undefined,
+          timeout: 120_000,
+        });
+      }
 
       task.status = result.status === "completed" ? "completed" : "failed";
       task.durationMs = result.durationMs;

@@ -123,6 +123,23 @@ export class IncidentAgent implements Agent {
       severity,
     };
 
+    if (this.storage) {
+      await this.storage.appendAudit({
+        actorType: "agent",
+        actorId: this.config.id,
+        action: "incident.investigated",
+        result: "success",
+        metadata: {
+          agentId: this.config.id,
+          project: this.config.projectId || "unknown",
+          risk: severity,
+          detail: `${investigation.error}. Severity: ${investigation.severity}`,
+          branch: event.branch,
+          repo: event.repo,
+        },
+      });
+    }
+
     this._state = "IDLE";
     return investigation;
   }

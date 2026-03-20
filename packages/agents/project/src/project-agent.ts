@@ -81,7 +81,8 @@ export class ProjectAgent implements Agent {
         projectId: config.projectId,
         autonomyLevel: config.autonomyLevel,
       },
-      this.approvalManager
+      this.approvalManager,
+      this.storage ?? undefined
     );
   }
 
@@ -147,15 +148,14 @@ export class ProjectAgent implements Agent {
           await this.storage.appendAudit({
             actorType: "user",
             actorId: message.channelUserId,
-            action: "smart_response",
+            action: "query.asked",
             result: "success",
             metadata: {
               agentId: this.config.id,
-              rawText: intent.rawText,
-              detail: intent.rawText,
               project: this.config.projectId || "unknown",
+              risk: intent.risk || "low",
+              detail: intent.rawText,
               channel: message.channelType,
-              risk: "low",
               classifiedBy: "sonnet",
               confidence: 1.0,
             },
@@ -174,30 +174,13 @@ export class ProjectAgent implements Agent {
       }
     }
 
-    // Persist task count and audit entry
+    // Persist task count
     if (this.storage) {
       await this.storage.setMemory(
         this.config.id,
         "tasksHandled",
         this.tasksHandled
       );
-      await this.storage.appendAudit({
-        actorType: "user",
-        actorId: message.channelUserId,
-        action: intent.type,
-        result: "success",
-        metadata: {
-          agentId: this.config.id,
-          rawText: intent.rawText,
-          detail: intent.rawText,
-          project: this.config.projectId || "unknown",
-          channel: message.channelType,
-          channelId: message.channelId,
-          risk: intent.risk,
-          classifiedBy: intent.confidence < 1.0 ? "nlu" : "regex",
-          confidence: intent.confidence,
-        },
-      });
     }
 
     let response: ChannelResponse;
@@ -205,21 +188,87 @@ export class ProjectAgent implements Agent {
     switch (intent.type) {
       case "status":
         response = await this.handleStatus(intent);
+        if (this.storage) {
+          await this.storage.appendAudit({
+            actorType: "user",
+            actorId: message.channelUserId,
+            action: "status.queried",
+            result: "success",
+            metadata: {
+              agentId: this.config.id,
+              project: this.config.projectId || "unknown",
+              risk: intent.risk,
+              detail: `Queried ${intent.params.target || "all"} status`,
+              channel: message.channelType,
+            },
+          });
+        }
         break;
 
       case "help":
         response = {
           text: `[${this.config.id}] ${COMMANDS_HELP}`,
         };
+        if (this.storage) {
+          await this.storage.appendAudit({
+            actorType: "user",
+            actorId: message.channelUserId,
+            action: "help.requested",
+            result: "success",
+            metadata: {
+              agentId: this.config.id,
+              project: this.config.projectId || "unknown",
+              risk: intent.risk,
+              detail: "Help menu displayed",
+              channel: message.channelType,
+            },
+          });
+        }
         break;
 
-      case "logs":
+      case "logs": {
+        const limit = intent.params.count ? parseInt(intent.params.count, 10) : 10;
         response = await this.handleLogs(intent);
+        if (this.storage) {
+          await this.storage.appendAudit({
+            actorType: "user",
+            actorId: message.channelUserId,
+            action: "logs.viewed",
+            result: "success",
+            metadata: {
+              agentId: this.config.id,
+              project: this.config.projectId || "unknown",
+              risk: intent.risk,
+              detail: `Viewed ${limit} recent entries`,
+              channel: message.channelType,
+            },
+          });
+        }
         break;
+      }
 
-      case "review":
+      case "review": {
         response = await this.delegateToReviewAgent(message, intent);
+        const prNumber = intent.params.prNumber
+          ? parseInt(intent.params.prNumber, 10)
+          : 0;
+        if (this.storage) {
+          await this.storage.appendAudit({
+            actorType: "agent",
+            actorId: this.config.id,
+            action: "pr.reviewed",
+            result: "success",
+            metadata: {
+              agentId: this.config.id,
+              project: this.config.projectId || "unknown",
+              risk: intent.risk,
+              detail: `PR #${prNumber} reviewed`,
+              channel: message.channelType,
+            },
+          });
+        }
         break;
+      }
 
       case "context": {
         // If the original question is complex (long text, classified by NLU),
@@ -272,6 +321,8 @@ export class ProjectAgent implements Agent {
           }
         }
 
+        const instruction = intent.params.instruction || intent.params.issue || intent.rawText;
+
         if (this.shouldAutoExecute(intent)) {
           // L4+: auto-execute without confirmation, notify after
           const result = await this.delegateToTaskAgent(message, intent);
@@ -284,23 +335,69 @@ export class ProjectAgent implements Agent {
             text: `${result.text}${similarContext}`,
           };
         }
+
+        if (this.storage) {
+          await this.storage.appendAudit({
+            actorType: "agent",
+            actorId: this.config.id,
+            action: "task.executed",
+            result: "success",
+            metadata: {
+              agentId: this.config.id,
+              project: this.config.projectId || "unknown",
+              risk: intent.risk,
+              detail: instruction,
+              channel: message.channelType,
+            },
+          });
+        }
         break;
       }
 
       case "link":
         response = await this.handleLink(message, intent);
+        if (this.storage) {
+          await this.storage.appendAudit({
+            actorType: "user",
+            actorId: message.channelUserId,
+            action: "project.linked",
+            result: "success",
+            metadata: {
+              agentId: this.config.id,
+              project: this.config.projectId || "unknown",
+              risk: intent.risk,
+              detail: `Linked ${intent.params.repo || "unknown"}`,
+              channel: message.channelType,
+            },
+          });
+        }
         break;
 
       case "unlink":
         response = await this.handleUnlink();
+        if (this.storage) {
+          await this.storage.appendAudit({
+            actorType: "user",
+            actorId: message.channelUserId,
+            action: "project.unlinked",
+            result: "success",
+            metadata: {
+              agentId: this.config.id,
+              project: this.config.projectId || "unknown",
+              risk: intent.risk,
+              detail: "Project unlinked",
+              channel: message.channelType,
+            },
+          });
+        }
         break;
 
       case "deploy": {
+        const env =
+          (intent.params.environment as "staging" | "production") ||
+          "staging";
         if (this.shouldAutoExecute(intent)) {
           // Auto-execute: skip approval, deploy directly
-          const env =
-            (intent.params.environment as "staging" | "production") ||
-            "staging";
           response = this.deployAgent.executeDeploy(env);
 
           // Log as autonomous action
@@ -311,27 +408,80 @@ export class ProjectAgent implements Agent {
               action: "deploy.auto_executed",
               result: "success",
               metadata: {
+                agentId: this.config.id,
+                project: this.config.projectId || "unknown",
+                risk: intent.risk,
+                detail: `Auto-deployed to ${env} (L${this.config.autonomyLevel})`,
+                channel: message.channelType,
                 environment: env,
                 autonomyLevel: this.config.autonomyLevel,
-                risk: intent.risk,
-                detail: `Auto-deployed to ${env} (L${this.config.autonomyLevel} policy)`,
               },
             });
           }
         } else {
           // Normal flow: request approval
           response = await this.deployAgent.handleMessage(message, intent);
+
+          if (this.storage) {
+            await this.storage.appendAudit({
+              actorType: "agent",
+              actorId: this.config.id,
+              action: "deploy.requested",
+              result: "pending",
+              metadata: {
+                agentId: this.config.id,
+                project: this.config.projectId || "unknown",
+                risk: intent.risk,
+                detail: `Deploy to ${env}. Waiting approval.`,
+                channel: message.channelType,
+                environment: env,
+              },
+            });
+          }
         }
         break;
       }
 
       case "approve":
         response = await this.deployAgent.handleMessage(message, intent);
+        if (this.storage) {
+          await this.storage.appendAudit({
+            actorType: "user",
+            actorId: message.channelUserId,
+            action: "approval.voted",
+            result: "success",
+            metadata: {
+              agentId: this.config.id,
+              project: this.config.projectId || "unknown",
+              risk: intent.risk,
+              detail: `Approved via ${message.channelType}. Token: ${intent.params.token || "unknown"}`,
+              channel: message.channelType,
+            },
+          });
+        }
         break;
 
-      case "rollback":
+      case "rollback": {
         response = await this.deployAgent.handleMessage(message, intent);
+        const rollbackEnv = intent.params.environment || "production";
+        if (this.storage) {
+          await this.storage.appendAudit({
+            actorType: "agent",
+            actorId: this.config.id,
+            action: "rollback.requested",
+            result: "pending",
+            metadata: {
+              agentId: this.config.id,
+              project: this.config.projectId || "unknown",
+              risk: intent.risk,
+              detail: `Rollback ${rollbackEnv}. Requires quorum.`,
+              channel: message.channelType,
+              environment: rollbackEnv,
+            },
+          });
+        }
         break;
+      }
 
       case "autonomy": {
         const newLevel = parseInt(intent.params.level, 10);
@@ -364,6 +514,22 @@ export class ProjectAgent implements Agent {
           response = {
             text: `[${this.config.id}] Autonomy updated to L${newLevel} (${labels[newLevel]}).`,
           };
+
+          if (this.storage) {
+            await this.storage.appendAudit({
+              actorType: "user",
+              actorId: message.channelUserId,
+              action: "autonomy.changed",
+              result: "success",
+              metadata: {
+                agentId: this.config.id,
+                project: this.config.projectId || "unknown",
+                risk: intent.risk,
+                detail: `Changed to L${newLevel} (${labels[newLevel]})`,
+                channel: message.channelType,
+              },
+            });
+          }
         }
         break;
       }
@@ -408,6 +574,22 @@ export class ProjectAgent implements Agent {
           response = {
             text: `[${this.config.id}] Registered: ${registered.displayName} (${message.channelType}:${message.channelUserId})\n  Role: ${registered.role}\n  ID: ${registered.id}`,
           };
+
+          if (this.storage) {
+            await this.storage.appendAudit({
+              actorType: "user",
+              actorId: message.channelUserId,
+              action: "identity.registered",
+              result: "success",
+              metadata: {
+                agentId: this.config.id,
+                project: this.config.projectId || "unknown",
+                risk: intent.risk,
+                detail: `Registered as ${name}`,
+                channel: message.channelType,
+              },
+            });
+          }
         }
         break;
       }
@@ -436,12 +618,27 @@ export class ProjectAgent implements Agent {
               metadata: { type: "smart_response" },
             });
           }
-          break;
+        } else {
+          // Fallback to "unknown command"
+          response = {
+            text: `[${this.config.id}] Unknown command: "${intent.rawText}"\n  Type "help" for available commands.`,
+          };
         }
-        // Fallback to "unknown command"
-        response = {
-          text: `[${this.config.id}] Unknown command: "${intent.rawText}"\n  Type "help" for available commands.`,
-        };
+        if (this.storage) {
+          await this.storage.appendAudit({
+            actorType: "user",
+            actorId: message.channelUserId,
+            action: "query.asked",
+            result: "success",
+            metadata: {
+              agentId: this.config.id,
+              project: this.config.projectId || "unknown",
+              risk: intent.risk,
+              detail: intent.rawText,
+              channel: message.channelType,
+            },
+          });
+        }
         break;
       }
     }
@@ -506,12 +703,15 @@ export class ProjectAgent implements Agent {
     this.taskAgentCounter++;
     const taskAgentId = `${this.config.id}-task-${this.taskAgentCounter}`;
 
-    const taskAgent = new TaskAgent({
-      id: taskAgentId,
-      type: "task",
-      projectId: this.config.projectId,
-      autonomyLevel: this.config.autonomyLevel,
-    });
+    const taskAgent = new TaskAgent(
+      {
+        id: taskAgentId,
+        type: "task",
+        projectId: this.config.projectId,
+        autonomyLevel: this.config.autonomyLevel,
+      },
+      this.storage ?? undefined,
+    );
 
     await taskAgent.initialize();
     const result = await taskAgent.handleMessage(message, intent);

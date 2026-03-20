@@ -20,6 +20,7 @@ import type {
   ChannelResponse,
   ParsedIntent,
   CIEvent,
+  StorageProvider,
 } from "@codespar/core";
 
 export interface PRReview {
@@ -56,12 +57,14 @@ export class ReviewAgent implements Agent {
   private startedAt: Date = new Date();
   private tasksHandled: number = 0;
   private reviewHistory: PRReview[] = [];
+  private storage: StorageProvider | null;
 
-  constructor(config: AgentConfig) {
+  constructor(config: AgentConfig, storage?: StorageProvider) {
     this.config = {
       ...config,
       type: "review",
     };
+    this.storage = storage ?? null;
   }
 
   get state(): AgentState {
@@ -159,6 +162,23 @@ export class ReviewAgent implements Agent {
     };
 
     this.reviewHistory.push(review);
+
+    if (this.storage) {
+      // Fire-and-forget; reviewPR is sync so we don't await
+      this.storage.appendAudit({
+        actorType: "agent",
+        actorId: this.config.id,
+        action: "pr.reviewed",
+        result: "success",
+        metadata: {
+          agentId: this.config.id,
+          project: this.config.projectId || "unknown",
+          risk: riskLevel,
+          detail: `PR #${prData.prNumber}. Risk: ${riskLevel}. ${autoApproved ? "Auto-approved" : "Awaiting review"}`,
+          prNumber: prData.prNumber,
+        },
+      });
+    }
 
     return { text: this.formatReview(review) };
   }

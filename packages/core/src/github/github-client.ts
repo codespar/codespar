@@ -1,0 +1,168 @@
+/**
+ * GitHub Client — Read and write code via GitHub REST API.
+ * Requires GITHUB_TOKEN env var.
+ */
+
+/* eslint-disable @typescript-eslint/no-explicit-any */
+
+export class GitHubClient {
+  private token: string;
+  private baseUrl = "https://api.github.com";
+
+  constructor(token?: string) {
+    this.token = token || process.env.GITHUB_TOKEN || "";
+  }
+
+  private get headers(): Record<string, string> {
+    return {
+      Authorization: `Bearer ${this.token}`,
+      Accept: "application/vnd.github.v3+json",
+      "Content-Type": "application/json",
+    };
+  }
+
+  /** Check if client is configured with a valid token. */
+  isConfigured(): boolean {
+    return !!this.token;
+  }
+
+  /** Get repo file tree (first level at given path). */
+  async getFileTree(
+    owner: string,
+    repo: string,
+    path = "",
+    ref = "main",
+  ): Promise<Array<{ path: string; type: string; size: number }>> {
+    const url = `${this.baseUrl}/repos/${owner}/${repo}/contents/${path}?ref=${ref}`;
+    const res = await fetch(url, { headers: this.headers });
+    if (!res.ok) return [];
+    const data = (await res.json()) as any[];
+    if (!Array.isArray(data)) return [];
+    return data.map((f: any) => ({
+      path: f.path as string,
+      type: f.type as string,
+      size: (f.size as number) || 0,
+    }));
+  }
+
+  /** Read a file's content (base64-decoded). */
+  async readFile(
+    owner: string,
+    repo: string,
+    path: string,
+    ref = "main",
+  ): Promise<{ content: string; sha: string } | null> {
+    const url = `${this.baseUrl}/repos/${owner}/${repo}/contents/${path}?ref=${ref}`;
+    const res = await fetch(url, { headers: this.headers });
+    if (!res.ok) return null;
+    const data = (await res.json()) as any;
+    if (!data.content) return null;
+    const content = Buffer.from(data.content as string, "base64").toString("utf-8");
+    return { content, sha: data.sha as string };
+  }
+
+  /** Find files matching a search query in the repo. */
+  async searchCode(
+    owner: string,
+    repo: string,
+    query: string,
+  ): Promise<Array<{ path: string; score: number }>> {
+    const url = `${this.baseUrl}/search/code?q=${encodeURIComponent(query)}+repo:${owner}/${repo}`;
+    const res = await fetch(url, { headers: this.headers });
+    if (!res.ok) return [];
+    const data = (await res.json()) as any;
+    return ((data.items as any[]) || []).slice(0, 10).map((item: any) => ({
+      path: item.path as string,
+      score: (item.score as number) || 0,
+    }));
+  }
+
+  /** Create a branch from an existing base branch. */
+  async createBranch(
+    owner: string,
+    repo: string,
+    branch: string,
+    baseBranch = "main",
+  ): Promise<boolean> {
+    // Get base branch SHA
+    const refRes = await fetch(
+      `${this.baseUrl}/repos/${owner}/${repo}/git/refs/heads/${baseBranch}`,
+      { headers: this.headers },
+    );
+    if (!refRes.ok) return false;
+    const refData = (await refRes.json()) as any;
+    const sha = refData.object.sha as string;
+
+    // Create new branch
+    const createRes = await fetch(
+      `${this.baseUrl}/repos/${owner}/${repo}/git/refs`,
+      {
+        method: "POST",
+        headers: this.headers,
+        body: JSON.stringify({ ref: `refs/heads/${branch}`, sha }),
+      },
+    );
+    return createRes.ok || createRes.status === 422; // 422 = already exists
+  }
+
+  /** Update or create a file on a branch. */
+  async updateFile(
+    owner: string,
+    repo: string,
+    path: string,
+    content: string,
+    message: string,
+    branch: string,
+    sha?: string,
+  ): Promise<boolean> {
+    const body: Record<string, unknown> = {
+      message,
+      content: Buffer.from(content).toString("base64"),
+      branch,
+    };
+    if (sha) body.sha = sha;
+
+    const res = await fetch(
+      `${this.baseUrl}/repos/${owner}/${repo}/contents/${path}`,
+      {
+        method: "PUT",
+        headers: this.headers,
+        body: JSON.stringify(body),
+      },
+    );
+    return res.ok;
+  }
+
+  /** Create a pull request. */
+  async createPR(
+    owner: string,
+    repo: string,
+    title: string,
+    body: string,
+    head: string,
+    base = "main",
+  ): Promise<{ number: number; url: string } | null> {
+    const res = await fetch(
+      `${this.baseUrl}/repos/${owner}/${repo}/pulls`,
+      {
+        method: "POST",
+        headers: this.headers,
+        body: JSON.stringify({ title, body, head, base }),
+      },
+    );
+    if (!res.ok) return null;
+    const data = (await res.json()) as any;
+    return { number: data.number as number, url: data.html_url as string };
+  }
+
+  /** Get the default branch name for a repo. */
+  async getDefaultBranch(owner: string, repo: string): Promise<string> {
+    const res = await fetch(
+      `${this.baseUrl}/repos/${owner}/${repo}`,
+      { headers: this.headers },
+    );
+    if (!res.ok) return "main";
+    const data = (await res.json()) as any;
+    return (data.default_branch as string) || "main";
+  }
+}

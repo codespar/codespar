@@ -74,7 +74,11 @@ export { WebhookServer } from "./server/webhook-server.js";
 
 // Execution
 export { ClaudeBridge } from "./execution/index.js";
-export type { ExecutionRequest, ExecutionResult } from "./execution/index.js";
+export type {
+  ExecutionRequest,
+  RepoExecutionRequest,
+  ExecutionResult,
+} from "./execution/index.js";
 
 // Memory (Vector Store)
 export { VectorStore } from "./memory/index.js";
@@ -83,3 +87,6 @@ export type { MemoryEntry, SearchResult } from "./memory/index.js";
 // AI (Smart Responder)
 export { generateSmartResponse } from "./ai/index.js";
 export type { AgentContext } from "./ai/index.js";
+
+// GitHub
+export { GitHubClient } from "./github/index.js";

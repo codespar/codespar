@@ -19,7 +19,7 @@ import type {
 } from "@codespar/core";
 
 import { ApprovalManager } from "@codespar/core";
-import type { ApprovalRequest } from "@codespar/core";
+import type { ApprovalRequest, StorageProvider } from "@codespar/core";
 
 export interface DeployRequest {
   id: string;
@@ -45,16 +45,18 @@ export class DeployAgent implements Agent {
   private tasksHandled: number = 0;
   private deployHistory: DeployRequest[] = [];
   private approvalManager: ApprovalManager;
+  private storage: StorageProvider | null;
 
   /** Map approval tokens to DeployRequest ids for lookups */
   private tokenToDeployId: Map<string, string> = new Map();
 
-  constructor(config: AgentConfig, approvalManager: ApprovalManager) {
+  constructor(config: AgentConfig, approvalManager: ApprovalManager, storage?: StorageProvider) {
     this.config = {
       ...config,
       type: "deploy",
     };
     this.approvalManager = approvalManager;
+    this.storage = storage ?? null;
   }
 
   get state(): AgentState {
@@ -78,15 +80,15 @@ export class DeployAgent implements Agent {
 
     switch (intent.type) {
       case "deploy":
-        response = this.handleDeploy(message, intent);
+        response = await this.handleDeploy(message, intent);
         break;
 
       case "approve":
-        response = this.handleApprove(message, intent);
+        response = await this.handleApprove(message, intent);
         break;
 
       case "rollback":
-        response = this.handleRollback(message, intent);
+        response = await this.handleRollback(message, intent);
         break;
 
       default:
@@ -126,10 +128,10 @@ export class DeployAgent implements Agent {
     };
   }
 
-  private handleDeploy(
+  private async handleDeploy(
     message: NormalizedMessage,
     intent: ParsedIntent
-  ): ChannelResponse {
+  ): Promise<ChannelResponse> {
     const env =
       (intent.params.environment as "staging" | "production") || "staging";
     const requiredApprovals = env === "production" ? 2 : 1;
@@ -155,16 +157,33 @@ export class DeployAgent implements Agent {
     this.deployHistory.push(deployRequest);
     this.tokenToDeployId.set(approval.token, deployRequest.id);
 
+    if (this.storage) {
+      await this.storage.appendAudit({
+        actorType: "agent",
+        actorId: this.config.id,
+        action: "deploy.requested",
+        result: "pending",
+        metadata: {
+          agentId: this.config.id,
+          project: this.config.projectId || "unknown",
+          risk: "high",
+          detail: `Deploy to ${env}. Requires ${requiredApprovals} approval(s).`,
+          channel: message.channelType,
+          environment: env,
+        },
+      });
+    }
+
     const expiresIn = env === "production" ? "10 minutes" : "10 minutes";
     return {
       text: `[${this.config.id}] Deploy to ${env} requested.\n  Requires ${requiredApprovals} approval(s).\n  Approve with: @codespar approve ${approval.token}\n  Expires in ${expiresIn}.`,
     };
   }
 
-  private handleApprove(
+  private async handleApprove(
     message: NormalizedMessage,
     intent: ParsedIntent
-  ): ChannelResponse {
+  ): Promise<ChannelResponse> {
     const token = intent.params.token;
     if (!token) {
       return {
@@ -183,6 +202,22 @@ export class DeployAgent implements Agent {
       return {
         text: `[${this.config.id}] Approval failed: token not found, expired, already voted, or self-approval blocked.`,
       };
+    }
+
+    if (this.storage) {
+      await this.storage.appendAudit({
+        actorType: "user",
+        actorId: message.channelUserId,
+        action: "approval.voted",
+        result: "success",
+        metadata: {
+          agentId: this.config.id,
+          project: this.config.projectId || "unknown",
+          risk: "high",
+          detail: `Vote cast for deploy. Token: ${token}`,
+          channel: message.channelType,
+        },
+      });
     }
 
     const deployId = this.tokenToDeployId.get(token);
@@ -229,19 +264,37 @@ export class DeployAgent implements Agent {
     };
   }
 
-  private handleRollback(
+  private async handleRollback(
     message: NormalizedMessage,
     intent: ParsedIntent
-  ): ChannelResponse {
+  ): Promise<ChannelResponse> {
     const requiredApprovals = 2;
+    const rollbackEnv = intent.params.environment || "production";
 
     const approval = this.approvalManager.createRequest({
       type: "rollback",
-      description: `Rollback ${intent.params.environment || "production"}`,
+      description: `Rollback ${rollbackEnv}`,
       requestedBy: message.channelUserId,
       requiredApprovals,
       expiresInMs: 3 * 60 * 1000, // 3 minutes for rollback
     });
+
+    if (this.storage) {
+      await this.storage.appendAudit({
+        actorType: "agent",
+        actorId: this.config.id,
+        action: "rollback.requested",
+        result: "pending",
+        metadata: {
+          agentId: this.config.id,
+          project: this.config.projectId || "unknown",
+          risk: "critical",
+          detail: `Rollback ${rollbackEnv}. Requires quorum.`,
+          channel: message.channelType,
+          environment: rollbackEnv,
+        },
+      });
+    }
 
     return {
       text: `[${this.config.id}] Rollback requested.\n  Requires ${requiredApprovals} approvals (quorum).\n  Approve with: @codespar approve ${approval.token}\n  Expires in 3 minutes.`,
