@@ -131,6 +131,49 @@ export class ProjectAgent implements Agent {
     this._state = "ACTIVE";
     this.tasksHandled++;
 
+    // Detect open-ended questions: long text with "?" classified by NLU (not regex)
+    // These should go to the smart responder regardless of classified intent
+    const isOpenQuestion = intent.rawText.includes("?")
+      && intent.rawText.length > 25
+      && intent.confidence < 1.0;
+
+    if (isOpenQuestion) {
+      const ctx = await this.buildAgentContext();
+      const smartResponse = await generateSmartResponse(intent.rawText, ctx);
+      if (smartResponse) {
+        // Still persist audit
+        if (this.storage) {
+          await this.storage.setMemory(this.config.id, "tasksHandled", this.tasksHandled);
+          await this.storage.appendAudit({
+            actorType: "user",
+            actorId: message.channelUserId,
+            action: "smart_response",
+            result: "success",
+            metadata: {
+              agentId: this.config.id,
+              rawText: intent.rawText,
+              detail: intent.rawText,
+              project: this.config.projectId || "unknown",
+              channel: message.channelType,
+              risk: "low",
+              classifiedBy: "sonnet",
+              confidence: 1.0,
+            },
+          });
+        }
+        if (this.vectorStore) {
+          await this.vectorStore.add({
+            agentId: this.config.id,
+            content: `Q: ${intent.rawText}\nA: ${smartResponse.slice(0, 200)}`,
+            category: "conversation",
+            metadata: { type: "smart_response" },
+          });
+        }
+        this._state = "IDLE";
+        return { text: `[${this.config.id}] ${smartResponse}` };
+      }
+    }
+
     // Persist task count and audit entry
     if (this.storage) {
       await this.storage.setMemory(
