@@ -102,10 +102,21 @@ export class TaskAgent implements Agent {
       // When a linked repo exists and GitHub is configured, use repo-aware execution
       // which reads actual code, sends context to Claude, and creates PRs.
       let result: ExecutionResult;
-      const projectConfig = this.storage && this.config.projectId
-        ? await this.storage.getProjectConfig(this.config.projectId)
-        : null;
+
+      // Try multiple keys to find the project config (agentId or projectId)
+      let projectConfig = null;
+      if (this.storage) {
+        // The Project Agent stores config under its own ID (e.g., "agent-default")
+        // Extract parent agent ID from task agent ID (e.g., "agent-default-task-1" → "agent-default")
+        const parentAgentId = this.config.id.replace(/-task-\d+$/, "");
+        projectConfig = await this.storage.getProjectConfig(parentAgentId);
+        if (!projectConfig && this.config.projectId) {
+          projectConfig = await this.storage.getProjectConfig(this.config.projectId);
+        }
+        console.log(`[${this.config.id}] Project config lookup: parentAgent=${parentAgentId}, found=${!!projectConfig}${projectConfig ? ` repo=${projectConfig.repoOwner}/${projectConfig.repoName}` : ""}`);
+      }
       const github = new GitHubClient();
+      console.log(`[${this.config.id}] GitHub configured: ${github.isConfigured()}, hasProjectConfig: ${!!projectConfig}`);
 
       if (projectConfig && github.isConfigured()) {
         result = await this.bridge.executeWithRepo({
