@@ -722,6 +722,8 @@ export class ProjectAgent implements Agent {
 
   /**
    * Spawns an ephemeral Review Agent to handle PR review commands.
+   * Passes repo info from project config so the Review Agent can
+   * fetch real PR data from GitHub.
    */
   private async delegateToReviewAgent(
     message: NormalizedMessage,
@@ -730,15 +732,39 @@ export class ProjectAgent implements Agent {
     this.reviewAgentCounter++;
     const reviewAgentId = `${this.config.id}-review-${this.reviewAgentCounter}`;
 
-    const reviewAgent = new ReviewAgent({
-      id: reviewAgentId,
-      type: "review",
-      projectId: this.config.projectId,
-      autonomyLevel: this.config.autonomyLevel,
-    });
+    const reviewAgent = new ReviewAgent(
+      {
+        id: reviewAgentId,
+        type: "review",
+        projectId: this.config.projectId,
+        autonomyLevel: this.config.autonomyLevel,
+      },
+      this.storage ?? undefined,
+    );
 
     await reviewAgent.initialize();
-    const result = await reviewAgent.handleMessage(message, intent);
+
+    // Resolve repo info from project config so the review agent
+    // can fetch the actual PR from GitHub.
+    let repoOwner: string | undefined;
+    let repoName: string | undefined;
+    if (this.storage) {
+      const config = await this.storage.getProjectConfig(this.config.id);
+      if (config) {
+        repoOwner = config.repoOwner;
+        repoName = config.repoName;
+      }
+    }
+
+    const prNumber = parseInt(intent.params.prNumber || "0", 10);
+    if (!prNumber) {
+      await reviewAgent.shutdown();
+      return {
+        text: `[${this.config.id}] Usage: review PR #<number>\n  Example: review PR #42`,
+      };
+    }
+
+    const result = await reviewAgent.reviewPR({ prNumber, repoOwner, repoName });
     await reviewAgent.shutdown();
 
     return result;
@@ -752,24 +778,33 @@ export class ProjectAgent implements Agent {
     this.reviewAgentCounter++;
     const reviewAgentId = `${this.config.id}-review-${this.reviewAgentCounter}`;
 
-    const reviewAgent = new ReviewAgent({
-      id: reviewAgentId,
-      type: "review",
-      projectId: this.config.projectId,
-      autonomyLevel: this.config.autonomyLevel,
-    });
+    const reviewAgent = new ReviewAgent(
+      {
+        id: reviewAgentId,
+        type: "review",
+        projectId: this.config.projectId,
+        autonomyLevel: this.config.autonomyLevel,
+      },
+      this.storage ?? undefined,
+    );
 
     await reviewAgent.initialize();
 
-    const result = reviewAgent.reviewPR({
+    // Resolve repo info from project config for CI-triggered reviews
+    let repoOwner: string | undefined;
+    let repoName: string | undefined;
+    if (this.storage) {
+      const config = await this.storage.getProjectConfig(this.config.id);
+      if (config) {
+        repoOwner = config.repoOwner;
+        repoName = config.repoName;
+      }
+    }
+
+    const result = await reviewAgent.reviewPR({
       prNumber: event.details.prNumber ?? 0,
-      title: event.details.title ?? "untitled",
-      author: "unknown",
-      branch: event.branch,
-      filesChanged: 0,
-      additions: 0,
-      deletions: 0,
-      changedFiles: [],
+      repoOwner,
+      repoName,
     });
 
     await reviewAgent.shutdown();

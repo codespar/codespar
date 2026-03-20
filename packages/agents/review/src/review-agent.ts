@@ -2,13 +2,12 @@
  * Review Agent — Ephemeral agent for PR code review.
  *
  * Responsibilities:
- * - Analyzes PR metadata and produces a structured review
+ * - Fetches real PR data and diff from GitHub API
+ * - Analyzes code changes with Claude Sonnet for detailed review
  * - Classifies risk level based on diff size and file sensitivity
  * - Auto-approves low-risk PRs when autonomy level permits (L3+)
+ * - Falls back to metadata-only review when GitHub is not configured
  * - Tracks review history for the session
- *
- * MVP: Generates structured reviews from PR metadata.
- * Future: Claude Code bridge for actual code analysis.
  */
 
 import type {
@@ -22,6 +21,8 @@ import type {
   CIEvent,
   StorageProvider,
 } from "@codespar/core";
+
+import { GitHubClient } from "@codespar/core";
 
 export interface PRReview {
   prNumber: number;
@@ -96,17 +97,10 @@ export class ReviewAgent implements Agent {
           text: `[${this.config.id}] Usage: review PR #<number>\n  Example: review PR #42`,
         };
       } else {
-        // MVP: Generate a placeholder review from the PR number.
-        // In production, this would fetch PR data from GitHub API.
-        response = this.reviewPR({
+        response = await this.reviewPR({
           prNumber,
-          title: `PR #${prNumber}`,
-          author: message.channelUserId,
-          branch: "unknown",
-          filesChanged: 0,
-          additions: 0,
-          deletions: 0,
-          changedFiles: [],
+          repoOwner: intent.params.repoOwner,
+          repoName: intent.params.repoName,
         });
       }
     } else {
@@ -120,51 +114,96 @@ export class ReviewAgent implements Agent {
   }
 
   /**
-   * Main review logic. Analyzes PR data and returns a formatted review.
+   * Main review entry point. Attempts a full GitHub-backed review with
+   * Claude Sonnet analysis. Falls back to metadata-only when GitHub
+   * is not configured or repo info is missing.
    */
-  reviewPR(prData: {
+  async reviewPR(prData: {
     prNumber: number;
-    title: string;
-    author: string;
-    branch: string;
-    filesChanged: number;
-    additions: number;
-    deletions: number;
-    changedFiles?: string[];
-  }): ChannelResponse {
-    const totalLines = prData.additions + prData.deletions;
-    const touchesSensitive = this.hasSensitiveFiles(prData.changedFiles ?? []);
-    const riskLevel = this.classifyRisk(totalLines, touchesSensitive);
+    repoOwner?: string;
+    repoName?: string;
+  }): Promise<ChannelResponse> {
+    const github = new GitHubClient();
 
-    const autonomyLevel = this.config.autonomyLevel;
-    const autoApproved = this.shouldAutoApprove(riskLevel, autonomyLevel);
+    if (github.isConfigured() && prData.repoOwner && prData.repoName) {
+      return this.reviewWithGitHub(
+        github,
+        prData.repoOwner,
+        prData.repoName,
+        prData.prNumber,
+      );
+    }
 
-    const summary = this.generateSummary(prData, riskLevel, touchesSensitive);
-    const suggestions = this.generateSuggestions(
-      prData,
-      riskLevel,
-      touchesSensitive
+    return this.reviewMetadataOnly(prData.prNumber);
+  }
+
+  /**
+   * Full review: fetch PR from GitHub, analyze diff with Claude Sonnet,
+   * return a detailed review with the PR link.
+   */
+  private async reviewWithGitHub(
+    github: GitHubClient,
+    owner: string,
+    repo: string,
+    prNumber: number,
+  ): Promise<ChannelResponse> {
+    // 1. Fetch PR details
+    const pr = await github.getPR(owner, repo, prNumber);
+    if (!pr) {
+      return {
+        text: `[${this.config.id}] Could not fetch PR #${prNumber} from ${owner}/${repo}. Check that the PR exists and GITHUB_TOKEN has access.`,
+      };
+    }
+
+    // 2. Fetch PR files/diff
+    const files = await github.getPRFiles(owner, repo, prNumber);
+
+    // 3. Classify risk
+    const hasSensitiveFiles = files.some((f) =>
+      SENSITIVE_PATTERNS.some((p) => p.test(f.filename)),
     );
+    const totalChanges = pr.additions + pr.deletions;
+    const risk: "low" | "medium" | "high" = hasSensitiveFiles
+      ? "high"
+      : totalChanges > 200
+        ? "high"
+        : totalChanges > 50
+          ? "medium"
+          : "low";
 
+    // 4. Analyze with Claude Sonnet
+    let aiReview = "";
+    const apiKey = process.env.ANTHROPIC_API_KEY;
+    if (apiKey && files.length > 0) {
+      aiReview = await this.analyzeWithClaude(apiKey, pr.title, files);
+    }
+
+    // 5. Auto-approve decision
+    const autoApprove =
+      this.config.autonomyLevel >= 3 && risk === "low";
+    const decision = autoApprove
+      ? `\u2713 Auto-approved (L${this.config.autonomyLevel} policy)`
+      : "Awaiting manual review";
+
+    // 6. Record in history
     const review: PRReview = {
-      prNumber: prData.prNumber,
-      title: prData.title,
-      author: prData.author,
-      branch: prData.branch,
-      filesChanged: prData.filesChanged,
-      additions: prData.additions,
-      deletions: prData.deletions,
-      riskLevel,
-      autoApproved,
-      summary,
-      suggestions,
+      prNumber,
+      title: pr.title,
+      author: pr.author,
+      branch: pr.branch,
+      filesChanged: pr.changedFiles,
+      additions: pr.additions,
+      deletions: pr.deletions,
+      riskLevel: risk,
+      autoApproved: autoApprove,
+      summary: aiReview || "No AI analysis available",
+      suggestions: [],
       reviewedAt: new Date(),
     };
-
     this.reviewHistory.push(review);
 
+    // 7. Audit log
     if (this.storage) {
-      // Fire-and-forget; reviewPR is sync so we don't await
       this.storage.appendAudit({
         actorType: "agent",
         actorId: this.config.id,
@@ -173,167 +212,166 @@ export class ReviewAgent implements Agent {
         metadata: {
           agentId: this.config.id,
           project: this.config.projectId || "unknown",
-          risk: riskLevel,
-          detail: `PR #${prData.prNumber}. Risk: ${riskLevel}. ${autoApproved ? "Auto-approved" : "Awaiting review"}`,
-          prNumber: prData.prNumber,
+          risk,
+          detail: `PR #${prNumber}. Risk: ${risk}. ${autoApprove ? "Auto-approved" : "Awaiting review"}`,
+          prNumber,
+          url: pr.url,
         },
       });
     }
 
-    return { text: this.formatReview(review) };
-  }
+    // 8. Format response
+    const filesList = files
+      .slice(0, 10)
+      .map((f) => {
+        const icon =
+          f.status === "added" ? "+" : f.status === "removed" ? "-" : "~";
+        return `    ${icon} ${f.filename}`;
+      })
+      .join("\n");
 
-  /**
-   * Classify risk based on diff size and file sensitivity.
-   *
-   * - Low: <50 lines changed, no sensitive files
-   * - Medium: 50-200 lines, or touches test files
-   * - High: >200 lines, touches sensitive files, or is a migration
-   */
-  private classifyRisk(
-    totalLines: number,
-    touchesSensitive: boolean
-  ): "low" | "medium" | "high" {
-    if (touchesSensitive || totalLines > 200) {
-      return "high";
+    const riskLabel =
+      risk.charAt(0).toUpperCase() + risk.slice(1);
+    const riskIcon =
+      risk === "low" ? "\u2713" : risk === "high" ? "\u26a0" : "";
+
+    const lines = [
+      `[${this.config.id}] PR #${prNumber} Review`,
+      ``,
+      `  Title: ${pr.title}`,
+      `  URL: ${pr.url}`,
+      `  Author: ${pr.author} \u00b7 Branch: ${pr.branch} \u2192 ${pr.baseBranch}`,
+      `  Changes: ${pr.changedFiles} file(s) \u00b7 +${pr.additions} -${pr.deletions} lines`,
+      ``,
+      `  Files:`,
+      filesList,
+    ];
+
+    if (files.length > 10) {
+      lines.push(`    ... and ${files.length - 10} more`);
     }
-    if (totalLines >= 50) {
-      return "medium";
-    }
-    return "low";
-  }
 
-  /**
-   * Determine whether to auto-approve based on risk and autonomy level.
-   *
-   * - L3+: auto-approve low-risk PRs
-   * - L2: never auto-approve (suggest only)
-   * - L0-L1: never auto-approve
-   */
-  private shouldAutoApprove(
-    riskLevel: "low" | "medium" | "high",
-    autonomyLevel: number
-  ): boolean {
-    if (riskLevel !== "low") return false;
-    return autonomyLevel >= 3;
-  }
-
-  /**
-   * Check if any changed files match security-sensitive patterns.
-   */
-  private hasSensitiveFiles(changedFiles: string[]): boolean {
-    return changedFiles.some((file) =>
-      SENSITIVE_PATTERNS.some((pattern) => pattern.test(file))
+    lines.push(
+      ``,
+      `  Risk: ${riskLabel} ${riskIcon}`,
+      `  Decision: ${decision}`,
     );
+
+    if (aiReview) {
+      lines.push(``, `  Review:`, `  ${aiReview}`);
+    }
+
+    lines.push(``, `  ${pr.url}`);
+
+    return { text: lines.join("\n") };
   }
 
   /**
-   * Generate a human-readable summary of the PR.
+   * Call the Anthropic Messages API to analyze the PR diff.
+   * Returns the review text, or empty string on failure.
    */
-  private generateSummary(
-    prData: {
-      prNumber: number;
+  private async analyzeWithClaude(
+    apiKey: string,
+    prTitle: string,
+    files: Array<{
+      filename: string;
+      status: string;
       additions: number;
       deletions: number;
-      filesChanged: number;
-    },
-    riskLevel: string,
-    touchesSensitive: boolean
-  ): string {
-    const parts: string[] = [];
-    const totalLines = prData.additions + prData.deletions;
+      patch: string;
+    }>,
+  ): Promise<string> {
+    const diffContext = files
+      .slice(0, 10)
+      .map(
+        (f) =>
+          `### ${f.filename} (${f.status}, +${f.additions} -${f.deletions})\n\`\`\`diff\n${f.patch.slice(0, 3000)}\n\`\`\``,
+      )
+      .join("\n\n");
 
-    if (totalLines === 0) {
-      parts.push("No diff data available (metadata-only review)");
-    } else if (totalLines < 50) {
-      parts.push(
-        `Small change: ${prData.filesChanged} file(s), +${prData.additions} -${prData.deletions}`
-      );
-    } else if (totalLines <= 200) {
-      parts.push(
-        `Medium change: ${prData.filesChanged} file(s), +${prData.additions} -${prData.deletions}`
-      );
-    } else {
-      parts.push(
-        `Large change: ${prData.filesChanged} file(s), +${prData.additions} -${prData.deletions}`
-      );
+    try {
+      const res = await fetch("https://api.anthropic.com/v1/messages", {
+        method: "POST",
+        headers: {
+          "x-api-key": apiKey,
+          "anthropic-version": "2023-06-01",
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          model: process.env.REVIEW_MODEL || "claude-sonnet-4-20250514",
+          max_tokens: 1000,
+          system:
+            "You are a senior code reviewer. Analyze the PR diff and provide a concise review. Focus on: bugs, security issues, code quality, and suggestions. Be direct. Use bullet points. Keep it under 200 words.",
+          messages: [
+            { role: "user", content: `PR: ${prTitle}\n\n${diffContext}` },
+          ],
+        }),
+        signal: AbortSignal.timeout(30000),
+      });
+
+      if (res.ok) {
+        const data = (await res.json()) as {
+          content?: Array<{ text?: string }>;
+        };
+        return data.content?.[0]?.text || "";
+      }
+
+      return "";
+    } catch {
+      // Timeout or network error — degrade gracefully
+      return "";
     }
-
-    if (touchesSensitive) {
-      parts.push("Security-sensitive files modified");
-    } else {
-      parts.push("No security-sensitive files modified");
-    }
-
-    return parts.join("\n  - ");
   }
 
   /**
-   * Generate actionable suggestions based on PR characteristics.
+   * Fallback review when GitHub is not configured.
+   * Produces a metadata-only review with a note about missing GitHub integration.
    */
-  private generateSuggestions(
-    prData: { additions: number; deletions: number; filesChanged: number },
-    riskLevel: string,
-    touchesSensitive: boolean
-  ): string[] {
-    const suggestions: string[] = [];
-    const totalLines = prData.additions + prData.deletions;
+  private reviewMetadataOnly(prNumber: number): ChannelResponse {
+    const lines = [
+      `[${this.config.id}] PR #${prNumber} Review`,
+      ``,
+      `  No diff data available (metadata-only review).`,
+      `  To enable full reviews, configure GITHUB_TOKEN and link a repository.`,
+      ``,
+      `  Risk: Unknown`,
+      `  Decision: Awaiting manual review`,
+    ];
 
-    if (totalLines > 400) {
-      suggestions.push(
-        "Consider splitting this PR into smaller, focused changes"
-      );
+    // Record in history
+    const review: PRReview = {
+      prNumber,
+      title: `PR #${prNumber}`,
+      author: "unknown",
+      branch: "unknown",
+      filesChanged: 0,
+      additions: 0,
+      deletions: 0,
+      riskLevel: "low",
+      autoApproved: false,
+      summary: "Metadata-only review (no GitHub access)",
+      suggestions: [],
+      reviewedAt: new Date(),
+    };
+    this.reviewHistory.push(review);
+
+    if (this.storage) {
+      this.storage.appendAudit({
+        actorType: "agent",
+        actorId: this.config.id,
+        action: "pr.reviewed",
+        result: "success",
+        metadata: {
+          agentId: this.config.id,
+          project: this.config.projectId || "unknown",
+          risk: "low",
+          detail: `PR #${prNumber}. Metadata-only review (no GitHub access)`,
+          prNumber,
+        },
+      });
     }
 
-    if (touchesSensitive) {
-      suggestions.push("Security-sensitive files changed — manual review required");
-    }
-
-    if (prData.additions > 0 && prData.deletions === 0 && totalLines > 100) {
-      suggestions.push("Large addition with no deletions — check for dead code");
-    }
-
-    return suggestions;
-  }
-
-  /**
-   * Format a PRReview into the agent output format.
-   */
-  private formatReview(review: PRReview): string {
-    const riskIcon =
-      review.riskLevel === "low"
-        ? "\u2713"
-        : review.riskLevel === "medium"
-          ? "\u25cb"
-          : "\u2717";
-
-    const decision = review.autoApproved
-      ? `\u2713 Auto-approved (L${this.config.autonomyLevel} policy)`
-      : review.riskLevel === "low" && this.config.autonomyLevel >= 2
-        ? `Suggest: approve (L${this.config.autonomyLevel} policy)`
-        : `Awaiting manual review`;
-
-    const suggestionsBlock =
-      review.suggestions.length > 0
-        ? review.suggestions.map((s) => `  - ${s}`).join("\n")
-        : "  (none)";
-
-    return [
-      `[${this.config.id}] PR #${review.prNumber} Review`,
-      ``,
-      `  Title: ${review.title}`,
-      `  Author: ${review.author} \u00b7 Branch: ${review.branch}`,
-      `  Changes: ${review.filesChanged} file(s) \u00b7 +${review.additions} -${review.deletions} lines`,
-      ``,
-      `  Risk: ${review.riskLevel.charAt(0).toUpperCase() + review.riskLevel.slice(1)} ${riskIcon}`,
-      `  Decision: ${decision}`,
-      ``,
-      `  Summary:`,
-      `  - ${review.summary}`,
-      ``,
-      `  Suggestions:`,
-      suggestionsBlock,
-    ].join("\n");
+    return { text: lines.join("\n") };
   }
 
   /**

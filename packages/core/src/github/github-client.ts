@@ -208,6 +208,73 @@ export class GitHubClient {
     return { id: data.id as number, url: data.config.url as string };
   }
 
+  /** Get PR details. */
+  async getPR(
+    owner: string,
+    repo: string,
+    prNumber: number,
+  ): Promise<{
+    title: string;
+    body: string;
+    author: string;
+    branch: string;
+    baseBranch: string;
+    state: string;
+    url: string;
+    changedFiles: number;
+    additions: number;
+    deletions: number;
+  } | null> {
+    const res = await fetch(
+      `${this.baseUrl}/repos/${owner}/${repo}/pulls/${prNumber}`,
+      { headers: this.headers },
+    );
+    if (!res.ok) return null;
+    const data = (await res.json()) as any;
+    return {
+      title: data.title as string,
+      body: (data.body as string) || "",
+      author: (data.user?.login as string) || "unknown",
+      branch: (data.head?.ref as string) || "unknown",
+      baseBranch: (data.base?.ref as string) || "main",
+      state: data.state as string,
+      url: data.html_url as string,
+      changedFiles: (data.changed_files as number) || 0,
+      additions: (data.additions as number) || 0,
+      deletions: (data.deletions as number) || 0,
+    };
+  }
+
+  /** Get PR diff/files. */
+  async getPRFiles(
+    owner: string,
+    repo: string,
+    prNumber: number,
+  ): Promise<
+    Array<{
+      filename: string;
+      status: string;
+      additions: number;
+      deletions: number;
+      patch: string;
+    }>
+  > {
+    const res = await fetch(
+      `${this.baseUrl}/repos/${owner}/${repo}/pulls/${prNumber}/files`,
+      { headers: this.headers },
+    );
+    if (!res.ok) return [];
+    const data = (await res.json()) as any[];
+    if (!Array.isArray(data)) return [];
+    return data.map((f: any) => ({
+      filename: f.filename as string,
+      status: (f.status as string) || "modified",
+      additions: (f.additions as number) || 0,
+      deletions: (f.deletions as number) || 0,
+      patch: (f.patch as string) || "",
+    }));
+  }
+
   /** Get the default branch name for a repo. */
   async getDefaultBranch(owner: string, repo: string): Promise<string> {
     const res = await fetch(
