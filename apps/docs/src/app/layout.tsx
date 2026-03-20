@@ -10,6 +10,14 @@ export const metadata: Metadata = {
   },
   description:
     "Documentation for CodeSpar — autonomous AI coding agents deployed to WhatsApp, Slack, Telegram, and Discord.",
+  icons: {
+    icon: [
+      { url: "/favicon.svg", type: "image/svg+xml" },
+      { url: "/favicon-32.png", sizes: "32x32", type: "image/png" },
+      { url: "/favicon-192.png", sizes: "192x192", type: "image/png" },
+    ],
+    apple: "/apple-touch-icon.png",
+  },
 };
 
 export default function RootLayout({ children }: { children: ReactNode }) {
