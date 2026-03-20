@@ -644,29 +644,36 @@ export class WebhookServer {
       }
     );
 
-    // List audit entries (org-scoped via x-org-id header)
-    this.app.get<{ Querystring: { limit?: string; risk?: string } }>(
+    // List audit entries (org-scoped via x-org-id header, paginated)
+    this.app.get<{ Querystring: { limit?: string; page?: string; risk?: string } }>(
       "/api/audit",
       async (request, _reply) => {
-        const limit = parseInt(request.query.limit ?? "20", 10);
+        const rawLimit = parseInt(request.query.limit ?? "20", 10);
+        const pageSize = Math.min(Math.max(rawLimit, 1), 100);
+        const pageNum = Math.max(parseInt(request.query.page ?? "1", 10), 1);
         const riskFilter = request.query.risk ?? "all";
         const orgId = this.getOrgId(request);
         const storage = this.getOrgStorage(orgId);
 
-        // Query audit for all agents (empty string matches broad query)
-        // FileStorage.queryAudit filters by actorId, so we query broadly
-        const entries = await storage.queryAudit("", limit);
+        // Fetch all entries (unfiltered by risk) so we can apply risk filter on the full set
+        // We request a large limit to get all entries for risk filtering
+        const { entries: allEntries, total: unfilteredTotal } = await storage.queryAudit("", 10000, 0);
 
         const filtered =
           riskFilter === "all"
-            ? entries
-            : entries.filter(
+            ? allEntries
+            : allEntries.filter(
                 (e) =>
                   e.metadata?.["risk"] === riskFilter
               );
 
+        const total = filtered.length;
+        const totalPages = Math.max(Math.ceil(total / pageSize), 1);
+        const offset = (pageNum - 1) * pageSize;
+        const page = filtered.slice(offset, offset + pageSize);
+
         return {
-          entries: filtered.map((e) => {
+          entries: page.map((e) => {
             // Resolve display name from identity store when available
             let displayName: string | undefined;
             if (this.identityStore && e.actorType === "user") {
@@ -692,7 +699,11 @@ export class WebhookServer {
               confidence: e.metadata?.["confidence"] ?? undefined,
             };
           }),
-          total: filtered.length,
+          total,
+          page: pageNum,
+          pageSize,
+          totalPages,
+          hasMore: pageNum < totalPages,
         };
       }
     );

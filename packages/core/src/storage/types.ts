@@ -60,5 +60,5 @@ export interface StorageProvider {
   appendAudit(
     entry: Omit<AuditEntry, "id" | "timestamp">
   ): Promise<AuditEntry>;
-  queryAudit(agentId: string, limit?: number): Promise<AuditEntry[]>;
+  queryAudit(agentId: string, limit?: number, offset?: number): Promise<{ entries: AuditEntry[]; total: number }>;
 }

@@ -869,7 +869,7 @@ export class ProjectAgent implements Agent {
     const uptimeMs = Date.now() - this.startedAt.getTime();
 
     const recentAudit = this.storage
-      ? (await this.storage.queryAudit("", 10)).map((e) => ({
+      ? (await this.storage.queryAudit("", 10)).entries.map((e) => ({
           action: e.action,
           detail: String(e.metadata?.detail || e.metadata?.rawText || ""),
           timestamp: e.timestamp.toISOString(),
@@ -908,7 +908,7 @@ export class ProjectAgent implements Agent {
     }
 
     const limit = intent.params.count ? parseInt(intent.params.count, 10) : 10;
-    const entries = await this.storage.queryAudit("", limit);
+    const { entries } = await this.storage.queryAudit("", limit);
 
     if (entries.length === 0) {
       return {

@@ -170,14 +170,21 @@ export class FileStorage implements StorageProvider {
     return full;
   }
 
-  async queryAudit(agentId: string, limit: number = 20): Promise<AuditEntry[]> {
+  async queryAudit(agentId: string, limit: number = 20, offset: number = 0): Promise<{ entries: AuditEntry[]; total: number }> {
     const data = await this.readAuditFile();
     const filtered = agentId
       ? data.entries.filter((e) => e.actorId === agentId || e.metadata?.agentId === agentId)
       : data.entries;
-    return filtered
-      .slice(-limit)
-      .map((e) => ({ ...e, timestamp: new Date(e.timestamp) }));
+
+    // Reverse so newest first
+    const reversed = [...filtered].reverse();
+    const total = reversed.length;
+    const page = reversed.slice(offset, offset + limit);
+
+    return {
+      entries: page.map((e) => ({ ...e, timestamp: new Date(e.timestamp) })),
+      total,
+    };
   }
 
   // ── Internal helpers ───────────────────────────────────────────

@@ -92,7 +92,7 @@ export class IncidentAgent implements Agent {
 
     // Pull recent audit entries for additional context
     if (this.storage) {
-      const entries = await this.storage.queryAudit("", 5);
+      const { entries } = await this.storage.queryAudit("", 5);
       for (const entry of entries) {
         const detail = entry.metadata?.detail;
         if (typeof detail === "string") {
