@@ -16,6 +16,7 @@ import type {
   ChannelResponse,
   NormalizedMessage,
 } from "@codespar/core";
+import { parseIntent } from "@codespar/core";
 
 export interface SupervisorConfig {
   healthCheckIntervalMs?: number;
@@ -61,6 +62,39 @@ export class AgentSupervisor {
       // when the adapter starts receiving messages
       adapter.onMessage(async (message: NormalizedMessage) => {
         try {
+          // Parse intent to detect long-running tasks
+          const intent = await parseIntent(message.text);
+
+          const LONG_RUNNING_INTENTS = new Set([
+            "instruct", "fix", "review", "deploy", "rollback",
+          ]);
+          const isLongRunning =
+            LONG_RUNNING_INTENTS.has(intent.type) ||
+            (intent.type === "unknown" && message.text.length > 25);
+
+          // Send immediate progress feedback for long-running tasks
+          if (isLongRunning) {
+            const PROGRESS_MESSAGES: Record<string, string> = {
+              instruct: "\u23f3 Executing task...",
+              fix: "\ud83d\udd0d Investigating and fixing...",
+              review: "\ud83d\udccb Reviewing PR...",
+              deploy: "\ud83d\ude80 Processing deploy request...",
+              rollback: "\u23ea Processing rollback...",
+              unknown: "\ud83e\udd14 Thinking...",
+            };
+
+            const progressResponse: ChannelResponse = {
+              text: PROGRESS_MESSAGES[intent.type] || "\u23f3 Working on it...",
+            };
+
+            if (message.isDM) {
+              await adapter.sendDM(message.channelUserId, progressResponse);
+            } else {
+              await adapter.sendToChannel(message.channelId, progressResponse);
+            }
+          }
+
+          // Process the actual command
           const response = await this.router.route(message);
           if (response) {
             if (message.isDM) {
