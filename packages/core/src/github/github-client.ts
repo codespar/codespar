@@ -275,6 +275,43 @@ export class GitHubClient {
     }));
   }
 
+  /** List open pull requests for a repo. */
+  async listPRs(
+    owner: string,
+    repo: string,
+    state: "open" | "closed" | "all" = "open",
+    limit = 10,
+  ): Promise<
+    Array<{
+      number: number;
+      title: string;
+      author: string;
+      branch: string;
+      url: string;
+      createdAt: string;
+      updatedAt: string;
+      labels: string[];
+    }>
+  > {
+    const res = await fetch(
+      `${this.baseUrl}/repos/${owner}/${repo}/pulls?state=${state}&per_page=${limit}&sort=updated&direction=desc`,
+      { headers: this.headers },
+    );
+    if (!res.ok) return [];
+    const data = (await res.json()) as any[];
+    if (!Array.isArray(data)) return [];
+    return data.map((pr: any) => ({
+      number: pr.number as number,
+      title: pr.title as string,
+      author: (pr.user?.login as string) || "unknown",
+      branch: (pr.head?.ref as string) || "unknown",
+      url: pr.html_url as string,
+      createdAt: pr.created_at as string,
+      updatedAt: pr.updated_at as string,
+      labels: ((pr.labels as any[]) || []).map((l: any) => l.name as string),
+    }));
+  }
+
   /** Get the default branch name for a repo. */
   async getDefaultBranch(owner: string, repo: string): Promise<string> {
     const res = await fetch(

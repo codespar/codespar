@@ -22,6 +22,7 @@ Classify the user's message into ONE of these intents:
 - link: linking a repository
 - unlink: unlinking a repository
 - context: asking about agent memory, context, or learned patterns
+- prs: asking about pull requests (how many PRs, list PRs, open PRs)
 - unknown: cannot determine intent
 
 Respond with ONLY a JSON object: {"intent":"<type>","params":{},"confidence":0.95}

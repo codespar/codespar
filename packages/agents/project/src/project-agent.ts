@@ -23,7 +23,7 @@ import type {
   CIEvent,
 } from "@codespar/core";
 
-import { ApprovalManager, VectorStore, IdentityStore, generateSmartResponse } from "@codespar/core";
+import { ApprovalManager, VectorStore, IdentityStore, GitHubClient, generateSmartResponse } from "@codespar/core";
 import type { AgentContext } from "@codespar/core";
 import { TaskAgent } from "@codespar/agent-task";
 import { DeployAgent } from "@codespar/agent-deploy";
@@ -43,6 +43,7 @@ const COMMANDS_HELP = `Available commands:
   rollback [env]            — Rollback last deploy
   approve [token]           — Approve pending action
   autonomy [L0-L5]          — Set autonomy level
+  prs [open|closed|all]     — List pull requests
   memory                    — Show agent memory stats
   whoami                    — Show your identity and linked channels
   register <name>           — Register your display name`;
@@ -267,6 +268,11 @@ export class ProjectAgent implements Agent {
             },
           });
         }
+        break;
+      }
+
+      case "prs": {
+        response = await this.handleListPRs(intent, message);
         break;
       }
 
@@ -924,6 +930,59 @@ export class ProjectAgent implements Agent {
 
     return {
       text: `[${this.config.id}] Recent activity (${entries.length} entries):\n${lines.join("\n")}`,
+    };
+  }
+
+  private async handleListPRs(
+    intent: ParsedIntent,
+    message: NormalizedMessage,
+  ): Promise<ChannelResponse> {
+    // Get project config for repo info
+    if (!this.storage) {
+      return { text: `[${this.config.id}] No storage configured. Cannot look up linked project.` };
+    }
+
+    const config = await this.storage.getProjectConfig(this.config.id);
+    if (!config) {
+      return { text: `[${this.config.id}] No project linked. Use: link <repo-url>` };
+    }
+
+    const github = new GitHubClient();
+    if (!github.isConfigured()) {
+      return { text: `[${this.config.id}] GitHub not configured. Set GITHUB_TOKEN.` };
+    }
+
+    const state = (intent.params.state || "open") as "open" | "closed" | "all";
+    const prs = await github.listPRs(config.repoOwner, config.repoName, state);
+
+    await this.storage.appendAudit({
+      actorType: "user",
+      actorId: message.channelUserId,
+      action: "prs.listed",
+      result: "success",
+      metadata: {
+        agentId: this.config.id,
+        project: this.config.projectId || "unknown",
+        risk: intent.risk,
+        detail: `Listed ${prs.length} ${state} PRs`,
+        channel: message.channelType,
+      },
+    });
+
+    if (prs.length === 0) {
+      return { text: `[${this.config.id}] No ${state} pull requests in ${config.repoOwner}/${config.repoName}.` };
+    }
+
+    const lines = prs.map((pr) => {
+      const labels = pr.labels.length > 0 ? ` [${pr.labels.join(", ")}]` : "";
+      return `  #${pr.number} ${pr.title} (by ${pr.author})${labels}\n    ${pr.url}`;
+    });
+
+    return {
+      text: [
+        `[${this.config.id}] ${prs.length} ${state} PR(s) in ${config.repoOwner}/${config.repoName}:`,
+        ...lines,
+      ].join("\n"),
     };
   }
 

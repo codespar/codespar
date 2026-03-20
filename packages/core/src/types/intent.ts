@@ -20,6 +20,7 @@ export type IntentType =
   | "kill"
   | "whoami"
   | "register"
+  | "prs"
   | "unknown";
 
 export type RiskLevel = "low" | "medium" | "high" | "critical";
@@ -56,6 +57,7 @@ export const INTENT_RISK: Record<IntentType, RiskLevel> = {
   context: "low",
   whoami: "low",
   register: "low",
+  prs: "low",
   deploy: "high",
   rollback: "critical",
   kill: "critical",

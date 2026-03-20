@@ -91,6 +91,11 @@ const PATTERNS: PatternRule[] = [
     pattern: /^register\s+(.+)$/i,
     paramExtractor: (m) => ({ name: m[1] }),
   },
+  {
+    type: "prs",
+    pattern: /^(?:prs?|pull.?requests?|open.?prs?)(?:\s+(open|closed|all))?$/i,
+    paramExtractor: (m) => ({ state: m[1] || "open" }),
+  },
 ];
 
 /** Synchronous regex-only parser (used internally). */
