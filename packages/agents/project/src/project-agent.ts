@@ -139,9 +139,14 @@ export class ProjectAgent implements Agent {
       && intent.rawText.length > 25
       && intent.confidence < 1.0;
 
+    // Extract image URLs from message attachments for visual context
+    const imageUrls = message.attachments
+      ?.filter((a) => a.type === "image" && a.url)
+      .map((a) => ({ url: a.url, mimeType: a.mimeType }));
+
     if (isOpenQuestion) {
       const ctx = await this.buildAgentContext();
-      const smartResponse = await generateSmartResponse(intent.rawText, ctx);
+      const smartResponse = await generateSmartResponse(intent.rawText, ctx, imageUrls);
       if (smartResponse) {
         // Still persist audit
         if (this.storage) {
@@ -281,7 +286,7 @@ export class ProjectAgent implements Agent {
         // try a smart response instead of just showing memory stats.
         if (intent.rawText.length > 30 && intent.confidence < 1.0) {
           const ctx = await this.buildAgentContext();
-          const smartResponse = await generateSmartResponse(intent.rawText, ctx);
+          const smartResponse = await generateSmartResponse(intent.rawText, ctx, imageUrls);
           if (smartResponse) {
             response = {
               text: `[${this.config.id}] ${smartResponse}`,
@@ -610,7 +615,7 @@ export class ProjectAgent implements Agent {
       default: {
         // Try smart response with Claude Sonnet for open-ended questions
         const ctx = await this.buildAgentContext();
-        const smartResponse = await generateSmartResponse(intent.rawText, ctx);
+        const smartResponse = await generateSmartResponse(intent.rawText, ctx, imageUrls);
         if (smartResponse) {
           response = {
             text: `[${this.config.id}] ${smartResponse}`,

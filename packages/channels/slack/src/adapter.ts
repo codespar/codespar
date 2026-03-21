@@ -26,6 +26,7 @@ interface SlackMessageEvent {
   thread_ts?: string;
 }
 import type {
+  Attachment,
   ChannelAdapter,
   ChannelCapabilities,
   ChannelResponse,
@@ -77,6 +78,34 @@ export class SlackAdapter implements ChannelAdapter {
       const isDM = msg.channel_type === "im";
       if (!isDM) return;
 
+      // Extract file attachments from the Slack event
+      const attachments: Attachment[] = [];
+      const files = (msg as unknown as Record<string, unknown>).files as Array<{
+        url_private: string;
+        mimetype: string;
+        name: string;
+      }> | undefined;
+
+      if (files) {
+        for (const file of files) {
+          if (file.mimetype?.startsWith("image/")) {
+            attachments.push({
+              type: "image",
+              url: file.url_private,
+              mimeType: file.mimetype,
+              filename: file.name,
+            });
+          } else {
+            attachments.push({
+              type: "file",
+              url: file.url_private,
+              mimeType: file.mimetype,
+              filename: file.name,
+            });
+          }
+        }
+      }
+
       const normalized: NormalizedMessage = {
         id: randomUUID(),
         channelType: "slack",
@@ -87,6 +116,7 @@ export class SlackAdapter implements ChannelAdapter {
         text: msg.text.trim(),
         threadId: msg.thread_ts,
         timestamp: new Date(parseFloat(msg.ts) * 1000),
+        attachments: attachments.length > 0 ? attachments : undefined,
       };
 
       if (this.messageHandler) {
@@ -111,6 +141,34 @@ export class SlackAdapter implements ChannelAdapter {
       // so the response is always sent as a thread reply to the mention.
       const threadTs = event.thread_ts || event.ts;
 
+      // Extract file attachments from the Slack event
+      const attachments: Attachment[] = [];
+      const files = (event as unknown as Record<string, unknown>).files as Array<{
+        url_private: string;
+        mimetype: string;
+        name: string;
+      }> | undefined;
+
+      if (files) {
+        for (const file of files) {
+          if (file.mimetype?.startsWith("image/")) {
+            attachments.push({
+              type: "image",
+              url: file.url_private,
+              mimeType: file.mimetype,
+              filename: file.name,
+            });
+          } else {
+            attachments.push({
+              type: "file",
+              url: file.url_private,
+              mimeType: file.mimetype,
+              filename: file.name,
+            });
+          }
+        }
+      }
+
       const normalized: NormalizedMessage = {
         id: randomUUID(),
         channelType: "slack",
@@ -121,6 +179,7 @@ export class SlackAdapter implements ChannelAdapter {
         text: cleanText,
         threadId: threadTs,
         timestamp: new Date(parseFloat(event.ts) * 1000),
+        attachments: attachments.length > 0 ? attachments : undefined,
         metadata: {
           threadTs,
           channelId: event.channel,

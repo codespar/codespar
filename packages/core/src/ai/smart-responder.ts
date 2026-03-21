@@ -25,6 +25,7 @@ export interface AgentContext {
 export async function generateSmartResponse(
   question: string,
   context: AgentContext,
+  imageUrls?: Array<{ url: string; mimeType?: string }>,
 ): Promise<string | null> {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) return null;
@@ -63,6 +64,50 @@ Respond concisely and helpfully. If the user asks about capabilities, suggest re
 Keep responses under 300 words. Use bullet points for lists. Be direct and actionable.`;
 
   try {
+    // Build message content with images if present
+    let userContent: string | Array<Record<string, unknown>> = question;
+
+    if (imageUrls && imageUrls.length > 0) {
+      const contentParts: Array<Record<string, unknown>> = [];
+
+      for (const img of imageUrls) {
+        try {
+          const headers: Record<string, string> = {};
+          if (img.url.includes("slack")) {
+            const slackToken = process.env.SLACK_BOT_TOKEN;
+            if (slackToken) {
+              headers["Authorization"] = `Bearer ${slackToken}`;
+            }
+          }
+
+          const imgRes = await fetch(img.url, { headers });
+          if (imgRes.ok) {
+            const buffer = await imgRes.arrayBuffer();
+            const base64 = Buffer.from(buffer).toString("base64");
+            const mediaType =
+              img.mimeType ||
+              imgRes.headers.get("content-type") ||
+              "image/png";
+            contentParts.push({
+              type: "image",
+              source: {
+                type: "base64",
+                media_type: mediaType,
+                data: base64,
+              },
+            });
+          }
+        } catch {
+          // Skip failed image downloads silently
+        }
+      }
+
+      if (contentParts.length > 0) {
+        contentParts.push({ type: "text", text: question });
+        userContent = contentParts;
+      }
+    }
+
     const res = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
       headers: {
@@ -74,7 +119,7 @@ Keep responses under 300 words. Use bullet points for lists. Be direct and actio
         model: process.env.SMART_MODEL || "claude-sonnet-4-20250514",
         max_tokens: 500,
         system: systemPrompt,
-        messages: [{ role: "user", content: question }],
+        messages: [{ role: "user", content: userContent }],
       }),
     });
 
@@ -97,6 +142,7 @@ export async function generateSmartResponseStreaming(
   question: string,
   context: AgentContext,
   onChunk: (text: string) => void,
+  imageUrls?: Array<{ url: string; mimeType?: string }>,
 ): Promise<string | null> {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) return null;
@@ -135,6 +181,50 @@ Respond concisely and helpfully. If the user asks about capabilities, suggest re
 Keep responses under 300 words. Use bullet points for lists. Be direct and actionable.`;
 
   try {
+    // Build message content with images if present
+    let userContent: string | Array<Record<string, unknown>> = question;
+
+    if (imageUrls && imageUrls.length > 0) {
+      const contentParts: Array<Record<string, unknown>> = [];
+
+      for (const img of imageUrls) {
+        try {
+          const headers: Record<string, string> = {};
+          if (img.url.includes("slack")) {
+            const slackToken = process.env.SLACK_BOT_TOKEN;
+            if (slackToken) {
+              headers["Authorization"] = `Bearer ${slackToken}`;
+            }
+          }
+
+          const imgRes = await fetch(img.url, { headers });
+          if (imgRes.ok) {
+            const buffer = await imgRes.arrayBuffer();
+            const base64 = Buffer.from(buffer).toString("base64");
+            const mediaType =
+              img.mimeType ||
+              imgRes.headers.get("content-type") ||
+              "image/png";
+            contentParts.push({
+              type: "image",
+              source: {
+                type: "base64",
+                media_type: mediaType,
+                data: base64,
+              },
+            });
+          }
+        } catch {
+          // Skip failed image downloads silently
+        }
+      }
+
+      if (contentParts.length > 0) {
+        contentParts.push({ type: "text", text: question });
+        userContent = contentParts;
+      }
+    }
+
     const res = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
       headers: {
@@ -147,7 +237,7 @@ Keep responses under 300 words. Use bullet points for lists. Be direct and actio
         max_tokens: 500,
         stream: true,
         system: systemPrompt,
-        messages: [{ role: "user", content: question }],
+        messages: [{ role: "user", content: userContent }],
       }),
     });
 
