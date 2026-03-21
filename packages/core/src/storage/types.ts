@@ -40,6 +40,13 @@ export interface ProjectListEntry {
   createdAt: string;
 }
 
+export interface NewsletterSubscriber {
+  email: string;
+  subscribedAt: string;
+  source: string; // "blog", "homepage", etc.
+  confirmed: boolean;
+}
+
 export interface StorageProvider {
   // Agent memory
   getMemory(agentId: string, key: string): Promise<unknown | null>;
@@ -55,6 +62,12 @@ export interface StorageProvider {
   getProjectsList(): Promise<ProjectListEntry[]>;
   addProject(project: Omit<ProjectListEntry, "createdAt">): Promise<void>;
   removeProject(id: string): Promise<void>;
+
+  // Newsletter
+  addSubscriber(email: string, source?: string): Promise<NewsletterSubscriber>;
+  getSubscribers(): Promise<NewsletterSubscriber[]>;
+  removeSubscriber(email: string): Promise<void>;
+  getSubscriberCount(): Promise<number>;
 
   // Audit log
   appendAudit(

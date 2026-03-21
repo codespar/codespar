@@ -12,7 +12,7 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { randomUUID } from "node:crypto";
-import type { AgentMemory, AuditEntry, ProjectConfig, ProjectListEntry, StorageProvider } from "./types.js";
+import type { AgentMemory, AuditEntry, NewsletterSubscriber, ProjectConfig, ProjectListEntry, StorageProvider } from "./types.js";
 
 /** Serializable shape stored in memory.json */
 interface MemoryFile {
@@ -37,6 +37,7 @@ export class FileStorage implements StorageProvider {
   private readonly auditPath: string;
   private readonly projectsPath: string;
   private readonly projectsListPath: string;
+  private readonly subscribersPath: string;
 
   /**
    * @param baseDir  Root storage directory (default ".codespar")
@@ -51,6 +52,7 @@ export class FileStorage implements StorageProvider {
     this.auditPath = path.join(this.dir, "audit.json");
     this.projectsPath = path.join(this.dir, "projects.json");
     this.projectsListPath = path.join(this.dir, "projects-list.json");
+    this.subscribersPath = path.join(this.dir, "subscribers.json");
   }
 
   // ── Agent Memory ───────────────────────────────────────────────
@@ -187,6 +189,43 @@ export class FileStorage implements StorageProvider {
     };
   }
 
+  // ── Newsletter ───────────────────────────────────────────────
+
+  async addSubscriber(email: string, source: string = "homepage"): Promise<NewsletterSubscriber> {
+    const normalizedEmail = email.trim().toLowerCase();
+    const subscribers = await this.readSubscribersFile();
+
+    const existing = subscribers.find((s) => s.email === normalizedEmail);
+    if (existing) return existing;
+
+    const subscriber: NewsletterSubscriber = {
+      email: normalizedEmail,
+      subscribedAt: new Date().toISOString(),
+      source,
+      confirmed: false,
+    };
+
+    subscribers.push(subscriber);
+    await this.writeFile(this.subscribersPath, subscribers);
+    return subscriber;
+  }
+
+  async getSubscribers(): Promise<NewsletterSubscriber[]> {
+    return this.readSubscribersFile();
+  }
+
+  async removeSubscriber(email: string): Promise<void> {
+    const normalizedEmail = email.trim().toLowerCase();
+    const subscribers = await this.readSubscribersFile();
+    const filtered = subscribers.filter((s) => s.email !== normalizedEmail);
+    await this.writeFile(this.subscribersPath, filtered);
+  }
+
+  async getSubscriberCount(): Promise<number> {
+    const subscribers = await this.readSubscribersFile();
+    return subscribers.length;
+  }
+
   // ── Internal helpers ───────────────────────────────────────────
 
   private async ensureDir(): Promise<void> {
@@ -215,6 +254,15 @@ export class FileStorage implements StorageProvider {
     try {
       const raw = await fs.readFile(this.projectsListPath, "utf-8");
       return JSON.parse(raw) as ProjectListEntry[];
+    } catch {
+      return [];
+    }
+  }
+
+  private async readSubscribersFile(): Promise<NewsletterSubscriber[]> {
+    try {
+      const raw = await fs.readFile(this.subscribersPath, "utf-8");
+      return JSON.parse(raw) as NewsletterSubscriber[];
     } catch {
       return [];
     }
