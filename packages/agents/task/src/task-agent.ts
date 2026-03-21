@@ -67,16 +67,23 @@ export class TaskAgent implements Agent {
     message: NormalizedMessage,
     intent: ParsedIntent
   ): Promise<ChannelResponse> {
+    // Extract image URLs from message attachments for visual context
+    const imageUrls = message.attachments
+      ?.filter((a) => a.type === "image" && a.url)
+      .map((a) => ({ url: a.url, mimeType: a.mimeType }));
+
     switch (intent.type) {
       case "instruct":
         return this.executeTask(
           intent.params.instruction || intent.rawText,
-          "instruct"
+          "instruct",
+          imageUrls,
         );
       case "fix":
         return this.executeTask(
           `Fix: ${intent.params.issue || intent.rawText}`,
-          "fix"
+          "fix",
+          imageUrls,
         );
       default:
         return {
@@ -87,7 +94,8 @@ export class TaskAgent implements Agent {
 
   private async executeTask(
     instruction: string,
-    type: "instruct" | "fix"
+    type: "instruct" | "fix",
+    imageUrls?: Array<{ url: string; mimeType?: string }>,
   ): Promise<ChannelResponse> {
     const taskId = generateTaskId();
     const task: TaskResult = { taskId, instruction, status: "queued" };
@@ -127,6 +135,7 @@ export class TaskAgent implements Agent {
           repoOwner: projectConfig.repoOwner,
           repoName: projectConfig.repoName,
           timeout: 120_000,
+          imageUrls,
         });
       } else {
         result = await this.bridge.execute({
@@ -135,6 +144,7 @@ export class TaskAgent implements Agent {
           workDir,
           projectContext: this.config.projectId || undefined,
           timeout: 120_000,
+          imageUrls,
         });
       }
 

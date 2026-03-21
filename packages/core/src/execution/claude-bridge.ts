@@ -19,6 +19,8 @@ export interface ExecutionRequest {
   timeout?: number;
   allowedTools?: string[];
   blockedPatterns?: string[];
+  /** Image URLs to include as visual context (screenshots, diagrams) */
+  imageUrls?: Array<{ url: string; mimeType?: string }>;
 }
 
 export interface RepoExecutionRequest extends ExecutionRequest {
@@ -66,9 +68,12 @@ export class ClaudeBridge {
     const model = process.env.TASK_MODEL || "claude-sonnet-4-20250514";
 
     try {
-      const userMessage = request.projectContext
+      const userText = request.projectContext
         ? `Project: ${request.projectContext}\n\nInstruction: ${request.instruction}`
         : `Instruction: ${request.instruction}`;
+
+      // Build message content with images if present
+      const userContent = await this.buildUserContent(userText, request.imageUrls);
 
       const res = await fetch("https://api.anthropic.com/v1/messages", {
         method: "POST",
@@ -81,7 +86,7 @@ export class ClaudeBridge {
           model,
           max_tokens: 2000,
           system: TASK_SYSTEM_PROMPT,
-          messages: [{ role: "user", content: userMessage }],
+          messages: [{ role: "user", content: userContent }],
         }),
         signal: AbortSignal.timeout(request.timeout ?? 120000),
       });
@@ -137,9 +142,12 @@ export class ClaudeBridge {
     const model = process.env.TASK_MODEL || "claude-sonnet-4-20250514";
 
     try {
-      const userMessage = request.projectContext
+      const userText = request.projectContext
         ? `Project: ${request.projectContext}\n\nInstruction: ${request.instruction}`
         : `Instruction: ${request.instruction}`;
+
+      // Build message content with images if present
+      const userContent = await this.buildUserContent(userText, request.imageUrls);
 
       const res = await fetch("https://api.anthropic.com/v1/messages", {
         method: "POST",
@@ -153,7 +161,7 @@ export class ClaudeBridge {
           max_tokens: 2000,
           stream: true,
           system: TASK_SYSTEM_PROMPT,
-          messages: [{ role: "user", content: userMessage }],
+          messages: [{ role: "user", content: userContent }],
         }),
         signal: AbortSignal.timeout(request.timeout ?? 120000),
       });
@@ -218,6 +226,61 @@ export class ClaudeBridge {
         simulated: false,
       };
     }
+  }
+
+  /**
+   * Build the user message content for the Claude API.
+   * If image URLs are provided, downloads and base64-encodes them
+   * into image content blocks alongside the text instruction.
+   */
+  private async buildUserContent(
+    text: string,
+    imageUrls?: Array<{ url: string; mimeType?: string }>,
+  ): Promise<string | Array<Record<string, unknown>>> {
+    if (!imageUrls || imageUrls.length === 0) {
+      return text;
+    }
+
+    const contentParts: Array<Record<string, unknown>> = [];
+
+    for (const img of imageUrls) {
+      try {
+        // Slack file URLs require bot token authentication
+        const headers: Record<string, string> = {};
+        if (img.url.includes("slack")) {
+          const slackToken = process.env.SLACK_BOT_TOKEN;
+          if (slackToken) {
+            headers["Authorization"] = `Bearer ${slackToken}`;
+          }
+        }
+
+        const imgRes = await fetch(img.url, { headers });
+        if (imgRes.ok) {
+          const buffer = await imgRes.arrayBuffer();
+          const base64 = Buffer.from(buffer).toString("base64");
+          const mediaType =
+            img.mimeType ||
+            imgRes.headers.get("content-type") ||
+            "image/png";
+          contentParts.push({
+            type: "image",
+            source: {
+              type: "base64",
+              media_type: mediaType,
+              data: base64,
+            },
+          });
+        }
+      } catch {
+        // Skip failed image downloads silently
+      }
+    }
+
+    // Always include the text instruction
+    contentParts.push({ type: "text", text });
+
+    // If no images were successfully downloaded, return plain text
+    return contentParts.length > 1 ? contentParts : text;
   }
 
   private async simulate(request: ExecutionRequest): Promise<ExecutionResult> {
@@ -336,6 +399,12 @@ Be precise and production-ready.`;
 
       const model = process.env.TASK_MODEL || "claude-sonnet-4-20250514";
 
+      // Build message content with images if present
+      const userContent = await this.buildUserContent(
+        `Instruction: ${instruction}`,
+        request.imageUrls,
+      );
+
       const res = await fetch("https://api.anthropic.com/v1/messages", {
         method: "POST",
         headers: {
@@ -347,7 +416,7 @@ Be precise and production-ready.`;
           model,
           max_tokens: 4000,
           system: systemPrompt,
-          messages: [{ role: "user", content: `Instruction: ${instruction}` }],
+          messages: [{ role: "user", content: userContent }],
         }),
         signal: AbortSignal.timeout(request.timeout ?? 120_000),
       });
