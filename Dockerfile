@@ -1,17 +1,16 @@
 FROM node:22-alpine
 WORKDIR /app
 
-COPY package*.json ./
+COPY package.json ./
 COPY tsconfig.base.json turbo.json ./
 COPY packages/ packages/
 
-# Copy only the docs package.json (satisfies workspace reference)
-# but don't copy the actual docs app code (not needed for backend)
-COPY apps/docs/package.json apps/docs/package.json
+# Minimal docs reference (satisfies workspace, not used in build)
+RUN mkdir -p apps/docs && echo '{"name":"@codespar/docs","version":"0.1.0","private":true}' > apps/docs/package.json
 
 COPY server/ server/
 
-RUN npm ci --ignore-scripts
+RUN npm install --ignore-scripts --legacy-peer-deps
 RUN npx turbo run build --filter='!@codespar/docs'
 
 EXPOSE 3000
