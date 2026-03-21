@@ -122,6 +122,104 @@ export class ClaudeBridge {
     }
   }
 
+  /** Execute an instruction with streaming. Calls onChunk for each text delta. */
+  async executeStreaming(
+    request: ExecutionRequest,
+    onChunk: (text: string) => void,
+  ): Promise<ExecutionResult> {
+    const apiKey = process.env.ANTHROPIC_API_KEY;
+
+    if (!apiKey) {
+      return this.simulate(request);
+    }
+
+    const startTime = Date.now();
+    const model = process.env.TASK_MODEL || "claude-sonnet-4-20250514";
+
+    try {
+      const userMessage = request.projectContext
+        ? `Project: ${request.projectContext}\n\nInstruction: ${request.instruction}`
+        : `Instruction: ${request.instruction}`;
+
+      const res = await fetch("https://api.anthropic.com/v1/messages", {
+        method: "POST",
+        headers: {
+          "x-api-key": apiKey,
+          "anthropic-version": "2023-06-01",
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          model,
+          max_tokens: 2000,
+          stream: true,
+          system: TASK_SYSTEM_PROMPT,
+          messages: [{ role: "user", content: userMessage }],
+        }),
+        signal: AbortSignal.timeout(request.timeout ?? 120000),
+      });
+
+      if (!res.ok) {
+        const errText = await res.text().catch(() => "");
+        return {
+          taskId: request.taskId,
+          status: "failed",
+          output: `API error: ${res.status} ${errText.slice(0, 200)}`,
+          durationMs: Date.now() - startTime,
+          exitCode: null,
+          simulated: false,
+        };
+      }
+
+      const reader = res.body?.getReader();
+      const decoder = new TextDecoder();
+      let fullOutput = "";
+      let buffer = "";
+
+      if (reader) {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split("\n");
+          buffer = lines.pop() || "";
+          for (const line of lines) {
+            if (!line.startsWith("data: ")) continue;
+            const data = line.slice(6).trim();
+            if (data === "[DONE]") continue;
+            try {
+              const event = JSON.parse(data);
+              if (event.type === "content_block_delta" && event.delta?.text) {
+                fullOutput += event.delta.text;
+                onChunk(event.delta.text);
+              }
+            } catch {
+              /* skip malformed JSON */
+            }
+          }
+        }
+      }
+
+      return {
+        taskId: request.taskId,
+        status: "completed",
+        output: fullOutput.slice(0, 3000),
+        durationMs: Date.now() - startTime,
+        exitCode: 0,
+        simulated: false,
+      };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Unknown error";
+      return {
+        taskId: request.taskId,
+        status: message.includes("timeout") ? "timeout" : "failed",
+        output: `Execution error: ${message}`,
+        durationMs: Date.now() - startTime,
+        exitCode: null,
+        simulated: false,
+      };
+    }
+  }
+
   private async simulate(request: ExecutionRequest): Promise<ExecutionResult> {
     const startTime = Date.now();
     await new Promise((r) => setTimeout(r, 100 + Math.random() * 200));

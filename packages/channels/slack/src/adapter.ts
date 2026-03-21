@@ -107,6 +107,10 @@ export class SlackAdapter implements ChannelAdapter {
         ? event.text.replace(new RegExp(`<@${this.botUserId}>`, "g"), "").trim()
         : event.text;
 
+      // Use event.thread_ts if already in a thread, otherwise event.ts
+      // so the response is always sent as a thread reply to the mention.
+      const threadTs = event.thread_ts || event.ts;
+
       const normalized: NormalizedMessage = {
         id: randomUUID(),
         channelType: "slack",
@@ -115,8 +119,12 @@ export class SlackAdapter implements ChannelAdapter {
         isDM: false,
         isMentioningBot: true,
         text: cleanText,
-        threadId: event.thread_ts,
+        threadId: threadTs,
         timestamp: new Date(parseFloat(event.ts) * 1000),
+        metadata: {
+          threadTs,
+          channelId: event.channel,
+        },
       };
 
       await this.messageHandler(normalized);
@@ -168,6 +176,29 @@ export class SlackAdapter implements ChannelAdapter {
       blocks,
       ...(response.threadId ? { thread_ts: response.threadId } : {}),
     });
+  }
+
+  async sendFile(
+    channelId: string,
+    filename: string,
+    content: string,
+    threadTs?: string,
+  ): Promise<void> {
+    if (!this.app) {
+      throw new Error("Slack adapter not connected. Call connect() first.");
+    }
+
+    const args: Record<string, string> = {
+      channel_id: channelId,
+      filename,
+      content,
+    };
+    if (threadTs) {
+      args.thread_ts = threadTs;
+    }
+    await this.app.client.files.uploadV2(
+      args as unknown as Parameters<typeof this.app.client.files.uploadV2>[0],
+    );
   }
 
   getCapabilities(): ChannelCapabilities {

@@ -14,10 +14,17 @@ export interface ChannelCapabilities {
   reactions: boolean;
 }
 
+export interface ChannelAttachment {
+  filename: string;
+  content: string;
+  mimeType?: string;
+}
+
 export interface ChannelResponse {
   text: string;
   replyToMessageId?: string;
   threadId?: string;
+  attachments?: ChannelAttachment[];
 }
 
 export type MessageHandler = (message: NormalizedMessage) => Promise<void>;
@@ -40,6 +47,14 @@ export interface ChannelAdapter {
 
   /** Send private message (for approval escalation) */
   sendDM(userId: string, response: ChannelResponse): Promise<void>;
+
+  /** Upload a file to a channel or thread (optional, not all channels support this) */
+  sendFile?(
+    channelId: string,
+    filename: string,
+    content: string,
+    threadTs?: string,
+  ): Promise<void>;
 
   /** Return channel features */
   getCapabilities(): ChannelCapabilities;
