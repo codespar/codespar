@@ -17,14 +17,14 @@ import { createHmac, timingSafeEqual } from "node:crypto";
 import Fastify, { type FastifyInstance } from "fastify";
 import cors from "@fastify/cors";
 import { parseGitHubWebhook, type CIEvent } from "../webhooks/github-handler.js";
-import { getRegisteredTypes } from "../agents/agent-registry.js";
+import { getRegisteredTypes, getAgentFactory, isRegisteredType } from "../agents/agent-registry.js";
 import { createLogger } from "../observability/logger.js";
 import { metrics } from "../observability/metrics.js";
 
 const log = createLogger("webhook-server");
 const newsletterLog = createLogger("newsletter");
 import { GitHubClient } from "../github/github-client.js";
-import type { AgentStatus, AgentState } from "../types/agent.js";
+import type { AgentStatus, AgentState, AgentConfig, AutonomyLevel } from "../types/agent.js";
 import type { ChannelAdapter } from "../types/channel-adapter.js";
 import type { StorageProvider, ProjectConfig, ProjectListEntry } from "../storage/types.js";
 import { FileStorage } from "../storage/file-storage.js";
@@ -46,6 +46,7 @@ export interface AgentStatusProvider {
   getAdapters?(): ChannelAdapter[];
   restartAgent?(agentId: string): Promise<boolean>;
   removeAgent?(projectId: string): Promise<boolean>;
+  spawnAgent?(projectId: string, agent: import("../types/agent.js").Agent): Promise<void>;
 }
 
 /** Interface for dynamically creating and removing agents */
@@ -394,6 +395,154 @@ export class WebhookServer {
           lastActive: agent.lastActiveAt?.toISOString() ?? null,
           projectConfig: projectConfig ?? undefined,
         };
+      }
+    );
+
+    // Create a new agent dynamically
+    route("post", "/api/agents",
+      async (request: any, reply: any) => {
+        const { name, type, projectId, autonomyLevel } = request.body as {
+          name?: string;
+          type?: string;
+          projectId?: string;
+          autonomyLevel?: number;
+        };
+
+        // Validate name: required, alphanumeric + hyphens, 3-50 chars
+        if (!name || !/^[a-zA-Z0-9][a-zA-Z0-9-]{1,48}[a-zA-Z0-9]$/.test(name)) {
+          return reply.status(400).send({
+            error: "name is required and must be 3-50 characters (alphanumeric and hyphens, cannot start/end with hyphen)",
+          });
+        }
+
+        // Validate type: required and must be a registered agent type
+        if (!type) {
+          return reply.status(400).send({ error: "type is required" });
+        }
+        if (!isRegisteredType(type)) {
+          return reply.status(400).send({
+            error: `Unknown agent type '${type}'. Registered types: ${getRegisteredTypes().join(", ")}`,
+          });
+        }
+
+        // Validate autonomy level if provided
+        const level = (autonomyLevel ?? 1) as AutonomyLevel;
+        if (typeof level !== "number" || !Number.isInteger(level) || level < 0 || level > 5) {
+          return reply.status(400).send({ error: "autonomyLevel must be an integer 0-5" });
+        }
+
+        if (!this.agentSupervisor) {
+          return reply.status(500).send({ error: "Supervisor not configured" });
+        }
+
+        // Check for duplicate name
+        const existingStatuses = this.agentSupervisor.getAgentStatuses();
+        if (existingStatuses.some((s) => s.id === name)) {
+          return reply.status(409).send({ error: `Agent '${name}' already exists` });
+        }
+
+        // Build agent config and create via registry factory
+        const agentConfig: AgentConfig = {
+          id: name,
+          type: type as AgentConfig["type"],
+          projectId: projectId ?? name,
+          autonomyLevel: level,
+        };
+
+        const factory = getAgentFactory(type);
+        if (!factory) {
+          return reply.status(500).send({ error: `No factory registered for type '${type}'` });
+        }
+
+        try {
+          const agent = factory(agentConfig, this.storageProvider ?? undefined);
+          const spawnProjectId = projectId ?? name;
+
+          if (!this.agentSupervisor.spawnAgent) {
+            return reply.status(501).send({ error: "Supervisor does not support spawning agents" });
+          }
+
+          await this.agentSupervisor.spawnAgent(spawnProjectId, agent);
+
+          // Audit trail
+          if (this.storageProvider) {
+            await this.storageProvider.appendAudit({
+              actorType: "user",
+              actorId: "api",
+              action: "agent.created",
+              result: "success",
+              metadata: {
+                agentId: name,
+                type,
+                projectId: spawnProjectId,
+                autonomyLevel: level,
+                detail: `Agent '${name}' (type: ${type}, L${level}) created via API`,
+              },
+            });
+          }
+
+          return {
+            success: true,
+            agent: {
+              id: name,
+              name,
+              type,
+              status: "IDLE",
+              autonomyLevel: level,
+              projectId: spawnProjectId,
+            },
+          };
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          log.error("Failed to create agent", { name, type, error: msg });
+          return reply.status(500).send({ error: `Failed to create agent: ${msg}` });
+        }
+      }
+    );
+
+    // Remove/shutdown an agent by id
+    route("delete", "/api/agents/:id",
+      async (request: any, reply: any) => {
+        const { id } = request.params;
+
+        if (!this.agentSupervisor) {
+          return reply.status(500).send({ error: "Supervisor not configured" });
+        }
+
+        // Verify agent exists
+        const statuses = this.agentSupervisor.getAgentStatuses();
+        const agent = statuses.find((s) => s.id === id);
+        if (!agent) {
+          return reply.status(404).send({ error: "Agent not found" });
+        }
+
+        // Remove via supervisor (uses projectId, which may differ from agent id)
+        const projectId = agent.projectId ?? id;
+        if (!this.agentSupervisor.removeAgent) {
+          return reply.status(501).send({ error: "Supervisor does not support removing agents" });
+        }
+
+        const removed = await this.agentSupervisor.removeAgent(projectId);
+        if (!removed) {
+          return reply.status(500).send({ error: `Failed to remove agent '${id}'` });
+        }
+
+        // Audit trail
+        if (this.storageProvider) {
+          await this.storageProvider.appendAudit({
+            actorType: "user",
+            actorId: "api",
+            action: "agent.removed",
+            result: "success",
+            metadata: {
+              agentId: id,
+              projectId,
+              detail: `Agent '${id}' removed via API`,
+            },
+          });
+        }
+
+        return { success: true, removed: id };
       }
     );
 
