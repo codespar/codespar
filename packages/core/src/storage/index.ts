@@ -1,6 +1,7 @@
 export type {
   AgentMemory,
   AuditEntry,
+  NewsletterSubscriber,
   ProjectConfig,
   ProjectListEntry,
   StorageProvider,

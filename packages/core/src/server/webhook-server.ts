@@ -86,6 +86,31 @@ function verifyGitHubSignature(payload: string, signature: string, secret: strin
   return timingSafeEqual(Buffer.from(expected), Buffer.from(signature));
 }
 
+// ── Resend welcome email ──────────────────────────────────────────
+async function sendWelcomeEmail(email: string): Promise<void> {
+  const apiKey = process.env.RESEND_API_KEY;
+  if (!apiKey) return; // Skip if not configured
+
+  try {
+    await fetch("https://api.resend.com/emails", {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        from: process.env.RESEND_FROM_EMAIL || "CodeSpar <dispatch@codespar.dev>",
+        to: email,
+        subject: "Welcome to Dispatch",
+        html: `<p>You're subscribed to Dispatch, the CodeSpar engineering blog.</p><p>Architecture decisions, agent design patterns, and engineering lessons. One post per week.</p><p>Read the latest: <a href="https://codespar.dev/blog">codespar.dev/blog</a></p><p>— Fabiano</p>`,
+      }),
+    });
+    console.log(`[newsletter] Welcome email sent to ${email}`);
+  } catch (err) {
+    console.error(`[newsletter] Failed to send welcome email:`, err);
+  }
+}
+
 export class WebhookServer {
   private app: FastifyInstance;
   private port: number;
@@ -843,6 +868,69 @@ export class WebhookServer {
         };
       }
     );
+
+    // ── Newsletter endpoints ──────────────────────────────────────
+
+    // Subscribe to newsletter
+    this.app.post<{ Body: { email: string; source?: string } }>(
+      "/api/newsletter/subscribe",
+      async (request, reply) => {
+        const { email, source } = request.body as { email?: string; source?: string };
+
+        if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+          return reply.status(400).send({ error: "Valid email is required" });
+        }
+
+        const storage = this.storageProvider ?? this.getOrgStorage("default");
+
+        // Check if already subscribed before adding
+        const existing = (await storage.getSubscribers()).find(
+          (s) => s.email === email.trim().toLowerCase()
+        );
+
+        const subscriber = await storage.addSubscriber(email, source ?? "homepage");
+
+        if (existing) {
+          return { success: true, message: "Already subscribed" };
+        }
+
+        // Send welcome email for new subscribers
+        await sendWelcomeEmail(subscriber.email);
+
+        return { success: true, message: "Subscribed" };
+      }
+    );
+
+    // List all subscribers (admin endpoint)
+    this.app.get("/api/newsletter/subscribers", async (_request, _reply) => {
+      const storage = this.storageProvider ?? this.getOrgStorage("default");
+      const subscribers = await storage.getSubscribers();
+      return { subscribers, count: subscribers.length };
+    });
+
+    // Unsubscribe
+    this.app.delete<{ Body: { email: string } }>(
+      "/api/newsletter/unsubscribe",
+      async (request, reply) => {
+        const { email } = request.body as { email?: string };
+
+        if (!email) {
+          return reply.status(400).send({ error: "email is required" });
+        }
+
+        const storage = this.storageProvider ?? this.getOrgStorage("default");
+        await storage.removeSubscriber(email);
+
+        return { success: true };
+      }
+    );
+
+    // Public subscriber count
+    this.app.get("/api/newsletter/count", async (_request, _reply) => {
+      const storage = this.storageProvider ?? this.getOrgStorage("default");
+      const count = await storage.getSubscriberCount();
+      return { count };
+    });
 
     // GitHub webhook receiver
     this.app.post("/webhooks/github", async (request, reply) => {
