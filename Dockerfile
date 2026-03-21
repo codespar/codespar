@@ -4,7 +4,11 @@ WORKDIR /app
 COPY package*.json ./
 COPY tsconfig.base.json turbo.json ./
 COPY packages/ packages/
-COPY apps/ apps/
+
+# Copy only the docs package.json (satisfies workspace reference)
+# but don't copy the actual docs app code (not needed for backend)
+COPY apps/docs/package.json apps/docs/package.json
+
 COPY server/ server/
 
 RUN npm ci --ignore-scripts
