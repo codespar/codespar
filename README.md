@@ -31,10 +31,18 @@
 | Audit Trail (hash chain integrity) | ✅ Working |
 | NLU (Claude Haiku intent classification) | ✅ Working |
 | Smart Responses (Claude Sonnet for open questions) | ✅ Working |
-| Vector Memory (hash-based embeddings) | ✅ Working |
+| Vector Memory (TF-IDF semantic search) | ✅ Working |
 | Identity System (cross-channel user mapping) | ✅ Working |
 | Multi-tenant Organizations | ✅ Working |
 | GitHub Webhooks (auto-configured on link) | ✅ Working |
+| Task Scheduler (cron-like recurring tasks) | ✅ Working |
+| Streaming Responses (SSE from Anthropic API) | ✅ Working |
+| Slack Thread Support (responses in threads) | ✅ Working |
+| File Attachments (Slack files.uploadV2) | ✅ Working |
+| API Versioning (/v1/ prefix on all endpoints) | ✅ Working |
+| Create/Delete Agent API | ✅ Working |
+| Newsletter + Resend Integration | ✅ Working |
+| Structured Logging + Metrics Endpoint | ✅ Working |
 | Docker Compose | ✅ Working |
 | Railway Deploy | ✅ Working |
 | Dashboard (codespar.dev/dashboard) | ✅ Working |
@@ -45,6 +53,19 @@
 **CodeSpar** is an open source, multi-agent platform that deploys autonomous AI coding agents to **WhatsApp**, **Slack**, **Telegram**, and **Discord** via `@mention` commands.
 
 Each project gets its own persistent agent that monitors builds, investigates failures, proposes fixes, and orchestrates deploys. Everything is controllable from your messaging channels.
+
+## New in v0.1.0
+
+- **TF-IDF vector memory** -- real semantic search using term frequency-inverse document frequency, replacing the previous hash-based vector store. Cosine similarity search across agent memory.
+- **Task scheduler** -- cron-like recurring tasks with pause/resume/cancel support. Built-in tasks: health check (5 min), build status report (24h), audit cleanup (24h).
+- **Streaming responses** -- SSE streaming from the Anthropic API via `executeStreaming` and `generateSmartResponseStreaming`. Progressive message updates in channels.
+- **Slack thread support** -- all `app_mention` responses are automatically sent as thread replies, keeping channels clean. Thread context is preserved for follow-up messages.
+- **File attachments** -- `ChannelAttachment` type with Slack `files.uploadV2` support. Agents can send diffs, reports, and logs as file uploads.
+- **API versioning** -- all endpoints are available under the `/v1/` prefix (e.g., `/v1/api/agents`). Responses include the `X-API-Version` header.
+- **Create/Delete Agent API** -- `POST /api/agents` to create agents programmatically, `DELETE /api/agents/:id` to remove them. `GET /api/agent-types` lists registered agent types.
+- **Newsletter subscriber management** -- subscribe/unsubscribe endpoints with Resend integration for automated welcome emails.
+- **Structured logging** -- JSON-formatted logs in production, pretty-printed in development. Configurable via `LOG_LEVEL`. Metrics collector with `GET /api/metrics`.
+- **CONTRIBUTING.md and CHANGELOG.md** -- contribution guidelines and a detailed changelog are now included in the repository.
 
 ## Quick Start
 
@@ -150,6 +171,10 @@ Enable channels by setting their env vars. All channels are optional. Enable onl
 | `PROJECT_NAME` | Default project name | `default` |
 | `WEBHOOK_BASE_URL` | Public URL for GitHub webhook callbacks | |
 | `ADMIN_NAME` | Display name for admin user | |
+| `RESEND_API_KEY` | Resend API key for newsletter emails | |
+| `RESEND_FROM_EMAIL` | Newsletter from address | `CodeSpar <dispatch@codespar.dev>` |
+| `GITHUB_WEBHOOK_SECRET` | HMAC-SHA256 webhook validation secret | |
+| `LOG_LEVEL` | Logging level (debug/info/warn/error) | `info` |
 
 ## What It Does
 

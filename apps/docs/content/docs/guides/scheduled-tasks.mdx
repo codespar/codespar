@@ -1,0 +1,132 @@
+---
+title: Scheduled Tasks
+description: How to set up recurring tasks for automated monitoring and reporting.
+---
+
+# Scheduled Tasks
+
+CodeSpar includes a built-in task scheduler that runs recurring operations at fixed intervals. Use it for health checks, periodic reports, cleanup jobs, or any custom automation.
+
+## Scheduling a Task
+
+Use the `scheduler.schedule()` method to register a recurring task:
+
+```typescript
+import { scheduler } from '@codespar/scheduler';
+
+scheduler.schedule('my-custom-task', 60000, async () => {
+  // This runs every 60 seconds
+  const status = await checkExternalService();
+  if (!status.healthy) {
+    await notifyChannel('Service degraded: ' + status.message);
+  }
+});
+```
+
+### Parameters
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `name` | string | Unique identifier for the task. Used in API endpoints and logging. |
+| `intervalMs` | number | Interval between runs in milliseconds. Minimum: 10000 (10 seconds). |
+| `handler` | `() => Promise<void>` | Async function to execute on each run. |
+
+## Built-in Tasks
+
+CodeSpar registers these tasks automatically on startup:
+
+### health-check (every 5 minutes)
+
+Verifies that all system components are operational:
+- Agent supervisor is running
+- All enabled channel adapters are connected
+- File storage is accessible
+- AI API key is valid (lightweight ping)
+
+Results are logged and available via `GET /api/metrics`.
+
+### build-status-report (every 24 hours)
+
+Collects build status from all linked GitHub repositories:
+- Fetches latest workflow runs via GitHub API
+- Stores pass/fail/pending counts
+- Updates the cached status used by `@codespar status build`
+
+### audit-cleanup (every 24 hours)
+
+Maintains the audit trail storage:
+- Removes entries older than the retention period (default: 365 days)
+- Preserves hash chain integrity by keeping boundary entries
+- Logs the number of entries cleaned up
+
+## Creating Custom Scheduled Tasks
+
+You can register custom tasks in your agent plugin or startup script:
+
+```typescript
+import { scheduler } from '@codespar/scheduler';
+
+// Report daily metrics to a Slack channel
+scheduler.schedule('daily-metrics', 86400000, async () => {
+  const metrics = await collectMetrics();
+  await slackAdapter.sendMessage('#ops', formatMetricsReport(metrics));
+});
+
+// Check for stale PRs every 6 hours
+scheduler.schedule('stale-pr-check', 21600000, async () => {
+  const stalePRs = await findStalePRs({ olderThanDays: 7 });
+  if (stalePRs.length > 0) {
+    await notifyReviewers(stalePRs);
+  }
+});
+```
+
+## Managing Tasks via API
+
+All scheduled tasks can be managed through the [Scheduler API](/docs/api/scheduler):
+
+### List all tasks
+
+```bash
+curl http://localhost:3000/api/scheduler
+```
+
+### Pause a task
+
+```bash
+curl -X POST http://localhost:3000/api/scheduler/my-custom-task/pause
+```
+
+### Resume a task
+
+```bash
+curl -X POST http://localhost:3000/api/scheduler/my-custom-task/resume
+```
+
+### Cancel a task
+
+```bash
+curl -X DELETE http://localhost:3000/api/scheduler/my-custom-task
+```
+
+## Error Isolation
+
+Each task runs in its own try/catch block. If a task handler throws an error:
+
+1. The error is logged with the task name and stack trace.
+2. The task's `errors` counter is incremented.
+3. The task remains scheduled and will run again at the next interval.
+4. Other tasks are not affected.
+
+This means a failing health check will not prevent the build status report from running, and vice versa.
+
+```
+[scheduler] Task "health-check" failed: ECONNREFUSED (attempt 49, 1 error total)
+[scheduler] Task "build-status-report" completed successfully (run #8)
+```
+
+## Next Steps
+
+- [Scheduler API](/docs/api/scheduler) -- REST endpoints for task management
+- [Configuration](/docs/configuration) -- Environment variables
+- [Webhook Monitoring](/docs/guides/webhook-monitoring) -- GitHub event processing

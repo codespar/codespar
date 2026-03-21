@@ -21,15 +21,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Approval system: token-based, quorum, self-approval blocking, expiration
 - Audit trail: append-only, hash chain integrity
 - Identity system: cross-channel user mapping, register command
-- Vector memory: hash-based embeddings, cosine similarity search
+- Vector memory: TF-IDF embeddings replacing hash-based vector store, real semantic search with cosine similarity
 - Multi-tenant: x-org-id header, FileStorage org scoping
-- REST API: 25+ endpoints (agents, audit, projects, channels, memory, orgs, webhooks, metrics, newsletter)
+- Task scheduler: cron-like recurring tasks with pause/resume/cancel support
+- Built-in scheduled tasks: health check (5 min), build status report (24h), audit cleanup (24h)
+- Streaming responses: `executeStreaming` and `generateSmartResponseStreaming` via SSE from Anthropic API
+- Slack thread support: `app_mention` replies are sent in threads automatically, preserving thread context
+- File attachments: `ChannelAttachment` type with Slack `files.uploadV2` implementation via `sendFile`
+- API versioning: `/v1/` prefix available on all endpoints, `X-API-Version` response header
+- Create/Delete agent endpoints: `POST /api/agents` and `DELETE /api/agents/:id`
+- `GET /api/agent-types` endpoint to list registered agent types
+- REST API: 25+ endpoints (agents, audit, projects, channels, memory, orgs, webhooks, metrics, newsletter, scheduler)
 - Rate limiting: 100 req/min API, 30 req/min webhooks
-- Webhook signature validation: HMAC-SHA256
-- Newsletter: subscriber storage + Resend welcome emails
+- Webhook signature validation: HMAC-SHA256 with `GITHUB_WEBHOOK_SECRET`
+- Newsletter endpoints: subscribe, unsubscribe, list subscribers, count
+- Resend integration: automated welcome email on newsletter subscription
 - Agent plugin registry: registerAgentType for custom agents
 - Docker execution sandbox interfaces (contract for future implementation)
-- Structured logging (JSON prod, pretty dev) + metrics collector
+- Structured logging (JSON prod, pretty dev) with configurable `LOG_LEVEL` + metrics collector endpoint
 - GitHub Actions CI/CD (build + test on push/PR)
 - Documentation site: 53 pages (docs.codespar.dev, Fumadocs MDX)
 - Unit tests: 85 tests (Intent Parser, RBAC, FileStorage, Identity)
