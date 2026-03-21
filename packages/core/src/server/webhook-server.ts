@@ -13,6 +13,7 @@
 
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import { createHmac, timingSafeEqual } from "node:crypto";
 import Fastify, { type FastifyInstance } from "fastify";
 import cors from "@fastify/cors";
 import { parseGitHubWebhook, type CIEvent } from "../webhooks/github-handler.js";
@@ -46,6 +47,45 @@ export interface AgentFactory {
   createAgent(projectId: string, agentId: string, repo: string): Promise<void>;
 }
 
+// ── In-memory rate limiter (sliding window) ─────────────────────────
+const rateLimits = new Map<string, { count: number; resetAt: number }>();
+
+function checkRateLimit(key: string, limit: number, windowMs: number): { allowed: boolean; retryAfterMs: number } {
+  const now = Date.now();
+  const entry = rateLimits.get(key);
+
+  if (!entry || now > entry.resetAt) {
+    rateLimits.set(key, { count: 1, resetAt: now + windowMs });
+    return { allowed: true, retryAfterMs: 0 };
+  }
+
+  entry.count++;
+  if (entry.count <= limit) {
+    return { allowed: true, retryAfterMs: 0 };
+  }
+
+  return { allowed: false, retryAfterMs: Math.ceil((entry.resetAt - now) / 1000) };
+}
+
+// Clean up expired rate limit entries every 5 minutes
+const rateLimitCleanupInterval = setInterval(() => {
+  const now = Date.now();
+  for (const [key, entry] of rateLimits) {
+    if (now > entry.resetAt) rateLimits.delete(key);
+  }
+}, 300_000);
+// Allow the process to exit without waiting for the cleanup timer
+if (typeof rateLimitCleanupInterval === "object" && "unref" in rateLimitCleanupInterval) {
+  rateLimitCleanupInterval.unref();
+}
+
+// ── GitHub webhook signature verification ────────────────────────────
+function verifyGitHubSignature(payload: string, signature: string, secret: string): boolean {
+  const expected = "sha256=" + createHmac("sha256", secret).update(payload).digest("hex");
+  if (expected.length !== signature.length) return false;
+  return timingSafeEqual(Buffer.from(expected), Buffer.from(signature));
+}
+
 export class WebhookServer {
   private app: FastifyInstance;
   private port: number;
@@ -69,6 +109,7 @@ export class WebhookServer {
 
     this.app = Fastify({ logger: false });
     this.app.register(cors, { origin: true });
+    this.registerRateLimiting();
     this.registerRoutes();
   }
 
@@ -156,6 +197,44 @@ export class WebhookServer {
   async stop(): Promise<void> {
     await this.app.close();
     console.log("[webhook-server] Stopped");
+  }
+
+  /** Register rate limiting as a Fastify onRequest hook */
+  private registerRateLimiting(): void {
+    const WINDOW_MS = 60_000; // 1 minute
+
+    this.app.addHook("onRequest", async (request, reply) => {
+      const url = request.url;
+
+      // Skip rate limiting for health endpoint
+      if (url === "/health") return;
+
+      const ip = request.ip;
+      let limit: number;
+      let keyPrefix: string;
+
+      if (url.startsWith("/webhooks/")) {
+        limit = 30;
+        keyPrefix = "webhook";
+      } else if (url.startsWith("/api/")) {
+        limit = 100;
+        keyPrefix = "api";
+      } else {
+        // Unknown routes are not rate limited
+        return;
+      }
+
+      const key = `${keyPrefix}:${ip}`;
+      const { allowed, retryAfterMs } = checkRateLimit(key, limit, WINDOW_MS);
+
+      if (!allowed) {
+        reply.header("Retry-After", String(retryAfterMs));
+        return reply.status(429).send({
+          error: "Too Many Requests",
+          retryAfter: retryAfterMs,
+        });
+      }
+    });
   }
 
   private registerRoutes(): void {
@@ -772,6 +851,28 @@ export class WebhookServer {
         if (typeof value === "string") {
           headers[key.toLowerCase()] = value;
         }
+      }
+
+      // Verify GitHub webhook signature when secret is configured
+      const webhookSecret = process.env["GITHUB_WEBHOOK_SECRET"];
+      if (webhookSecret) {
+        const signature = headers["x-hub-signature-256"];
+        if (!signature) {
+          return reply.status(401).send({ error: "Missing x-hub-signature-256 header" });
+        }
+
+        const rawBody = typeof request.body === "string"
+          ? request.body
+          : JSON.stringify(request.body);
+
+        if (!verifyGitHubSignature(rawBody, signature, webhookSecret)) {
+          return reply.status(401).send({ error: "Invalid webhook signature" });
+        }
+      } else {
+        console.warn(
+          "[webhook-server] GITHUB_WEBHOOK_SECRET is not set — skipping signature verification. " +
+          "Set this env var to secure your webhook endpoint."
+        );
       }
 
       const event = parseGitHubWebhook(headers, request.body);
