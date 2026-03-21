@@ -7,6 +7,7 @@ export type {
 
 export type {
   ChannelAdapter,
+  ChannelAttachment,
   ChannelCapabilities,
   ChannelResponse,
   MessageHandler,
@@ -99,7 +100,7 @@ export { VectorStore } from "./memory/index.js";
 export type { MemoryEntry, SearchResult } from "./memory/index.js";
 
 // AI (Smart Responder)
-export { generateSmartResponse } from "./ai/index.js";
+export { generateSmartResponse, generateSmartResponseStreaming } from "./ai/index.js";
 export type { AgentContext } from "./ai/index.js";
 
 // GitHub

@@ -46,4 +46,7 @@ export interface NormalizedMessage {
 
   /** Message timestamp */
   timestamp: Date;
+
+  /** Channel-specific metadata (e.g., Slack threadTs, channelId) */
+  metadata?: Record<string, unknown>;
 }
