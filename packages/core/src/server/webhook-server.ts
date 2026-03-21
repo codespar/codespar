@@ -20,6 +20,7 @@ import { parseGitHubWebhook, type CIEvent } from "../webhooks/github-handler.js"
 import { getRegisteredTypes, getAgentFactory, isRegisteredType } from "../agents/agent-registry.js";
 import { createLogger } from "../observability/logger.js";
 import { metrics } from "../observability/metrics.js";
+import { scheduler } from "../scheduler/scheduler.js";
 
 const log = createLogger("webhook-server");
 const newsletterLog = createLogger("newsletter");
@@ -1120,6 +1121,59 @@ export class WebhookServer {
       const count = await storage.getSubscriberCount();
       return { count };
     });
+
+    // ── Scheduler endpoints ──────────────────────────────────────
+
+    // List all scheduled tasks
+    route("get", "/api/scheduler", async (_request: any, _reply: any) => {
+      const tasks = scheduler.getTasks().map((t) => ({
+        id: t.id,
+        name: t.name,
+        intervalMs: t.intervalMs,
+        lastRun: t.lastRun?.toISOString() ?? null,
+        nextRun: t.nextRun?.toISOString() ?? null,
+        runCount: t.runCount,
+        errors: t.errors,
+        enabled: t.enabled,
+      }));
+      return { tasks };
+    });
+
+    // Pause a scheduled task
+    route("post", "/api/scheduler/:name/pause",
+      async (request: any, reply: any) => {
+        const { name } = request.params;
+        const ok = scheduler.pause(name);
+        if (!ok) {
+          return reply.status(404).send({ error: `Task '${name}' not found` });
+        }
+        return { success: true };
+      }
+    );
+
+    // Resume a scheduled task
+    route("post", "/api/scheduler/:name/resume",
+      async (request: any, reply: any) => {
+        const { name } = request.params;
+        const ok = scheduler.resume(name);
+        if (!ok) {
+          return reply.status(404).send({ error: `Task '${name}' not found` });
+        }
+        return { success: true };
+      }
+    );
+
+    // Cancel a scheduled task
+    route("delete", "/api/scheduler/:name",
+      async (request: any, reply: any) => {
+        const { name } = request.params;
+        const ok = scheduler.cancel(name);
+        if (!ok) {
+          return reply.status(404).send({ error: `Task '${name}' not found` });
+        }
+        return { success: true };
+      }
+    );
 
     // GitHub webhook receiver
     route("post", "/webhooks/github", async (request: any, reply: any) => {
