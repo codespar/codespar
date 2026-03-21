@@ -73,13 +73,26 @@ export type {
 } from "./server/webhook-server.js";
 export { WebhookServer } from "./server/webhook-server.js";
 
+// Agents (Plugin Registry)
+export {
+  registerAgentType,
+  getAgentFactory,
+  getRegisteredTypes,
+  isRegisteredType,
+} from "./agents/index.js";
+export type { AgentFactory as AgentPluginFactory } from "./agents/index.js";
+
 // Execution
 export { ClaudeBridge } from "./execution/index.js";
 export type {
   ExecutionRequest,
   RepoExecutionRequest,
   ExecutionResult,
+  SandboxConfig,
+  SandboxResult,
+  ExecutionSandbox,
 } from "./execution/index.js";
+export { DEFAULT_SANDBOX_CONFIG } from "./execution/index.js";
 
 // Memory (Vector Store)
 export { VectorStore } from "./memory/index.js";
@@ -91,3 +104,7 @@ export type { AgentContext } from "./ai/index.js";
 
 // GitHub
 export { GitHubClient } from "./github/index.js";
+
+// Observability
+export { createLogger, metrics } from "./observability/index.js";
+export type { LogLevel, Logger } from "./observability/index.js";

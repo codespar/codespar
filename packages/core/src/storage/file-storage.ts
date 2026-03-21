@@ -13,6 +13,9 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { randomUUID } from "node:crypto";
 import type { AgentMemory, AuditEntry, NewsletterSubscriber, ProjectConfig, ProjectListEntry, StorageProvider } from "./types.js";
+import { createLogger } from "../observability/logger.js";
+
+const log = createLogger("storage");
 
 /** Serializable shape stored in memory.json */
 interface MemoryFile {
@@ -164,9 +167,9 @@ export class FileStorage implements StorageProvider {
     });
     try {
       await this.writeFile(this.auditPath, data);
-      console.log(`[storage] Audit entry saved: ${full.action} by ${full.actorId} (${data.entries.length} total)`);
+      log.debug("Audit entry saved", { action: full.action, actor: full.actorId, total: data.entries.length });
     } catch (err) {
-      console.error(`[storage] Failed to write audit:`, err);
+      log.error("Failed to write audit", { error: err instanceof Error ? err.message : String(err) });
     }
 
     return full;

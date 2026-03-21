@@ -5,6 +5,10 @@
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
+import { createLogger } from "../observability/logger.js";
+
+const log = createLogger("github");
+
 export class GitHubClient {
   private token: string;
   private baseUrl = "https://api.github.com";
@@ -171,7 +175,7 @@ export class GitHubClient {
       const hooks = (await listRes.json()) as any[];
       const existing = hooks.find((h: any) => h.config?.url === webhookUrl);
       if (existing) {
-        console.log(`[github] Webhook already exists for ${owner}/${repo}`);
+        log.info("Webhook already exists", { owner, repo });
         return { id: existing.id as number, url: existing.config.url as string };
       }
     }
@@ -196,15 +200,13 @@ export class GitHubClient {
     );
 
     if (!res.ok) {
-      const err = await res.text().catch(() => "");
-      console.log(
-        `[github] Failed to create webhook: ${res.status} ${err.slice(0, 200)}`,
-      );
+      const errBody = await res.text().catch(() => "");
+      log.error("Failed to create webhook", { owner, repo, status: res.status, response: errBody.slice(0, 200) });
       return null;
     }
 
     const data = (await res.json()) as any;
-    console.log(`[github] Webhook created for ${owner}/${repo}`);
+    log.info("Webhook created", { owner, repo });
     return { id: data.id as number, url: data.config.url as string };
   }
 

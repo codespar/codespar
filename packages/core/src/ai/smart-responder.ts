@@ -6,6 +6,10 @@
  * so it can give informed, relevant answers.
  */
 
+import { createLogger } from "../observability/logger.js";
+
+const log = createLogger("smart");
+
 export interface AgentContext {
   agentId: string;
   projectId: string;
@@ -75,7 +79,7 @@ Keep responses under 300 words. Use bullet points for lists. Be direct and actio
     });
 
     if (!res.ok) {
-      console.log("[smart] API error:", res.status);
+      log.warn("API error", { status: res.status });
       return null;
     }
 
@@ -84,7 +88,7 @@ Keep responses under 300 words. Use bullet points for lists. Be direct and actio
     };
     return data.content?.[0]?.text || null;
   } catch (err) {
-    console.log("[smart] Error:", err);
+    log.error("Error", { error: err instanceof Error ? err.message : String(err) });
     return null;
   }
 }

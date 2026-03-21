@@ -17,6 +17,12 @@ import { createHmac, timingSafeEqual } from "node:crypto";
 import Fastify, { type FastifyInstance } from "fastify";
 import cors from "@fastify/cors";
 import { parseGitHubWebhook, type CIEvent } from "../webhooks/github-handler.js";
+import { getRegisteredTypes } from "../agents/agent-registry.js";
+import { createLogger } from "../observability/logger.js";
+import { metrics } from "../observability/metrics.js";
+
+const log = createLogger("webhook-server");
+const newsletterLog = createLogger("newsletter");
 import { GitHubClient } from "../github/github-client.js";
 import type { AgentStatus, AgentState } from "../types/agent.js";
 import type { ChannelAdapter } from "../types/channel-adapter.js";
@@ -105,9 +111,9 @@ async function sendWelcomeEmail(email: string): Promise<void> {
         html: `<p>You're subscribed to Dispatch, the CodeSpar engineering blog.</p><p>Architecture decisions, agent design patterns, and engineering lessons. One post per week.</p><p>Read the latest: <a href="https://codespar.dev/blog">codespar.dev/blog</a></p><p>— Fabiano</p>`,
       }),
     });
-    console.log(`[newsletter] Welcome email sent to ${email}`);
+    newsletterLog.info("Welcome email sent", { email });
   } catch (err) {
-    console.error(`[newsletter] Failed to send welcome email:`, err);
+    newsletterLog.error("Failed to send welcome email", { email, error: err instanceof Error ? err.message : String(err) });
   }
 }
 
@@ -134,6 +140,7 @@ export class WebhookServer {
 
     this.app = Fastify({ logger: false });
     this.app.register(cors, { origin: true });
+    this.registerRequestTracking();
     this.registerRateLimiting();
     this.registerRoutes();
   }
@@ -213,15 +220,29 @@ export class WebhookServer {
   async start(): Promise<void> {
     this.startedAt = new Date();
     await this.app.listen({ port: this.port, host: this.host });
-    console.log(
-      `[webhook-server] Listening on http://${this.host}:${this.port}`
-    );
+    log.info("Listening", { host: this.host, port: this.port });
   }
 
   /** Graceful shutdown */
   async stop(): Promise<void> {
     await this.app.close();
-    console.log("[webhook-server] Stopped");
+    log.info("Stopped");
+  }
+
+  /** Track request count and latency via metrics hooks */
+  private registerRequestTracking(): void {
+    this.app.addHook("onRequest", async (request) => {
+      // Stash start time for latency calculation
+      (request as unknown as Record<string, unknown>).__startTime = Date.now();
+      metrics.increment("api.requests");
+    });
+
+    this.app.addHook("onResponse", async (request) => {
+      const start = (request as unknown as Record<string, unknown>).__startTime;
+      if (typeof start === "number") {
+        metrics.observe("api.latency_ms", Date.now() - start);
+      }
+    });
   }
 
   /** Register rate limiting as a Fastify onRequest hook */
@@ -273,6 +294,16 @@ export class WebhookServer {
       };
     });
 
+    // Metrics endpoint
+    this.app.get("/api/metrics", async (_request, _reply) => {
+      const uptimeMs = Date.now() - this.startedAt.getTime();
+      return {
+        uptime: uptimeMs,
+        agents: this.agentCount,
+        metrics: metrics.toJSON(),
+      };
+    });
+
     // ── Dashboard API endpoints ──────────────────────────────────
 
     // System status overview
@@ -292,6 +323,12 @@ export class WebhookServer {
         uptime: uptimeMs,
         startedAt: this.startedAt.toISOString(),
       };
+    });
+
+
+    // List all registered agent types (built-in + custom plugins)
+    this.app.get("/api/agent-types", async (_request, _reply) => {
+      return { types: getRegisteredTypes() };
     });
 
     // List all agents with status
@@ -934,6 +971,7 @@ export class WebhookServer {
 
     // GitHub webhook receiver
     this.app.post("/webhooks/github", async (request, reply) => {
+      metrics.increment("webhook.received");
       const headers: Record<string, string> = {};
       for (const [key, value] of Object.entries(request.headers)) {
         if (typeof value === "string") {
@@ -957,10 +995,7 @@ export class WebhookServer {
           return reply.status(401).send({ error: "Invalid webhook signature" });
         }
       } else {
-        console.warn(
-          "[webhook-server] GITHUB_WEBHOOK_SECRET is not set — skipping signature verification. " +
-          "Set this env var to secure your webhook endpoint."
-        );
+        log.warn("GITHUB_WEBHOOK_SECRET is not set — skipping signature verification");
       }
 
       const event = parseGitHubWebhook(headers, request.body);
@@ -978,9 +1013,7 @@ export class WebhookServer {
           const error =
             err instanceof Error ? err : new Error(String(err));
           errors.push(error);
-          console.error(
-            `[webhook-server] Handler error: ${error.message}`
-          );
+          log.error("Handler error", { error: error.message });
         }
       }
 

@@ -4,3 +4,7 @@ export type {
   RepoExecutionRequest,
   ExecutionResult,
 } from "./claude-bridge.js";
+
+// Docker Execution Sandbox
+export type { SandboxConfig, SandboxResult, ExecutionSandbox } from "./sandbox.js";
+export { DEFAULT_SANDBOX_CONFIG } from "./sandbox.js";

@@ -5,6 +5,9 @@
 
 import type { ParsedIntent, IntentType } from "../types/intent.js";
 import { INTENT_RISK } from "../types/intent.js";
+import { createLogger } from "../observability/logger.js";
+
+const log = createLogger("nlu");
 
 const SYSTEM_PROMPT = `You are an intent classifier for CodeSpar, an AI agent platform.
 Classify the user's message into ONE of these intents:
@@ -37,11 +40,11 @@ export async function parseWithNLU(
 ): Promise<ParsedIntent | null> {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) {
-    console.log("[nlu] No ANTHROPIC_API_KEY set, skipping NLU");
+    log.debug("No ANTHROPIC_API_KEY set, skipping NLU");
     return null;
   }
 
-  console.log("[nlu] Classifying:", text);
+  log.debug("Classifying", { text });
 
   try {
     const res = await fetch("https://api.anthropic.com/v1/messages", {
@@ -60,7 +63,7 @@ export async function parseWithNLU(
     });
 
     if (!res.ok) {
-      console.log("[nlu] API error:", res.status, await res.text().catch(() => ""));
+      log.warn("API error", { status: res.status });
       return null;
     }
 
@@ -90,10 +93,10 @@ export async function parseWithNLU(
       rawText: text,
       confidence: parsed.confidence ?? 0.8,
     };
-    console.log(`[nlu] Classified "${text}" → ${intentType} (${result.confidence})`);
+    log.info("Classified", { text, intent: intentType, confidence: result.confidence });
     return result;
   } catch (err) {
-    console.log("[nlu] Parse error:", err);
+    log.error("Parse error", { error: err instanceof Error ? err.message : String(err) });
     return null;
   }
 }
