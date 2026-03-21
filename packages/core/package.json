@@ -13,7 +13,8 @@
   "scripts": {
     "build": "tsc",
     "dev": "tsc --watch",
-    "lint": "echo 'lint ok'"
+    "lint": "echo 'lint ok'",
+    "test": "vitest run"
   },
   "dependencies": {
     "@fastify/cors": "^11.0.0",
