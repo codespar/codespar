@@ -8,6 +8,8 @@
     "channels",
     "memory",
     "orgs",
-    "webhooks"
+    "webhooks",
+    "scheduler",
+    "newsletter"
   ]
 }

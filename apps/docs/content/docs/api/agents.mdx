@@ -295,8 +295,114 @@ curl -X POST http://localhost:3000/api/agents/agent-proj-abc123/action \
 }
 ```
 
+---
+
+## Create an Agent
+
+Create a new agent programmatically.
+
+```
+POST /api/agents
+```
+
+### Request Body
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `name` | string | Yes | Display name for the agent |
+| `type` | string | Yes | Agent type: `project`, `task`, `review`, `deploy`, `incident`, `coordinator` |
+| `projectId` | string | No | Project to link (required for project agents) |
+| `autonomyLevel` | number | No | Initial autonomy level (0-5, default: 1) |
+
+### Request
+
+```bash
+curl -X POST http://localhost:3000/api/agents \
+  -H "Content-Type: application/json" \
+  -d '{"name": "api-gateway-agent", "type": "project", "projectId": "proj-001", "autonomyLevel": 2}'
+```
+
+### Response
+
+```json
+{
+  "id": "agent-proj-xyz789",
+  "name": "api-gateway-agent",
+  "type": "project",
+  "status": "ACTIVE",
+  "autonomyLevel": 2,
+  "projectId": "proj-001",
+  "createdAt": "2026-03-21T14:00:00Z"
+}
+```
+
+---
+
+## Delete an Agent
+
+Remove an agent. Active agents are stopped before removal. Ephemeral agents are cleaned up automatically, but this endpoint can be used for immediate removal.
+
+```
+DELETE /api/agents/:id
+```
+
+### Request
+
+```bash
+curl -X DELETE http://localhost:3000/api/agents/agent-proj-xyz789
+```
+
+### Response
+
+```json
+{
+  "id": "agent-proj-xyz789",
+  "deleted": true,
+  "message": "Agent removed"
+}
+```
+
+### Error Response
+
+```json
+{
+  "error": "Agent not found",
+  "code": "AGENT_NOT_FOUND",
+  "status": 404
+}
+```
+
+---
+
+## List Agent Types
+
+Retrieve all registered agent types, including custom types added via the plugin registry.
+
+```
+GET /api/agent-types
+```
+
+### Request
+
+```bash
+curl http://localhost:3000/api/agent-types
+```
+
+### Response
+
+```json
+[
+  { "type": "project", "lifecycle": "persistent", "description": "Monitors repo, CI/CD, channels" },
+  { "type": "task", "lifecycle": "ephemeral", "description": "Executes coding tasks" },
+  { "type": "review", "lifecycle": "ephemeral", "description": "PR analysis and risk classification" },
+  { "type": "deploy", "lifecycle": "ephemeral", "description": "Deploy orchestration with approvals" },
+  { "type": "incident", "lifecycle": "ephemeral", "description": "CI failure investigation" },
+  { "type": "coordinator", "lifecycle": "persistent", "description": "Cross-project orchestration" }
+]
+```
+
 ## Next Steps
 
-- [Audit API](/docs/api/audit) — Query the audit trail
-- [Project API](/docs/api/projects) — Manage project links
-- [Graduated Autonomy](/docs/commands/autonomy) — Understand autonomy levels
+- [Audit API](/docs/api/audit) -- Query the audit trail
+- [Project API](/docs/api/projects) -- Manage project links
+- [Graduated Autonomy](/docs/commands/autonomy) -- Understand autonomy levels

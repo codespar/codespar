@@ -1,0 +1,175 @@
+---
+title: Scheduler API
+description: Manage recurring tasks via the scheduler endpoints.
+---
+
+# Scheduler API
+
+CodeSpar includes a built-in task scheduler for recurring operations like health checks, build status reports, and audit cleanup. You can list, pause, resume, and cancel scheduled tasks via the API.
+
+## List All Tasks
+
+Retrieve all registered scheduled tasks and their current state.
+
+```
+GET /api/scheduler
+```
+
+### Request
+
+```bash
+curl http://localhost:3000/api/scheduler
+```
+
+### Response
+
+```json
+[
+  {
+    "name": "health-check",
+    "intervalMs": 300000,
+    "lastRun": "2026-03-21T14:30:00Z",
+    "nextRun": "2026-03-21T14:35:00Z",
+    "runCount": 48,
+    "errors": 0,
+    "enabled": true
+  },
+  {
+    "name": "build-status-report",
+    "intervalMs": 86400000,
+    "lastRun": "2026-03-21T06:00:00Z",
+    "nextRun": "2026-03-22T06:00:00Z",
+    "runCount": 7,
+    "errors": 0,
+    "enabled": true
+  },
+  {
+    "name": "audit-cleanup",
+    "intervalMs": 86400000,
+    "lastRun": "2026-03-21T03:00:00Z",
+    "nextRun": "2026-03-22T03:00:00Z",
+    "runCount": 7,
+    "errors": 1,
+    "enabled": true
+  }
+]
+```
+
+### Response Schema
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `name` | string | Unique task identifier |
+| `intervalMs` | number | Interval between runs in milliseconds |
+| `lastRun` | string | ISO 8601 timestamp of the last execution (null if never run) |
+| `nextRun` | string | ISO 8601 timestamp of the next scheduled execution |
+| `runCount` | number | Total number of completed runs |
+| `errors` | number | Total number of failed runs |
+| `enabled` | boolean | Whether the task is currently active |
+
+---
+
+## Pause a Task
+
+Temporarily stop a scheduled task from running. The task retains its state and can be resumed later.
+
+```
+POST /api/scheduler/:name/pause
+```
+
+### Request
+
+```bash
+curl -X POST http://localhost:3000/api/scheduler/health-check/pause
+```
+
+### Response
+
+```json
+{
+  "name": "health-check",
+  "enabled": false,
+  "message": "Task paused"
+}
+```
+
+---
+
+## Resume a Task
+
+Resume a previously paused task. It will run at the next scheduled interval.
+
+```
+POST /api/scheduler/:name/resume
+```
+
+### Request
+
+```bash
+curl -X POST http://localhost:3000/api/scheduler/health-check/resume
+```
+
+### Response
+
+```json
+{
+  "name": "health-check",
+  "enabled": true,
+  "message": "Task resumed"
+}
+```
+
+---
+
+## Cancel a Task
+
+Permanently remove a scheduled task. This cannot be undone. Built-in tasks will be re-registered on server restart.
+
+```
+DELETE /api/scheduler/:name
+```
+
+### Request
+
+```bash
+curl -X DELETE http://localhost:3000/api/scheduler/audit-cleanup
+```
+
+### Response
+
+```json
+{
+  "name": "audit-cleanup",
+  "message": "Task cancelled"
+}
+```
+
+---
+
+## Built-in Tasks
+
+CodeSpar registers these tasks automatically on startup:
+
+| Task | Interval | Description |
+|------|----------|-------------|
+| `health-check` | 5 minutes | Verifies agent connectivity, channel status, and system health. Logs warnings if any component is degraded. |
+| `build-status-report` | 24 hours | Collects build status from linked GitHub repos and stores a summary. Used by the `@codespar status build` command. |
+| `audit-cleanup` | 24 hours | Removes expired audit entries beyond the retention period. Preserves hash chain integrity by keeping boundary entries. |
+
+## Error Handling
+
+Each task runs in isolation. If a task handler throws an error, the scheduler increments the `errors` counter and logs the failure, but other tasks continue running unaffected.
+
+```json
+{
+  "error": "Task not found",
+  "code": "TASK_NOT_FOUND",
+  "status": 404
+}
+```
+
+## Next Steps
+
+- [REST API Overview](/docs/api) -- Endpoints and conventions
+- [Scheduled Tasks Guide](/docs/guides/scheduled-tasks) -- Creating custom tasks
+- [Configuration](/docs/configuration) -- Environment variables

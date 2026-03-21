@@ -93,6 +93,15 @@ Keep NLU on Haiku in all configurations — intent classification does not benef
 | `ENABLE_TELEGRAM` | `false` | Enable the Telegram channel. Set to `true` to activate. |
 | `TELEGRAM_BOT_TOKEN` | — | Telegram Bot Token from [@BotFather](https://t.me/BotFather). Required when Telegram is enabled. |
 
+### Integrations
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `RESEND_API_KEY` | -- | Resend API key for sending newsletter welcome emails. If not set, subscriptions are stored but no emails are sent. Get one at [resend.com](https://resend.com). |
+| `RESEND_FROM_EMAIL` | `CodeSpar <dispatch@codespar.dev>` | From address for newsletter emails. Must be a verified sender in your Resend account. |
+| `GITHUB_WEBHOOK_SECRET` | -- | Secret for HMAC-SHA256 webhook signature validation. When set, all incoming GitHub webhook payloads are verified against this secret. Strongly recommended for production. |
+| `LOG_LEVEL` | `info` | Structured logging level. Options: `debug`, `info`, `warn`, `error`. In production, logs are JSON-formatted. In development, logs are pretty-printed. |
+
 ### Database
 
 | Variable | Default | Description |
@@ -141,6 +150,10 @@ For quick reference, here is every environment variable in a single table:
 | `TELEGRAM_BOT_TOKEN` | When Telegram | — | Telegram |
 | `DATABASE_URL` | No | — | Database |
 | `REDIS_URL` | No | — | Database |
+| `RESEND_API_KEY` | No | -- | Integrations |
+| `RESEND_FROM_EMAIL` | No | `CodeSpar <dispatch@codespar.dev>` | Integrations |
+| `GITHUB_WEBHOOK_SECRET` | No | -- | Integrations |
+| `LOG_LEVEL` | No | `info` | Integrations |
 | `CODESPAR_WORK_DIR` | No | `.codespar` | Storage |
 
 ---

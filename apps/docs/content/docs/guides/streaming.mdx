@@ -1,0 +1,84 @@
+---
+title: Streaming Responses
+description: How CodeSpar streams AI responses in real-time to messaging channels.
+---
+
+# Streaming Responses
+
+CodeSpar supports streaming responses from the Anthropic API via Server-Sent Events (SSE). This enables real-time, progressive message updates in messaging channels instead of waiting for the full response to complete.
+
+## How It Works
+
+When an agent processes a message that requires an AI response, it can use one of two streaming methods:
+
+### executeStreaming
+
+Used by the Task Agent and other agents that need to stream code generation or analysis results. The method opens an SSE connection to the Anthropic Messages API and yields text chunks as they arrive.
+
+```typescript
+const stream = await executeStreaming({
+  model: 'claude-sonnet-4-20250514',
+  messages: [{ role: 'user', content: taskPrompt }],
+});
+
+for await (const chunk of stream) {
+  // Each chunk contains a partial text response
+  await channel.updateMessage(messageId, accumulatedText + chunk);
+}
+```
+
+### generateSmartResponseStreaming
+
+Used for open-ended conversational responses (Tier 3 of the NLU pipeline). Same SSE mechanism, but with the smart response system prompt and conversation context.
+
+```typescript
+const stream = await generateSmartResponseStreaming({
+  model: 'claude-sonnet-4-20250514',
+  messages: conversationHistory,
+  systemPrompt: smartResponsePrompt,
+});
+```
+
+## SSE Parsing
+
+CodeSpar parses the Anthropic SSE stream according to the Messages API specification:
+
+1. The stream emits `message_start`, `content_block_start`, `content_block_delta`, and `message_stop` events.
+2. Text content arrives in `content_block_delta` events with `type: "text_delta"`.
+3. The parser accumulates text deltas and yields them to the caller.
+4. On `message_stop`, the stream closes and final metadata (usage, stop reason) is captured.
+
+Error handling: if the SSE connection drops mid-stream, the accumulated response up to that point is sent as the final message, and the error is logged.
+
+## Progressive Message Updates in Slack
+
+The Slack adapter can progressively update a message as chunks arrive:
+
+1. Agent sends an initial message (e.g., "Thinking...").
+2. As streaming chunks arrive, the adapter calls `chat.update` to replace the message content with the accumulated text.
+3. Update frequency is throttled (every 500ms or every 100 characters, whichever comes first) to avoid Slack API rate limits.
+4. On stream completion, a final `chat.update` sends the complete response.
+
+This creates a "typing" effect where users see the response being written in real time.
+
+## When Streaming is Used
+
+| Scenario | Method | Streaming? |
+|----------|--------|-----------|
+| Open-ended questions | `generateSmartResponseStreaming` | Yes |
+| Code generation (`instruct`, `fix`) | `executeStreaming` | Yes |
+| Intent classification (NLU) | `execute` (batch) | No |
+| PR review analysis | `execute` (batch) | No |
+| Short command responses (`status`, `help`) | No AI call | No |
+
+Streaming is used when the response is expected to be long (100+ tokens) and the user benefits from seeing progressive output. Short, structured responses (intent classification, command parsing) use batch mode for simplicity.
+
+## Configuration
+
+Streaming uses the same model configuration as batch responses. No additional environment variables are required. The models are configured via `TASK_MODEL`, `SMART_MODEL`, etc. See [Configuration](/docs/configuration) for details.
+
+## Next Steps
+
+- [Smart Responses](/docs/guides/smart-responses) -- How the NLU pipeline works
+- [Slack Channel](/docs/channels/slack) -- Slack-specific features
+- [Configuration](/docs/configuration) -- Model and environment setup

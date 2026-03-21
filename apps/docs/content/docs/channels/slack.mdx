@@ -138,6 +138,56 @@ User:       approve
 CodeSpar:   ✅ PR #87 merged. Deployed to staging.
 ```
 
+## Thread Support
+
+All `app_mention` responses are sent as thread replies automatically. This keeps channels clean and groups related messages together.
+
+### How threading works
+
+1. When a user @mentions CodeSpar in a channel, the adapter captures the message's `ts` (timestamp) value.
+2. The response is sent with `thread_ts` set to the original message's `ts`, creating a threaded reply.
+3. Follow-up messages within the same thread are detected via the `thread_ts` metadata on incoming events.
+4. Users can continue the conversation in the thread without needing to @mention the bot again.
+
+The `threadTs` metadata flows through the `NormalizedMessage` so the agent layer does not need channel-specific logic. The Slack adapter handles thread routing transparently.
+
+### Direct messages
+
+DMs do not use threading. Responses are sent as regular messages in the DM conversation.
+
+## File Attachments
+
+The Slack adapter supports sending file attachments via the `files.uploadV2` API. Agents can send diffs, reports, logs, and other files directly to channels or threads.
+
+### sendFile method
+
+```typescript
+await slackAdapter.sendFile({
+  channelId: 'C0123456789',
+  threadTs: '1234567890.123456',    // optional, sends in thread
+  filename: 'diff.patch',
+  content: diffContent,
+  title: 'PR #42 diff',
+});
+```
+
+### ChannelAttachment type
+
+File attachments use the `ChannelAttachment` interface:
+
+```typescript
+interface ChannelAttachment {
+  filename: string;
+  content: string | Buffer;
+  contentType?: string;        // e.g., 'text/plain', 'application/json'
+  title?: string;              // display title in Slack
+}
+```
+
+### Required scopes
+
+To use file attachments, ensure your Slack app has the `files:write` scope. See the [OAuth Scopes](#configure-oauth-scopes) section above.
+
 ## Invite the Bot to Channels
 
 After installation, invite the bot to any channel where you want it active:
