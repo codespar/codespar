@@ -141,6 +141,7 @@ export class WebhookServer {
     this.app = Fastify({ logger: false });
     this.app.register(cors, { origin: true });
     this.registerRequestTracking();
+    this.registerVersionHeader();
     this.registerRateLimiting();
     this.registerRoutes();
   }
@@ -229,6 +230,13 @@ export class WebhookServer {
     log.info("Stopped");
   }
 
+  /** Add API version header to all responses */
+  private registerVersionHeader(): void {
+    this.app.addHook("onSend", async (_request, reply) => {
+      reply.header("X-API-Version", "v1");
+    });
+  }
+
   /** Track request count and latency via metrics hooks */
   private registerRequestTracking(): void {
     this.app.addHook("onRequest", async (request) => {
@@ -253,16 +261,16 @@ export class WebhookServer {
       const url = request.url;
 
       // Skip rate limiting for health endpoint
-      if (url === "/health") return;
+      if (url === "/health" || url === "/v1/health") return;
 
       const ip = request.ip;
       let limit: number;
       let keyPrefix: string;
 
-      if (url.startsWith("/webhooks/")) {
+      if (url.startsWith("/webhooks/") || url.startsWith("/v1/webhooks/")) {
         limit = 30;
         keyPrefix = "webhook";
-      } else if (url.startsWith("/api/")) {
+      } else if (url.startsWith("/api/") || url.startsWith("/v1/api/")) {
         limit = 100;
         keyPrefix = "api";
       } else {
@@ -284,8 +292,17 @@ export class WebhookServer {
   }
 
   private registerRoutes(): void {
+    // Helper: register a route on both the original path and under /v1/ prefix.
+    // This keeps backward compatibility while enabling versioned endpoints.
+    // Future breaking changes go in /v2/.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const route = (method: "get" | "post" | "delete", path: string, handler: any) => {
+      this.app[method](path, handler);
+      this.app[method](`/v1${path}`, handler);
+    };
+
     // Health check
-    this.app.get("/health", async (_request, _reply) => {
+    route("get", "/health", async (_request: any, _reply: any) => {
       const uptimeMs = Date.now() - this.startedAt.getTime();
       return {
         status: "ok",
@@ -295,7 +312,7 @@ export class WebhookServer {
     });
 
     // Metrics endpoint
-    this.app.get("/api/metrics", async (_request, _reply) => {
+    route("get", "/api/metrics", async (_request: any, _reply: any) => {
       const uptimeMs = Date.now() - this.startedAt.getTime();
       return {
         uptime: uptimeMs,
@@ -307,7 +324,7 @@ export class WebhookServer {
     // ── Dashboard API endpoints ──────────────────────────────────
 
     // System status overview
-    this.app.get("/api/status", async (_request, _reply) => {
+    route("get", "/api/status", async (_request: any, _reply: any) => {
       const uptimeMs = Date.now() - this.startedAt.getTime();
       const statuses = this.agentSupervisor?.getAgentStatuses() ?? [];
       const activeCount = statuses.filter((s) => s.state === "ACTIVE").length;
@@ -327,12 +344,12 @@ export class WebhookServer {
 
 
     // List all registered agent types (built-in + custom plugins)
-    this.app.get("/api/agent-types", async (_request, _reply) => {
+    route("get", "/api/agent-types", async (_request: any, _reply: any) => {
       return { types: getRegisteredTypes() };
     });
 
     // List all agents with status
-    this.app.get("/api/agents", async (_request, _reply) => {
+    route("get", "/api/agents", async (_request: any, _reply: any) => {
       const statuses = this.agentSupervisor?.getAgentStatuses() ?? [];
       return {
         agents: statuses.map((s) => ({
@@ -350,9 +367,8 @@ export class WebhookServer {
     });
 
     // Get single agent detail
-    this.app.get<{ Params: { id: string } }>(
-      "/api/agents/:id",
-      async (request, reply) => {
+    route("get", "/api/agents/:id",
+      async (request: any, reply: any) => {
         const { id } = request.params;
         const statuses = this.agentSupervisor?.getAgentStatuses() ?? [];
         const agent = statuses.find((s) => s.id === id);
@@ -382,9 +398,8 @@ export class WebhookServer {
     );
 
     // Get current project config
-    this.app.get<{ Querystring: { agentId?: string } }>(
-      "/api/project",
-      async (request, _reply) => {
+    route("get", "/api/project",
+      async (request: any, _reply: any) => {
         if (!this.storageProvider) {
           return { linked: false, config: null };
         }
@@ -403,9 +418,8 @@ export class WebhookServer {
     );
 
     // ── Link a project to an agent ──
-    this.app.post<{ Body: { agentId: string; repo: string } }>(
-      "/api/project/link",
-      async (request, reply) => {
+    route("post", "/api/project/link",
+      async (request: any, reply: any) => {
         const { agentId, repo } = request.body as { agentId?: string; repo?: string };
 
         if (!agentId || !repo) {
@@ -439,9 +453,8 @@ export class WebhookServer {
     // ── Multi-project management ──
 
     // Create a new project (spawns a new Project Agent, org-scoped)
-    this.app.post<{ Body: { repo: string; name?: string } }>(
-      "/api/projects",
-      async (request, reply) => {
+    route("post", "/api/projects",
+      async (request: any, reply: any) => {
         const { repo, name } = request.body as { repo?: string; name?: string };
 
         if (!repo || !repo.includes("/")) {
@@ -502,7 +515,7 @@ export class WebhookServer {
     );
 
     // List all projects with their agents (org-scoped)
-    this.app.get("/api/projects", async (request, _reply) => {
+    route("get", "/api/projects", async (request: any, _reply: any) => {
       const orgId = this.getOrgId(request);
       const storage = this.getOrgStorage(orgId);
 
@@ -511,9 +524,8 @@ export class WebhookServer {
     });
 
     // Remove a project (shuts down its agent, org-scoped)
-    this.app.delete<{ Params: { id: string } }>(
-      "/api/projects/:id",
-      async (request, reply) => {
+    route("delete", "/api/projects/:id",
+      async (request: any, reply: any) => {
         const { id } = request.params;
         const orgId = this.getOrgId(request);
         const storage = this.getOrgStorage(orgId);
@@ -539,9 +551,8 @@ export class WebhookServer {
     );
 
     // ── Agent action (suspend / resume / restart) ──
-    this.app.post<{ Params: { id: string }; Body: { action: string } }>(
-      "/api/agents/:id/action",
-      async (request, reply) => {
+    route("post", "/api/agents/:id/action",
+      async (request: any, reply: any) => {
         const { id } = request.params;
         const { action } = request.body as { action?: string };
 
@@ -632,7 +643,7 @@ export class WebhookServer {
     );
 
     // ── Memory stats (vector store) ──
-    this.app.get("/api/memory", async (_request, _reply) => {
+    route("get", "/api/memory", async (_request: any, _reply: any) => {
       if (!this.vectorStore) {
         return { total: 0, byCategory: {} };
       }
@@ -640,9 +651,8 @@ export class WebhookServer {
     });
 
     // ── Identity lookup (by channel type + channel user ID) ──
-    this.app.get<{ Querystring: { channelType?: string; channelUserId?: string } }>(
-      "/api/identity",
-      async (request, _reply) => {
+    route("get", "/api/identity",
+      async (request: any, _reply: any) => {
         const channelType = request.query.channelType as ChannelType | undefined;
         const channelUserId = request.query.channelUserId;
 
@@ -664,7 +674,7 @@ export class WebhookServer {
     );
 
     // ── List connected channels ──
-    this.app.get("/api/channels", async (_request, _reply) => {
+    route("get", "/api/channels", async (_request: any, _reply: any) => {
       const adapters = this.agentSupervisor?.getAdapters?.() ?? [];
 
       const channels = await Promise.all(
@@ -703,9 +713,8 @@ export class WebhookServer {
     });
 
     // ── Reconnect a channel (placeholder) ──
-    this.app.post<{ Params: { name: string } }>(
-      "/api/channels/:name/reconnect",
-      async (request, reply) => {
+    route("post", "/api/channels/:name/reconnect",
+      async (request: any, reply: any) => {
         const { name } = request.params;
         const adapters = this.agentSupervisor?.getAdapters?.() ?? [];
         const adapter = adapters.find((a) => a.type === name);
@@ -726,9 +735,8 @@ export class WebhookServer {
     );
 
     // ── Approval vote ──
-    this.app.post<{ Body: { token: string; vote: string; userId: string } }>(
-      "/api/approval/vote",
-      async (request, reply) => {
+    route("post", "/api/approval/vote",
+      async (request: any, reply: any) => {
         const { token, vote, userId } = request.body as {
           token?: string;
           vote?: string;
@@ -786,9 +794,8 @@ export class WebhookServer {
     );
 
     // List audit entries (org-scoped via x-org-id header, paginated)
-    this.app.get<{ Querystring: { limit?: string; page?: string; risk?: string } }>(
-      "/api/audit",
-      async (request, _reply) => {
+    route("get", "/api/audit",
+      async (request: any, _reply: any) => {
         const rawLimit = parseInt(request.query.limit ?? "20", 10);
         const pageSize = Math.min(Math.max(rawLimit, 1), 100);
         const pageNum = Math.max(parseInt(request.query.page ?? "1", 10), 1);
@@ -852,9 +859,8 @@ export class WebhookServer {
     // ── Organization management ──────────────────────────────────
 
     // Create a new organization (creates directory structure)
-    this.app.post<{ Body: { id: string; name?: string } }>(
-      "/api/orgs",
-      async (request, reply) => {
+    route("post", "/api/orgs",
+      async (request: any, reply: any) => {
         const { id, name } = request.body as { id?: string; name?: string };
 
         if (!id) {
@@ -876,7 +882,7 @@ export class WebhookServer {
     );
 
     // List organizations (scan orgs directory)
-    this.app.get("/api/orgs", async (_request, _reply) => {
+    route("get", "/api/orgs", async (_request: any, _reply: any) => {
       const orgsDir = path.resolve(this.storageBaseDir, "orgs");
       try {
         const entries = await fs.readdir(orgsDir, { withFileTypes: true });
@@ -890,9 +896,8 @@ export class WebhookServer {
     });
 
     // Get organization details
-    this.app.get<{ Params: { id: string } }>(
-      "/api/orgs/:id",
-      async (request, _reply) => {
+    route("get", "/api/orgs/:id",
+      async (request: any, _reply: any) => {
         const { id } = request.params;
         const storage = this.getOrgStorage(id);
 
@@ -909,9 +914,8 @@ export class WebhookServer {
     // ── Newsletter endpoints ──────────────────────────────────────
 
     // Subscribe to newsletter
-    this.app.post<{ Body: { email: string; source?: string } }>(
-      "/api/newsletter/subscribe",
-      async (request, reply) => {
+    route("post", "/api/newsletter/subscribe",
+      async (request: any, reply: any) => {
         const { email, source } = request.body as { email?: string; source?: string };
 
         if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
@@ -939,16 +943,15 @@ export class WebhookServer {
     );
 
     // List all subscribers (admin endpoint)
-    this.app.get("/api/newsletter/subscribers", async (_request, _reply) => {
+    route("get", "/api/newsletter/subscribers", async (_request: any, _reply: any) => {
       const storage = this.storageProvider ?? this.getOrgStorage("default");
       const subscribers = await storage.getSubscribers();
       return { subscribers, count: subscribers.length };
     });
 
     // Unsubscribe
-    this.app.delete<{ Body: { email: string } }>(
-      "/api/newsletter/unsubscribe",
-      async (request, reply) => {
+    route("delete", "/api/newsletter/unsubscribe",
+      async (request: any, reply: any) => {
         const { email } = request.body as { email?: string };
 
         if (!email) {
@@ -963,14 +966,14 @@ export class WebhookServer {
     );
 
     // Public subscriber count
-    this.app.get("/api/newsletter/count", async (_request, _reply) => {
+    route("get", "/api/newsletter/count", async (_request: any, _reply: any) => {
       const storage = this.storageProvider ?? this.getOrgStorage("default");
       const count = await storage.getSubscriberCount();
       return { count };
     });
 
     // GitHub webhook receiver
-    this.app.post("/webhooks/github", async (request, reply) => {
+    route("post", "/webhooks/github", async (request: any, reply: any) => {
       metrics.increment("webhook.received");
       const headers: Record<string, string> = {};
       for (const [key, value] of Object.entries(request.headers)) {

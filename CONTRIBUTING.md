@@ -1,200 +1,184 @@
 # Contributing to CodeSpar
 
-Thanks for your interest in contributing to CodeSpar! This guide will help you get set up and productive quickly.
+Welcome. CodeSpar is open source (MIT) and contributions are encouraged. This guide covers setup, conventions, and the PR process.
 
-## Quick Start (Local Development)
-
-1. Clone and install:
+## Development Setup
 
 ```bash
 git clone https://github.com/codespar/codespar.git
 cd codespar
 npm install
 npm run build
+npm start          # starts CLI mode (no Docker needed)
 ```
 
-2. Run the CLI (no Docker needed):
+The CLI works without API keys. The Claude Code bridge falls back to simulation mode when `ANTHROPIC_API_KEY` is not set. Copy `.env.example` to `.env` and add your key for real execution.
+
+## Running Tests
 
 ```bash
-npm start
+npx vitest run
 ```
 
-> **Note:** The CLI works without any API keys. Claude Code bridge falls back to simulation mode when `ANTHROPIC_API_KEY` is not set. To test with real Claude Code execution, copy `.env.example` to `.env` and add your Anthropic API key.
-
-3. Test commands:
-
-```
-codespar> help
-codespar> status
-codespar> instruct add error handling
-codespar> deploy staging
-codespar> exit
-```
-
-> **Note:** For full functionality (PostgreSQL, Redis, channel adapters), use Docker Compose. The CLI adapter works standalone for development and debugging.
+All tests must pass before submitting a PR.
 
 ## Project Structure
 
 ```
 codespar/
-  package.json             # Root workspace config (Turborepo)
-  turbo.json               # Turborepo pipeline configuration
-  tsconfig.base.json       # Shared TypeScript config
+  package.json             # Root workspace (Turborepo)
+  turbo.json               # Build pipeline
+  tsconfig.base.json       # Shared TS config
+  vitest.config.ts         # Test config
+  server/                  # Fastify HTTP server, entry point
   packages/
-    core/                  # Shared types, utilities, security, audit trail
-    agents/                # Agent implementations (project, task, review, deploy, incident, coordinator)
+    core/                  # Types, storage, auth, approval, webhooks, observability
+    agents/                # Agent implementations
+      project/             # Persistent, monitors repo + CI/CD
+      task/                # Ephemeral, executes coding tasks
+      review/              # Ephemeral, PR analysis + risk classification
+      deploy/              # Ephemeral, deploy orchestration + approvals
+      incident/            # Ephemeral, CI failure investigation
+      coordinator/         # Persistent, cross-project orchestration
     channels/
-      cli/                 # CLI adapter (terminal interface for dev/debug)
-      slack/               # Slack adapter (OAuth + Bot token)
-      whatsapp/            # WhatsApp adapter (Evolution API, webhook)
-      telegram/            # Telegram adapter (BotFather token)
-      discord/             # Discord adapter (Bot token + Gateway)
+      cli/                 # Terminal adapter (dev/debug)
+      slack/               # Slack (Socket Mode)
+      whatsapp/            # WhatsApp (Evolution API)
+      telegram/            # Telegram (BotFather)
+      discord/             # Discord (Gateway)
+  apps/
+    docs/                  # Documentation site (Fumadocs MDX)
 ```
 
-Each package is independently buildable and publishable. The `core` package is a dependency of both `agents` and `channels`.
+Each package builds independently. `core` is a dependency of `agents` and `channels`.
 
 ## Writing a Custom Agent
 
-All agents implement the `Agent` interface and are registered with the Supervisor.
-
-### 1. Create the agent file
+Implement the `Agent` interface from `packages/core/src/types/agent.ts`, then register it with `registerAgentType`.
 
 ```typescript
-// packages/agents/my-agent/src/index.ts
-import { Agent, AgentContext, AgentResult } from '@codespar/core';
+// my-metrics-agent.ts
+import type { Agent, AgentConfig, AgentStatus, AgentState } from "@codespar/core";
+import type { NormalizedMessage } from "@codespar/core";
+import type { ParsedIntent } from "@codespar/core";
+import type { ChannelResponse } from "@codespar/core";
+import { registerAgentType } from "@codespar/core";
 
-export class MyAgent implements Agent {
-  readonly name = 'my-agent';
-  readonly type = 'ephemeral'; // or 'persistent'
+class MetricsAgent implements Agent {
+  readonly config: AgentConfig;
+  state: AgentState = "IDLE";
 
-  async canHandle(intent: string): Promise<boolean> {
-    return intent === 'my-command';
+  constructor(config: AgentConfig) {
+    this.config = config;
   }
 
-  async execute(context: AgentContext): Promise<AgentResult> {
-    // 1. Parse the incoming message
-    const { message, project, user } = context;
+  async initialize(): Promise<void> {
+    this.state = "ACTIVE";
+  }
 
-    // 2. Do your work (call APIs, run tools, etc.)
-    const result = await this.doWork(message);
+  async handleMessage(
+    message: NormalizedMessage,
+    intent: ParsedIntent,
+  ): Promise<ChannelResponse> {
+    return { text: `Metrics for ${this.config.projectId}: all green.` };
+  }
 
-    // 3. Return a structured result
+  getStatus(): AgentStatus {
     return {
-      success: true,
-      message: result.summary,
-      artifacts: result.artifacts ?? [],
+      id: this.config.id,
+      type: this.config.type,
+      state: this.state,
+      autonomyLevel: this.config.autonomyLevel,
+      uptimeMs: 0,
+      tasksHandled: 0,
     };
   }
 
-  private async doWork(message: string) {
-    // Your agent logic here
-    return { summary: 'Done!', artifacts: [] };
+  async shutdown(): Promise<void> {
+    this.state = "TERMINATED";
   }
 }
+
+// Register so the supervisor can instantiate it
+registerAgentType("metrics", (config) => new MetricsAgent(config));
 ```
 
-### 2. Register with the Supervisor
-
-```typescript
-import { Supervisor } from '@codespar/core';
-import { MyAgent } from '@codespar/agents/my-agent';
-
-supervisor.register(new MyAgent());
-```
-
-### 3. Key concepts
-
-- **Ephemeral agents** are spawned per-task and destroyed after completion (task, review, deploy, incident).
-- **Persistent agents** run continuously and maintain state (project, coordinator).
-- Every agent is scoped to a single project — no cross-project data access.
+Key points:
+- **Ephemeral agents** are spawned per-task and destroyed after completion.
+- **Persistent agents** run continuously and maintain state.
 - Agents receive a `NormalizedMessage` and never interact with channels directly.
 
 ## Writing a Channel Adapter
 
-Channel adapters normalize platform-specific messages into a unified format.
-
-### 1. Implement the ChannelAdapter interface
+Implement the `ChannelAdapter` interface from `packages/core/src/types/channel-adapter.ts`.
 
 ```typescript
-// packages/channels/my-channel/src/index.ts
-import {
-  ChannelAdapter,
-  NormalizedMessage,
-  OutboundMessage,
-} from '@codespar/core';
+import type { ChannelAdapter, ChannelResponse, MessageHandler } from "@codespar/core";
 
-export class MyChannelAdapter implements ChannelAdapter {
-  readonly platform = 'my-channel';
+class MyAdapter implements ChannelAdapter {
+  readonly type = "my-platform";
 
   async connect(): Promise<void> {
-    // Initialize your platform SDK/client
+    // Initialize SDK, open websocket, etc.
+  }
+
+  onMessage(handler: MessageHandler): void {
+    // Wire platform events to the handler
+  }
+
+  async sendToChannel(channelId: string, response: ChannelResponse): Promise<void> {
+    // Send response back to the platform
   }
 
   async disconnect(): Promise<void> {
     // Clean up connections
   }
-
-  normalize(raw: unknown): NormalizedMessage {
-    // Convert platform-specific message to NormalizedMessage
-    return {
-      id: raw.id,
-      channelId: raw.channel,
-      userId: raw.sender,
-      text: raw.content,
-      platform: this.platform,
-      timestamp: new Date(raw.timestamp),
-    };
-  }
-
-  async send(message: OutboundMessage): Promise<void> {
-    // Send a message back to the platform
-  }
 }
 ```
 
-### 2. Key principles
-
-- The adapter is the **only** place that touches platform-specific APIs.
-- Agents never know which channel a message came from.
-- All messages flow through `NormalizedMessage` — same shape regardless of platform.
-- Handle reconnection and rate limiting inside the adapter.
+The adapter is the only code that touches platform-specific APIs. Agents never know which channel a message came from.
 
 ## Code Style
 
-- **TypeScript strict mode** — no `any` unless absolutely necessary.
-- **Biome** for formatting and linting (planned; currently manual).
-- **Meaningful variable names** — clarity over brevity.
-- **No abbreviations in public APIs** — `message` not `msg`, `configuration` not `cfg`.
-- **Explicit over clever** — if it's hard to follow, simplify it.
-- **Handle edge cases** — thoughtfulness over speed.
+- TypeScript strict mode, no `any` unless unavoidable
+- kebab-case file names (`my-agent.ts`)
+- PascalCase for classes and components (`MyAgent`)
+- No em dashes in copy, use commas or semicolons instead
+- Explicit over clever: if it is hard to follow, simplify it
+- Handle edge cases: thoughtfulness over speed
 
 ## PR Process
 
-1. **Fork** the repository.
-2. **Branch** from `main` — use `feature/<name>` or `fix/<name>`.
-3. **Implement** your changes with tests.
-4. **Test** — all existing tests must pass (`npm test`).
-5. **Submit a PR** with a clear description of what and why.
+1. Create a branch from `main`: `feature/<name>` or `fix/<name>`
+2. Write tests for new behavior
+3. Run `npm run build && npx vitest run` and confirm everything passes
+4. Open a PR with a clear description of what changed and why
+5. Keep diffs small and focused: one concern per PR
 
-### Expectations
+PRs are reviewed within 48 hours. Changes to agent or channel behavior must include documentation updates.
 
-- PRs are reviewed within **48 hours**.
-- Changes to agent or channel behavior **must update documentation**.
-- All tests must pass before merge.
-- Keep diffs small and focused — one concern per PR.
+## Commit Messages
 
-## Architecture Decisions
+- Use imperative mood: "Add metrics agent" not "Added metrics agent"
+- Explain why, not just what: "Add rate limiting to prevent webhook abuse" not "Add rate limiting"
+- For AI-assisted commits, include: `Co-Authored-By: <tool> <email>`
 
-For significant changes (new agent types, new channel adapters, security model changes, data model changes):
+## What NOT to Do
 
-1. **Open an RFC** as a GitHub Discussion first.
-2. Describe the problem, proposed solution, and alternatives considered.
-3. Link the Discussion in your PR.
+- Do not push directly to `main`
+- Do not skip tests or merge with failing CI
+- Do not add dependencies without justification (evaluate bundle impact)
+- Do not store secrets in code; use environment variables
+- Do not submit PRs without a description
 
-This keeps the conversation visible and gives the community a chance to weigh in before implementation work begins.
+## Issues
+
+- **Bug reports:** Include reproduction steps, expected vs actual behavior, and environment details.
+- **Feature requests:** Describe the use case, not just the solution. Explain what problem it solves.
+- **RFCs:** For significant changes (new agent types, security model changes), open a GitHub Discussion first.
 
 ## Getting Help
 
-- **Issues:** [github.com/codespar/codespar/issues](https://github.com/codespar/codespar/issues)
-- **Discussions:** [github.com/codespar/codespar/discussions](https://github.com/codespar/codespar/discussions)
-- **Security:** See [SECURITY.md](SECURITY.md) for vulnerability reporting.
+- [Issues](https://github.com/codespar/codespar/issues)
+- [Discussions](https://github.com/codespar/codespar/discussions)
+- [Security](SECURITY.md) for vulnerability reporting
