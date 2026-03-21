@@ -108,3 +108,7 @@ export { GitHubClient } from "./github/index.js";
 // Observability
 export { createLogger, metrics } from "./observability/index.js";
 export type { LogLevel, Logger } from "./observability/index.js";
+
+// Scheduler
+export { scheduler, scheduleBuildStatusReport, scheduleHealthCheck, scheduleAuditCleanup } from "./scheduler/index.js";
+export type { ScheduledTask } from "./scheduler/index.js";
