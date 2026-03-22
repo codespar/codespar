@@ -45,7 +45,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Docker execution sandbox interfaces (contract for future implementation)
 - Structured logging (JSON prod, pretty dev) with configurable `LOG_LEVEL` + metrics collector endpoint
 - GitHub Actions CI/CD (build + test on push/PR)
-- Documentation site: 53 pages (docs.codespar.dev, Fumadocs MDX)
+- CONTRIBUTING.md with contribution guidelines, code of conduct, and PR workflow
+- Documentation site: 62 pages (docs.codespar.dev, Fumadocs MDX)
+- Docs search: Cmd+K full-text search across all documentation pages
 - Unit tests: 85 tests (Intent Parser, RBAC, FileStorage, Identity)
 
 ### Infrastructure
