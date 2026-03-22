@@ -21,6 +21,8 @@
     "parallel-tasks",
     "refactoring",
     "mcp-generator",
-    "enterprise-integrations"
+    "enterprise-integrations",
+    "agentgate-payments",
+    "agentgate-governance"
   ]
 }

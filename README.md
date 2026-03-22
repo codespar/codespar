@@ -62,6 +62,8 @@
 | Docs Site (docs.codespar.dev, 62 pages) | ✅ Working |
 | Docs Search (Cmd+K) | ✅ Working |
 | MCP Server Generator (enterprise) | ✅ Working |
+| AgentGate Governance (enterprise) | ✅ Working |
+| AgentGate Payments (enterprise) | ✅ Working |
 
 ---
 
