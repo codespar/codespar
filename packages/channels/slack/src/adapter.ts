@@ -146,6 +146,7 @@ export class SlackAdapter implements ChannelAdapter {
       const attachments: Attachment[] = [];
       const files = (event as unknown as Record<string, unknown>).files as Array<{
         url_private: string;
+        url_private_download?: string;
         mimetype: string;
         name: string;
       }> | undefined;
