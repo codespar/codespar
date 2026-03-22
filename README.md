@@ -45,10 +45,14 @@
 | Create/Delete Agent API | ✅ Working |
 | Newsletter + Resend Integration | ✅ Working |
 | Structured Logging + Metrics Endpoint | ✅ Working |
+| Rate Limiting (100/min API, 30/min webhooks) | ✅ Working |
+| Webhook Signature Validation (HMAC-SHA256) | ✅ Working |
+| GitHub Actions CI/CD | ✅ Working |
 | Docker Compose | ✅ Working |
 | Railway Deploy | ✅ Working |
 | Dashboard (codespar.dev/dashboard) | ✅ Working |
-| Docs Site (docs.codespar.dev) | ✅ Working |
+| Docs Site (docs.codespar.dev, 62 pages) | ✅ Working |
+| Docs Search (Cmd+K) | ✅ Working |
 
 ---
 
@@ -58,6 +62,10 @@ Each project gets its own persistent agent that monitors builds, investigates fa
 
 ## New in v0.1.0
 
+- **Smart file picker** -- Claude Haiku selects the most relevant files from the full repository tree, replacing keyword-based search.
+- **Image vision** -- agents can analyze screenshots attached in Slack messages, enabling visual debugging workflows.
+- **Diff-based edits** -- SEARCH/REPLACE format for precise code changes instead of full-file output, with multi-turn continuation when responses are truncated.
+- **Merge PR command** -- `merge PR #N [squash|rebase]` to merge pull requests directly from chat.
 - **TF-IDF vector memory** -- real semantic search using term frequency-inverse document frequency, replacing the previous hash-based vector store. Cosine similarity search across agent memory.
 - **Task scheduler** -- cron-like recurring tasks with pause/resume/cancel support. Built-in tasks: health check (5 min), build status report (24h), audit cleanup (24h).
 - **Streaming responses** -- SSE streaming from the Anthropic API via `executeStreaming` and `generateSmartResponseStreaming`. Progressive message updates in channels.
@@ -67,7 +75,12 @@ Each project gets its own persistent agent that monitors builds, investigates fa
 - **Create/Delete Agent API** -- `POST /api/agents` to create agents programmatically, `DELETE /api/agents/:id` to remove them. `GET /api/agent-types` lists registered agent types.
 - **Newsletter subscriber management** -- subscribe/unsubscribe endpoints with Resend integration for automated welcome emails.
 - **Structured logging** -- JSON-formatted logs in production, pretty-printed in development. Configurable via `LOG_LEVEL`. Metrics collector with `GET /api/metrics`.
+- **Rate limiting** -- 100 requests/min for API endpoints, 30 requests/min for webhooks.
+- **Webhook signature validation** -- HMAC-SHA256 verification of GitHub webhook payloads via `GITHUB_WEBHOOK_SECRET`.
+- **GitHub Actions CI/CD** -- automated build and test pipeline on every push and pull request.
+- **Docs search** -- Cmd+K full-text search across all 62 documentation pages.
 - **CONTRIBUTING.md and CHANGELOG.md** -- contribution guidelines and a detailed changelog are now included in the repository.
+- **85 unit tests** -- Intent Parser, RBAC, FileStorage, Identity, and more.
 
 ## Quick Start
 
