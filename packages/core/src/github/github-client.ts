@@ -314,6 +314,29 @@ export class GitHubClient {
     }));
   }
 
+  /** Merge a pull request. */
+  async mergePR(
+    owner: string,
+    repo: string,
+    prNumber: number,
+    mergeMethod: "merge" | "squash" | "rebase" = "merge",
+  ): Promise<{ merged: boolean; message: string } | null> {
+    const res = await fetch(
+      `${this.baseUrl}/repos/${owner}/${repo}/pulls/${prNumber}/merge`,
+      {
+        method: "PUT",
+        headers: this.headers,
+        body: JSON.stringify({ merge_method: mergeMethod }),
+      },
+    );
+    if (!res.ok) {
+      const err = await res.text().catch(() => "");
+      return { merged: false, message: `Failed: ${res.status} ${err.slice(0, 100)}` };
+    }
+    const data = (await res.json()) as any;
+    return { merged: data.merged as boolean, message: (data.message as string) || "Merged" };
+  }
+
   /** Get the default branch name for a repo. */
   async getDefaultBranch(owner: string, repo: string): Promise<string> {
     const res = await fetch(

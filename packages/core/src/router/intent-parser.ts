@@ -96,6 +96,11 @@ const PATTERNS: PatternRule[] = [
     pattern: /^(?:prs?|pull.?requests?|open.?prs?)(?:\s+(open|closed|all))?$/i,
     paramExtractor: (m) => ({ state: m[1] || "open" }),
   },
+  {
+    type: "merge",
+    pattern: /^merge(?:\s+PR\s*#?\s*(\d+))?(?:\s+(squash|rebase))?$/i,
+    paramExtractor: (m) => ({ prNumber: m[1] || "", mergeMethod: m[2] || "merge" }),
+  },
 ];
 
 /** Synchronous regex-only parser (used internally). */
