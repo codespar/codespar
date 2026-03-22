@@ -1,0 +1,74 @@
+---
+title: Waitlist
+description: How the waitlist and early access signup works.
+---
+
+## Overview
+
+The waitlist system lets interested users sign up for early access to CodeSpar. It collects contact information and routes signups through the backend newsletter API, tagging them with `source="waitlist"` so they can be distinguished from general newsletter subscribers.
+
+## Waitlist Page
+
+The `/waitlist` page presents a simple form collecting:
+
+- **Email** (required) -- the user's email address
+- **Company** (optional) -- the user's company or organization name
+- **Role** (optional) -- the user's role (e.g., "Engineering Manager", "DevOps Engineer", "CTO")
+
+The form validates the email format client-side before submission. On submit, it sends a POST request to the backend newsletter API.
+
+## Backend Integration
+
+The waitlist form proxies to the existing newsletter subscribe endpoint:
+
+```
+POST /api/newsletter/subscribe
+```
+
+The request body includes:
+
+```json
+{
+  "email": "user@example.com",
+  "company": "Acme Corp",
+  "role": "Engineering Manager",
+  "source": "waitlist"
+}
+```
+
+The `source` field distinguishes waitlist signups from other newsletter subscribers (e.g., `source="footer"` for the footer signup form or `source="blog"` for blog subscribers).
+
+The backend stores the subscriber and optionally sends a welcome/confirmation email via Resend if a `RESEND_API_KEY` is configured.
+
+## Homepage Integration
+
+The waitlist is also accessible from the homepage Final CTA section. The CTA button links to `/waitlist`, providing a secondary entry point for visitors who scroll to the bottom of the marketing page.
+
+The hero section's primary CTA links to the GitHub repository (for the open-source core), while the secondary CTA can be configured to point to the waitlist for the hosted platform.
+
+## Rate Limiting
+
+The newsletter subscribe endpoint has built-in rate limiting to prevent abuse:
+
+- Per-IP sliding window limits
+- Duplicate email detection (re-subscribing the same email returns success without creating duplicates)
+
+## Future: Admin Approval Workflow
+
+A planned enhancement will add an admin approval step for waitlist signups:
+
+1. User signs up via the waitlist form
+2. Signup is stored with status `pending`
+3. Admin reviews signups in the dashboard (under a future `/dashboard/waitlist` page)
+4. Admin approves or rejects each signup
+5. Approved users receive an invitation email with access instructions
+
+This workflow is not yet implemented. Currently, all waitlist signups are stored and can be exported via the newsletter API endpoints:
+
+- `GET /api/newsletter/subscribers` -- list all subscribers (filterable by source)
+- `GET /api/newsletter/count` -- total subscriber count
+
+## Related
+
+- [Production Deploy](/docs/guides/production-deploy) -- deploying CodeSpar to production
+- [Multi-Tenant](/docs/guides/multi-tenant) -- organization and workspace setup

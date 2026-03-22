@@ -1,0 +1,89 @@
+---
+title: Organization Switcher
+description: Custom workspace management component replacing Clerk's default OrganizationSwitcher.
+---
+
+## Overview
+
+The Organization Switcher is a custom-built component that replaces Clerk's default `<OrganizationSwitcher />`. It provides workspace management (listing, switching, and creating organizations) while matching the CodeSpar dark theme and design system.
+
+## Why a Custom Component
+
+Clerk v7's built-in `<OrganizationSwitcher />` component does not fully respect custom dark theme styles. Key issues include:
+
+- Hard-coded light backgrounds that ignore `appearance` overrides
+- Font and spacing inconsistencies with the CodeSpar design tokens
+- Limited control over the dropdown positioning and animation
+
+The custom implementation uses Clerk's React hooks directly, giving full control over rendering while still leveraging Clerk's organization management API.
+
+## Clerk Hooks Used
+
+The component relies on three Clerk hooks:
+
+### `useOrganizationList`
+
+Fetches the list of organizations the current user belongs to. Returns organization memberships with metadata (name, slug, role, image).
+
+### `useOrganization`
+
+Returns the currently active organization. Used to highlight the selected org in the list and display it in the trigger button.
+
+### `useUser`
+
+Returns the current user's personal workspace info. Displayed as a fallback when no organization is selected (personal account mode).
+
+## Features
+
+### List Organizations
+
+Displays all organizations the user is a member of, sorted alphabetically. Each entry shows:
+
+- Organization name
+- Organization avatar (or initials fallback)
+- User's role in the organization (admin, member)
+- Active indicator for the currently selected org
+
+### Switch Organizations
+
+Clicking an organization in the list switches the active context. This triggers:
+
+1. Clerk's `setActive({ organization })` call
+2. The `x-org-id` header is updated for all subsequent API calls via `setActiveOrg(orgId)`
+3. Dashboard data refreshes to show agents, audit logs, and projects scoped to the new org
+
+### Create New Organization
+
+An inline form at the bottom of the dropdown allows creating a new organization without leaving the dashboard. The form validates:
+
+- Organization name (required, 2-50 characters)
+- Slug (auto-generated from name, editable)
+
+After creation, the new org is automatically set as the active organization.
+
+## Multi-Tenant Data Scoping
+
+When the active organization changes, all API calls include the `x-org-id` header:
+
+```typescript
+// From src/lib/api.ts
+function getOrgHeaders(): Record<string, string> {
+  return activeOrgId ? { "x-org-id": activeOrgId } : {};
+}
+```
+
+The backend uses this header to scope data access. Each organization has isolated:
+
+- Agents and their configurations
+- Audit trail entries
+- Project configurations
+- Channel connections
+- Memory/vector store entries
+
+If no `x-org-id` header is sent, the backend falls back to the `"default"` organization scope.
+
+## Related
+
+- [Multi-Tenant](/docs/guides/multi-tenant) -- multi-tenant architecture guide
+- [Dashboard Overview](/docs/dashboard/overview) -- main dashboard interface
+- [Settings](/docs/dashboard/settings) -- organization settings page

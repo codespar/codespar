@@ -16,6 +16,7 @@
     "cli",
     "streaming",
     "scheduled-tasks",
-    "image-vision"
+    "image-vision",
+    "waitlist"
   ]
 }

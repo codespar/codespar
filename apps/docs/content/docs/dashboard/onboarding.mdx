@@ -1,0 +1,71 @@
+---
+title: Onboarding Wizard
+description: The guided setup flow for new users connecting their first channel and repository.
+---
+
+## Overview
+
+The onboarding wizard is a 3-step guided flow that walks new users through initial setup. It ensures every team has at least one channel connected and one repository linked before they start using CodeSpar agents.
+
+## Three Steps
+
+### Step 1: Connect a Channel
+
+Choose one of the supported messaging platforms to connect:
+
+- **Slack** -- OAuth-based installation. Click "Add to Slack" and authorize CodeSpar in your workspace. The bot is added to your channels automatically.
+- **Discord** -- OAuth-based installation. Authorize the CodeSpar bot for your server and select which channels it should join.
+- **Telegram** -- Provide your bot token (created via [@BotFather](https://t.me/BotFather)). CodeSpar connects using the Telegram Bot API.
+- **WhatsApp** -- Connects through Evolution API. Provide your Evolution API instance URL and API key, then scan the QR code to link your WhatsApp number.
+
+Each channel option displays its status (connected, pending, or not configured) so you can see progress at a glance.
+
+### Step 2: Link a Repository
+
+Enter a GitHub repository URL or select from your authenticated repositories. CodeSpar creates a Project Agent that monitors the repo for CI/CD events, pull requests, and issues.
+
+The repository must be accessible via the configured GitHub token (personal access token or GitHub App installation).
+
+### Step 3: Ready
+
+Confirmation screen showing your connected channel and linked repository. From here you can:
+
+- Go to the dashboard overview
+- Create additional agents
+- Adjust autonomy levels
+
+## How to Trigger the Wizard
+
+The onboarding wizard appears automatically for new users who have not completed setup. Specifically, it shows when:
+
+1. No project is linked (the API returns `linked: false` for the default agent)
+2. The `codespar-onboarding-complete` key is not set in `localStorage`
+
+You can also force the wizard to appear by adding `?onboarding=true` to the dashboard URL:
+
+```
+/dashboard?onboarding=true
+```
+
+This is useful for testing or for users who want to re-run the setup flow.
+
+## Completion Tracking
+
+When a user finishes the wizard (or clicks the final "Go to Dashboard" button), the component sets:
+
+```
+localStorage.setItem("codespar-onboarding-complete", "true")
+```
+
+This prevents the wizard from appearing on subsequent visits. To reset it, clear the key from localStorage or use the `?onboarding=true` URL parameter.
+
+## Skip Option
+
+Each step includes a "Skip" option, allowing users to bypass any step they are not ready to complete. Skipping does not mark the onboarding as complete, so the wizard will appear again on the next visit unless the user finishes the final step.
+
+## Related
+
+- [Dashboard Overview](/docs/dashboard/overview) -- main dashboard interface
+- [Setup](/docs/dashboard/setup) -- project setup page (alternative to the wizard)
+- [Link Repository](/docs/guides/link-repository) -- detailed repository linking guide
+- [Multi-Channel](/docs/guides/multi-channel) -- configuring multiple messaging channels

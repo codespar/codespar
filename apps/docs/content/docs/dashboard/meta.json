@@ -1,4 +1,4 @@
 {
   "title": "Dashboard",
-  "pages": ["index", "overview", "agent-detail", "audit-trail", "settings", "setup"]
+  "pages": ["index", "overview", "agent-detail", "audit-trail", "settings", "setup", "onboarding", "org-switcher"]
 }
