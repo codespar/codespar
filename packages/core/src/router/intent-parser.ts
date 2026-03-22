@@ -106,6 +106,11 @@ const PATTERNS: PatternRule[] = [
     pattern: /^plan\s+(.+)$/i,
     paramExtractor: (m) => ({ instruction: m[1] }),
   },
+  {
+    type: "lens",
+    pattern: /^lens\s+(.+)$/i,
+    paramExtractor: (m) => ({ question: m[1] }),
+  },
 ];
 
 /** Synchronous regex-only parser (used internally). */

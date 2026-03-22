@@ -148,7 +148,8 @@ const INTENT_PERMISSION: Record<IntentType, Permission | null> = {
   prs: "view_status", // listing PRs is read-only
   merge: "approve_pr",
   plan: "instruct_agent",
-  unknown: null, // always allowed — agent will respond with help text
+  lens: "view_status",
+  unknown: null, // always allowed -- agent will respond with help text
 };
 
 // ---------------------------------------------------------------------------

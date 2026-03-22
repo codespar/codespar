@@ -45,6 +45,7 @@ const COMMANDS_HELP = `Available commands:
   autonomy [L0-L5]          — Set autonomy level
   prs [open|closed|all]     — List pull requests
   merge PR #<number>        — Merge a pull request
+  lens [question]            — Query data and get insights
   memory                    — Show agent memory stats
   whoami                    — Show your identity and linked channels
   register <name>           — Register your display name`;
@@ -619,6 +620,26 @@ export class ProjectAgent implements Agent {
         break;
       }
 
+      case "lens": {
+        response = await this.delegateToLensAgent(message, intent);
+        if (this.storage) {
+          await this.storage.appendAudit({
+            actorType: "user",
+            actorId: message.channelUserId,
+            action: "data.queried",
+            result: "success",
+            metadata: {
+              agentId: this.config.id,
+              project: this.config.projectId || "unknown",
+              risk: intent.risk,
+              detail: `Lens query: ${(intent.params.question || "").slice(0, 100)}`,
+              channel: message.channelType,
+            },
+          });
+        }
+        break;
+      }
+
       case "kill":
         response = {
           text: `[${this.config.id}] Kill switch requires emergency_admin role.\n  (Kill switch coming in Phase 3)`,
@@ -715,6 +736,24 @@ export class ProjectAgent implements Agent {
       default:
         return false;
     }
+  }
+
+  /**
+   * Spawns an ephemeral Lens Agent to handle data analysis queries.
+   */
+  private async delegateToLensAgent(
+    message: NormalizedMessage,
+    intent: ParsedIntent,
+  ): Promise<ChannelResponse> {
+    const { LensAgent } = await import("@codespar/agent-lens");
+    const lensAgent = new LensAgent({
+      id: `${this.config.id}-lens-${Date.now()}`,
+      type: "lens",
+      autonomyLevel: this.config.autonomyLevel,
+      projectId: this.config.projectId,
+    });
+    await lensAgent.initialize();
+    return lensAgent.handleMessage(message, intent);
   }
 
   /**
