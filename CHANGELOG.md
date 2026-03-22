@@ -9,12 +9,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Added
 - Six agent types: Project (persistent), Task/Dev, Review, Deploy, Incident (ephemeral), Coordinator (persistent)
 - Five channel adapters: Slack (Socket Mode), WhatsApp (Evolution API v2.3.7), Discord, Telegram, CLI
-- Dev Agent: reads codebase via GitHub API, creates PRs with Claude Sonnet
+- Dev Agent: reads codebase via GitHub API, creates PRs with Claude Sonnet, diff-based edits (SEARCH/REPLACE format)
+- Smart file picker: Claude Haiku selects relevant files from full repo tree (replaces keyword-based search)
+- Image vision: agents can see screenshots attached in Slack (base64 encoded, sent as image content blocks)
+- Diff-based edits: SEARCH/REPLACE format instead of full-file output for more precise changes
+- Multi-turn continuation: if Claude response is truncated, the agent automatically requests continuation
+- Merge PR command: `merge PR #N [squash|rebase]` to merge pull requests directly from chat
 - Review Agent: fetches PR data, risk classification (low/medium/high), auto-approve at L3+
 - Deploy Agent: approval workflows with quorum (1 staging, 2 production), cross-channel voting
 - Incident Agent: CI failure investigation, error correlation, root cause analysis
 - Coordinator Agent: cross-project orchestration, cascading deploys, status aggregation
-- 17 commands with regex parser + Claude Haiku NLU fallback
+- 18 commands with regex parser + Claude Haiku NLU fallback (includes merge PR)
 - Smart responses via Claude Sonnet for open-ended questions (multilingual)
 - Graduated autonomy L0-L5 with safety guardrails
 - RBAC: 6 roles (owner, maintainer, operator, reviewer, read-only, emergency_admin), 15 permissions

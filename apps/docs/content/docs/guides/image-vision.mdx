@@ -1,0 +1,108 @@
+---
+title: Image Vision
+description: How agents analyze screenshots and images attached in messaging channels.
+---
+
+# Image Vision
+
+CodeSpar agents can analyze screenshots and images attached to messages in supported channels. When you send a screenshot alongside a command, the agent sees the image and uses it as context for its response.
+
+**Estimated time:** 2 minutes to configure, then attach images to any command
+
+## How It Works
+
+The image vision flow has four steps:
+
+1. **User attaches an image** in Slack alongside a message (e.g., `@codespar fix this contrast issue` with a screenshot)
+2. **The adapter extracts the image URL** from the Slack event payload (`url_private_download` field)
+3. **The agent downloads and encodes the image** using the bot token for authentication, then base64-encodes the image data
+4. **The image is sent to Claude** as an image content block alongside the text instruction
+
+Claude processes both the text and the image together, allowing it to understand visual context such as UI bugs, layout issues, or error messages shown in screenshots.
+
+## Supported Formats
+
+| Format | Supported | Max Size |
+|--------|-----------|----------|
+| PNG | Yes | 4 MB |
+| JPEG | Yes | 4 MB |
+| GIF | Yes | 4 MB |
+| WEBP | Yes | 4 MB |
+
+Images larger than 4 MB are skipped with a warning message. Only raster image formats are supported -- SVG and PDF files are not processed as images.
+
+## Use Cases
+
+### UI Bug Reports
+
+Attach a screenshot showing a visual bug and describe the issue:
+
+```
+@codespar fix this contrast issue
+[attached: screenshot showing low-contrast text on a dark background]
+```
+
+The agent sees the screenshot, identifies the relevant CSS files using the smart file picker (which also receives the image), and generates a fix with appropriate color values.
+
+### Error Screenshots
+
+Share a screenshot of an error message or stack trace:
+
+```
+@codespar fix this error
+[attached: screenshot of browser console showing TypeError]
+```
+
+The agent reads the error from the image and correlates it with the codebase to propose a fix.
+
+### Design Feedback
+
+Provide annotated mockups or design screenshots:
+
+```
+@codespar instruct update the header to match this design
+[attached: screenshot of the desired header layout]
+```
+
+The agent analyzes the design screenshot and generates code changes to match the visual specification.
+
+## Smart File Picker Integration
+
+When an image is attached, it is also included in the smart file picker prompt. Claude Haiku sees the image when deciding which files are relevant to the task. This means the file picker can make better selections based on visual context -- for example, selecting CSS files when the image shows a styling issue, or selecting component files when the image shows a specific UI element.
+
+## Slack Setup
+
+To enable image vision in Slack, the bot needs the `files:read` OAuth scope. This allows the bot to download images attached to messages.
+
+### Add the Scope
+
+1. Go to your [Slack App configuration](https://api.slack.com/apps)
+2. Select your CodeSpar app
+3. Navigate to **OAuth & Permissions**
+4. Under **Bot Token Scopes**, add `files:read`
+5. Reinstall the app to your workspace to apply the new scope
+
+### Verify
+
+After adding the scope, attach an image to a message with a CodeSpar command. The agent should acknowledge the image in its response. If the image is not detected, check that:
+
+- The `files:read` scope is listed in your bot's scopes
+- The app has been reinstalled after adding the scope
+- The image is under 4 MB
+- The image format is PNG, JPEG, GIF, or WEBP
+
+## Channel Support
+
+| Channel | Status | Notes |
+|---------|--------|-------|
+| Slack | Supported | Requires `files:read` bot scope |
+| WhatsApp | Planned | Coming in a future release |
+| Discord | Planned | Coming in a future release |
+| Telegram | Planned | Coming in a future release |
+| CLI | Not applicable | CLI does not support image attachments |
+
+## Next Steps
+
+- [Dev Agent](/docs/agents/dev-agent) -- smart file picker and image vision details
+- [Creating PRs with the Dev Agent](/docs/guides/dev-agent-prs) -- end-to-end PR workflow
+- [Multi-Channel Setup](/docs/guides/multi-channel) -- configure multiple channels

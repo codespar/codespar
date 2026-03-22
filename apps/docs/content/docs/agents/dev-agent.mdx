@@ -210,6 +210,84 @@ const pr = await github.createPullRequest({
 });
 ```
 
+## Smart File Picker
+
+Instead of relying on keyword-based GitHub Code Search, the Dev Agent now uses Claude Haiku to intelligently select relevant files from the full repository tree. The flow works as follows:
+
+1. The agent fetches the complete file tree from the repository
+2. The tree (file paths only, not contents) is sent to Claude Haiku along with the user's instruction
+3. Claude Haiku evaluates which files are most relevant to the task and returns a ranked list
+4. The agent reads the selected files via the GitHub API
+
+This approach is significantly more accurate than keyword extraction because it understands the intent behind the task. For example, given "add rate limiting to the login endpoint," Claude Haiku can identify the route file, the middleware directory, and the existing auth files without needing exact keyword matches.
+
+If the user attaches an image (such as a screenshot showing a UI issue), the image is also included in the file picker prompt so that Claude Haiku can factor visual context into its file selection.
+
+## Image Vision
+
+When a user attaches a screenshot or image in Slack, the Dev Agent can see and analyze it. The flow:
+
+1. Slack sends the image metadata (including `url_private_download`) in the message event
+2. The adapter downloads the image using the bot token for authentication
+3. The image is base64-encoded and included in the Claude API request as an image content block
+4. Claude analyzes the image alongside the text instruction
+
+**Supported formats:** PNG, JPEG, GIF, WEBP (max 4 MB per image).
+
+**Use cases:**
+- "Fix this contrast issue" with a screenshot of the UI
+- Bug reports that include error screenshots
+- Design feedback with annotated mockups
+
+**Channel support:** Currently available in Slack (requires `files:read` bot scope). WhatsApp, Discord, and Telegram support is planned.
+
+For a detailed setup guide, see [Image Vision](/docs/guides/image-vision).
+
+## Diff-Based Edits
+
+Instead of outputting entire file contents, the Dev Agent now uses a SEARCH/REPLACE format for more precise edits:
+
+```
+<<<SEARCH
+const timeout = 30;
+>>>REPLACE
+const timeout = 86400; // 24 hours
+```
+
+This approach has several advantages:
+
+- **Smaller diffs:** Only the changed lines are included, reducing token usage and improving readability
+- **Fewer conflicts:** Unchanged lines are not rewritten, minimizing the chance of overwriting concurrent changes
+- **Better review experience:** The resulting PR diffs are cleaner and easier to review
+
+When creating new files, the agent still outputs full file contents using the `===FILE: path===` format.
+
+## Multi-Turn Continuation
+
+If Claude's response is truncated due to the output token limit, the Dev Agent automatically requests a continuation. The agent detects truncation by checking the `stop_reason` field in the API response. When it finds `max_tokens` instead of `end_turn`, it sends a follow-up request asking Claude to continue from where it left off. The responses are concatenated before parsing.
+
+This ensures that large code changes are not cut off mid-file, even when the output exceeds the token limit for a single response.
+
+## Merge Command
+
+After reviewing a pull request, you can merge it directly from chat:
+
+```
+@codespar merge PR #42
+@codespar merge PR #42 squash
+@codespar merge PR #42 rebase
+```
+
+The merge command supports three strategies:
+
+| Strategy | Syntax | Description |
+|----------|--------|-------------|
+| **Default** | `merge PR #42` | Uses the repository's default merge strategy |
+| **Squash** | `merge PR #42 squash` | Squashes all commits into a single commit |
+| **Rebase** | `merge PR #42 rebase` | Rebases commits onto the base branch |
+
+The command checks that the PR exists, that CI checks have passed (if configured), and that the user has the required permissions before proceeding.
+
 ## Environment Variables
 
 | Variable | Required | Default | Description |
