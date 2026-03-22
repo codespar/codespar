@@ -1,6 +1,6 @@
 ---
 title: Agents Overview
-description: CodeSpar's multi-agent architecture — seven specialized agent types, lifecycle states, autonomy levels, and the supervisor pattern.
+description: CodeSpar's multi-agent architecture — eight specialized agent types, lifecycle states, autonomy levels, and the supervisor pattern.
 ---
 
 # Agent Architecture
@@ -60,7 +60,8 @@ type AgentType =
   | "deploy"
   | "incident"
   | "coordinator"
-  | "planning";
+  | "planning"
+  | "lens";
 
 type AutonomyLevel = 0 | 1 | 2 | 3 | 4 | 5;
 ```
@@ -105,7 +106,7 @@ Agents fall into two lifecycle categories:
 
 **Ephemeral agents** are spawned on demand for a specific task and terminate when the task completes. They're lightweight, stateless between invocations, and can run in parallel.
 
-## The Seven Agent Types
+## The Eight Agent Types
 
 | Agent | Type | Lifecycle | Description |
 |-------|------|-----------|-------------|
@@ -116,6 +117,7 @@ Agents fall into two lifecycle categories:
 | [Incident Agent](/docs/agents/incident-agent) | `incident` | **Ephemeral** | Investigates production failures — correlates errors with changes, suggests fixes. |
 | [Coordinator Agent](/docs/agents/coordinator-agent) | `coordinator` | **Persistent** | Cross-project orchestration — aggregates status, cascading deploys, routes commands. |
 | [Planning Agent](/docs/agents/planning-agent) | `planning` | **Ephemeral** | Decomposes features into 3-8 sequential sub-tasks for structured execution. |
+| [Lens Agent](/docs/agents/lens-agent) | `lens` | **Ephemeral** | Data analysis, SQL queries, visualizations. |
 
 ### Agent Relationships
 
@@ -130,11 +132,12 @@ Agents fall into two lifecycle categories:
 │ Project     │ │ Project     │ │ Project     │
 │ Agent (A)   │ │ Agent (B)   │ │ Agent (C)   │
 └──┬──┬──┬──┬─┘ └─────────────┘ └─────────────┘
-   │  │  │  │
-   │  │  │  └──► Incident Agent (ephemeral)
-   │  │  └─────► Deploy Agent (ephemeral)
-   │  └────────► Review Agent (ephemeral)
-   └───────────► Task Agent (ephemeral)
+   │  │  │  │  │
+   │  │  │  │  └──► Lens Agent (ephemeral)
+   │  │  │  └─────► Incident Agent (ephemeral)
+   │  │  └────────► Deploy Agent (ephemeral)
+   │  └───────────► Review Agent (ephemeral)
+   └──────────────► Task Agent (ephemeral)
 ```
 
 ## Supervisor Pattern
@@ -222,3 +225,4 @@ These actions always require explicit human approval, even at L5.
 - [Incident Agent](/docs/agents/incident-agent) — failure investigation and root cause analysis
 - [Coordinator Agent](/docs/agents/coordinator-agent) — cross-project orchestration
 - [Planning Agent](/docs/agents/planning-agent) — feature decomposition into sub-tasks
+- [Lens Agent](/docs/agents/lens-agent) — data analysis, SQL queries, and visualizations

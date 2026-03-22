@@ -9,6 +9,7 @@
     "deploy-agent",
     "incident-agent",
     "coordinator-agent",
-    "planning-agent"
+    "planning-agent",
+    "lens-agent"
   ]
 }

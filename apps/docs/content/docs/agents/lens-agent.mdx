@@ -1,0 +1,184 @@
+---
+title: Lens Agent
+description: Data analyst agent that queries databases, writes SQL, and generates insights from any messaging channel.
+---
+
+# Lens Agent
+
+The Lens Agent is an ephemeral data analyst that translates natural language questions into SQL queries, executes them against your connected databases, and returns structured insights with visualization suggestions. It works from any messaging channel: WhatsApp, Slack, Discord, or Telegram.
+
+## What Lens Does
+
+Lens bridges the gap between your team's data questions and the databases that hold the answers. Instead of writing SQL or navigating dashboards, team members ask questions in plain language and receive:
+
+- **SQL query generation** from natural language questions
+- **Result explanations** in human-readable format
+- **Insight extraction** highlighting patterns, anomalies, and trends
+- **Visualization suggestions** recommending the best chart type for the data
+- **Follow-up questions** to guide deeper exploration
+
+## Command
+
+```
+@codespar lens <question>
+```
+
+The `lens` command spawns an ephemeral Lens Agent that processes the question and terminates after delivering the response.
+
+## Examples
+
+### English
+
+```
+@codespar lens how many users signed up last week?
+
+@codespar lens what are the top 5 products by revenue this month?
+
+@codespar lens compare churn rate Q1 vs Q2
+
+@codespar lens show me the average response time per endpoint over the last 24 hours
+
+@codespar lens which customers have not logged in for more than 30 days?
+```
+
+### Portuguese
+
+```
+@codespar lens quantos usuarios se cadastraram na ultima semana?
+
+@codespar lens quais sao os 5 produtos com mais receita neste mes?
+
+@codespar lens compare a taxa de churn do Q1 com o Q2
+
+@codespar lens mostre o tempo medio de resposta por endpoint nas ultimas 24 horas
+
+@codespar lens quais clientes nao fizeram login ha mais de 30 dias?
+```
+
+## Supported Data Sources
+
+| Database | Status | Connection |
+|----------|--------|------------|
+| PostgreSQL | Available | Direct connection via `DATABASE_URL` |
+| MySQL | Available | Direct connection via `MYSQL_URL` |
+| BigQuery | Enterprise | Via MCP connector |
+| Snowflake | Enterprise | Via MCP connector |
+| Redshift | Enterprise | Via MCP connector |
+
+Enterprise data sources (BigQuery, Snowflake, Redshift) are available through MCP connectors in CodeSpar Enterprise. See the [Enterprise page](/enterprise) for details.
+
+## How It Works
+
+When a user sends a `lens` command, the following pipeline executes:
+
+```
+User question (natural language)
+        |
+        v
+┌─────────────────────┐
+│   Lens Agent        │  Parses the question, identifies tables/columns
+└────────┬────────────┘
+         |
+         v
+┌─────────────────────┐
+│   Claude generates  │  SQL query + analysis plan
+│   SQL + analysis    │
+└────────┬────────────┘
+         |
+         v
+┌─────────────────────┐
+│   Query execution   │  Runs against connected database
+└────────┬────────────┘
+         |
+         v
+┌─────────────────────┐
+│   Response          │  Query, explanation, insights,
+│                     │  visualization suggestion, follow-ups
+└─────────────────────┘
+```
+
+### Response Format
+
+Each Lens response includes five sections:
+
+1. **Query** -- the generated SQL, shown in a code block for transparency
+2. **Explanation** -- plain language summary of what the query does
+3. **Insights** -- key findings from the results (trends, outliers, comparisons)
+4. **Visualization** -- suggested chart type (bar, line, pie, table) with axis labels
+5. **Follow-ups** -- 2-3 suggested questions for deeper exploration
+
+### Example Response
+
+```
+📊 Lens Analysis
+─────────────────
+Question: "how many users signed up last week?"
+
+SQL:
+SELECT DATE(created_at) AS day, COUNT(*) AS signups
+FROM users
+WHERE created_at >= NOW() - INTERVAL '7 days'
+GROUP BY DATE(created_at)
+ORDER BY day;
+
+Results:
+Mon: 42 | Tue: 38 | Wed: 55 | Thu: 61 | Fri: 47 | Sat: 23 | Sun: 18
+
+Insights:
+• 284 total signups last week (+12% vs previous week)
+• Thursday had the highest signups (61), likely correlated with the product launch
+• Weekend signups are 43% lower than weekday average
+
+Visualization: Bar chart (x: day, y: signups)
+
+Follow-ups:
+• "What is the conversion rate from signup to first purchase?"
+• "Which acquisition channels drove the Thursday spike?"
+• "Compare weekly signups over the last 3 months"
+```
+
+## Configuration
+
+### Environment Variables
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `LENS_MODEL` | Claude model used for SQL generation and analysis | `claude-sonnet` |
+
+The Lens Agent uses the project's existing `DATABASE_URL` for PostgreSQL or `MYSQL_URL` for MySQL connections. No additional database configuration is required for these sources.
+
+## Query History
+
+All Lens queries are tracked in the audit trail with the following metadata:
+
+- Original question (natural language)
+- Generated SQL query
+- Execution time
+- Row count returned
+- User who requested the query
+
+Query history enables teams to review what data was accessed, when, and by whom. It also helps the agent improve future responses by learning from previously successful queries.
+
+## RBAC
+
+The `lens` command requires the `view_status` permission, which is granted to all roles by default:
+
+| Role | Can use `lens`? |
+|------|----------------|
+| owner | Yes |
+| maintainer | Yes |
+| operator | Yes |
+| reviewer | Yes |
+| read-only | Yes |
+| emergency_admin | Yes |
+
+Since Lens is a read-only operation (it only runs SELECT queries), it is classified as **low risk** and never requires approval regardless of autonomy level.
+
+### Query Safety
+
+The Lens Agent enforces read-only access:
+
+- Only `SELECT` queries are generated and executed
+- `INSERT`, `UPDATE`, `DELETE`, `DROP`, and `ALTER` statements are blocked at the query validation layer
+- Queries run with a read-only database connection when supported by the driver
+- A query timeout of 30 seconds prevents long-running queries from impacting production databases
