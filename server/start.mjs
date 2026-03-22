@@ -62,7 +62,7 @@ if (process.env.ENABLE_WHATSAPP === "true") {
 if (process.env.ENABLE_SLACK === "true") {
   try {
     const { SlackAdapter } = await import("@codespar/channel-slack");
-    supervisor.addAdapter(new SlackAdapter());
+    supervisor.addAdapter(new SlackAdapter(storage));
     console.log("[server] \u2713 Slack adapter enabled");
   } catch (err) {
     console.error("[server] \u2717 Slack adapter failed:", err.message);

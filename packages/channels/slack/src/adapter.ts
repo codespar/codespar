@@ -1,17 +1,32 @@
 /**
- * Slack Channel Adapter — First official API channel for CodeSpar.
+ * Slack Channel Adapter -- Multi-tenant support.
  *
  * Implements the ChannelAdapter interface using @slack/bolt.
- * Zero ban risk (official API), validates multi-channel architecture.
+ * Supports two modes:
  *
- * Required environment variables:
- *   SLACK_BOT_TOKEN     — xoxb-* Bot User OAuth Token
- *   SLACK_SIGNING_SECRET — Signing secret from Slack app settings
- *   SLACK_APP_TOKEN      — xapp-* token (for Socket Mode, optional)
- *   SLACK_PORT           — HTTP port for events (default: 3001)
+ * 1. Legacy (single workspace): Set SLACK_BOT_TOKEN env var.
+ *    Works exactly as before -- one workspace, one token.
+ *
+ * 2. OAuth (multi-tenant): Set SLACK_CLIENT_ID + SLACK_CLIENT_SECRET.
+ *    Uses Bolt's installationStore to fetch tokens per workspace
+ *    from the StorageProvider.
+ *
+ * Common environment variables:
+ *   SLACK_SIGNING_SECRET -- Signing secret from Slack app settings
+ *   SLACK_APP_TOKEN      -- xapp-* token (for Socket Mode, optional)
+ *   SLACK_PORT           -- HTTP port for events (default: 3001)
+ *
+ * Legacy-only:
+ *   SLACK_BOT_TOKEN      -- xoxb-* Bot User OAuth Token
+ *
+ * OAuth-only:
+ *   SLACK_CLIENT_ID      -- OAuth client ID
+ *   SLACK_CLIENT_SECRET  -- OAuth client secret
+ *   SLACK_STATE_SECRET   -- State parameter secret (default: "codespar-slack-state")
  */
 
 import { App } from "@slack/bolt";
+import type { Installation, InstallationQuery } from "@slack/bolt";
 import { randomUUID } from "node:crypto";
 
 /** Subset of Slack message event fields we use. */
@@ -24,6 +39,7 @@ interface SlackMessageEvent {
   channel_type?: string;
   ts: string;
   thread_ts?: string;
+  team?: string;
 }
 import type {
   Attachment,
@@ -32,8 +48,41 @@ import type {
   ChannelResponse,
   MessageHandler,
   NormalizedMessage,
+  StorageProvider,
 } from "@codespar/core";
 import { formatSlackBlocks } from "./formatter.js";
+
+/** Slack file shape attached to message/event payloads. */
+interface SlackFile {
+  url_private: string;
+  url_private_download?: string;
+  mimetype: string;
+  name: string;
+}
+
+/** Extract Attachment[] from a Slack files array. */
+function extractAttachments(files: SlackFile[] | undefined): Attachment[] {
+  if (!files) return [];
+  const attachments: Attachment[] = [];
+  for (const file of files) {
+    if (file.mimetype?.startsWith("image/")) {
+      attachments.push({
+        type: "image",
+        url: file.url_private_download || file.url_private,
+        mimeType: file.mimetype,
+        filename: file.name,
+      });
+    } else {
+      attachments.push({
+        type: "file",
+        url: file.url_private_download || file.url_private,
+        mimeType: file.mimetype,
+        filename: file.name,
+      });
+    }
+  }
+  return attachments;
+}
 
 export class SlackAdapter implements ChannelAdapter {
   readonly type = "slack" as const;
@@ -41,14 +90,41 @@ export class SlackAdapter implements ChannelAdapter {
   private app: App | null = null;
   private messageHandler: MessageHandler | null = null;
   private botUserId: string | null = null;
+  private storage: StorageProvider | null;
+  private mode: "legacy" | "oauth" | null = null;
+
+  constructor(storage?: StorageProvider) {
+    this.storage = storage ?? null;
+  }
 
   async connect(): Promise<void> {
-    const token = process.env.SLACK_BOT_TOKEN;
-    const signingSecret = process.env.SLACK_SIGNING_SECRET;
+    const legacyToken = process.env.SLACK_BOT_TOKEN;
+    const clientId = process.env.SLACK_CLIENT_ID;
+    const clientSecret = process.env.SLACK_CLIENT_SECRET;
 
-    if (!token) {
-      throw new Error("SLACK_BOT_TOKEN environment variable is required");
+    if (legacyToken) {
+      // Legacy single-workspace mode
+      console.log("[slack] Starting in legacy mode (SLACK_BOT_TOKEN)");
+      await this.connectLegacy(legacyToken);
+    } else if (clientId && clientSecret) {
+      // OAuth multi-workspace mode
+      console.log("[slack] Starting in OAuth mode (multi-tenant)");
+      await this.connectOAuth(clientId, clientSecret);
+    } else {
+      throw new Error(
+        "Set SLACK_BOT_TOKEN (single workspace) or SLACK_CLIENT_ID + SLACK_CLIENT_SECRET (OAuth multi-tenant)"
+      );
     }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Legacy mode -- existing single-workspace behavior
+  // ---------------------------------------------------------------------------
+
+  private async connectLegacy(token: string): Promise<void> {
+    this.mode = "legacy";
+
+    const signingSecret = process.env.SLACK_SIGNING_SECRET;
     if (!signingSecret) {
       throw new Error("SLACK_SIGNING_SECRET environment variable is required");
     }
@@ -68,7 +144,101 @@ export class SlackAdapter implements ChannelAdapter {
     const authResult = await this.app.client.auth.test({ token });
     this.botUserId = (authResult.user_id as string) || null;
 
-    // DMs only — handle direct messages to the bot
+    this.registerEventHandlers();
+    await this.app.start();
+  }
+
+  // ---------------------------------------------------------------------------
+  // OAuth mode -- multi-tenant via installationStore
+  // ---------------------------------------------------------------------------
+
+  private async connectOAuth(
+    clientId: string,
+    clientSecret: string
+  ): Promise<void> {
+    this.mode = "oauth";
+
+    if (!this.storage) {
+      throw new Error(
+        "StorageProvider is required for OAuth mode. Pass it to the SlackAdapter constructor."
+      );
+    }
+
+    const storage = this.storage;
+
+    const installationStore = {
+      storeInstallation: async (installation: Installation): Promise<void> => {
+        // Called after OAuth callback -- but we already handle this in webhook-server.
+        // Just log it here.
+        const teamId = installation.team?.id;
+        console.log(`[slack] Installation stored for team: ${teamId}`);
+      },
+
+      fetchInstallation: async (
+        query: InstallationQuery<boolean>
+      ): Promise<Installation> => {
+        // Called on every incoming event to get the bot token
+        const teamId = query.teamId;
+        if (!teamId) throw new Error("No teamId in installation query");
+
+        const stored = await storage.getSlackInstallation(teamId);
+        if (!stored)
+          throw new Error(`No installation found for team: ${teamId}`);
+
+        return {
+          team: { id: stored.teamId, name: stored.teamName },
+          bot: {
+            token: stored.botToken,
+            userId: stored.botUserId,
+            id: stored.appId,
+            scopes: stored.scopes,
+          },
+        } as Installation;
+      },
+
+      deleteInstallation: async (
+        query: InstallationQuery<boolean>
+      ): Promise<void> => {
+        const teamId = query.teamId;
+        if (teamId) {
+          await storage.removeSlackInstallation(teamId);
+          console.log(`[slack] Installation removed for team: ${teamId}`);
+        }
+      },
+    };
+
+    const appToken = process.env.SLACK_APP_TOKEN;
+
+    this.app = new App({
+      signingSecret: process.env.SLACK_SIGNING_SECRET || "",
+      clientId,
+      clientSecret,
+      stateSecret: process.env.SLACK_STATE_SECRET || "codespar-slack-state",
+      scopes: [
+        "app_mentions:read",
+        "chat:write",
+        "channels:read",
+        "files:read",
+        "users:read",
+      ],
+      installationStore,
+      ...(appToken
+        ? { socketMode: true, appToken }
+        : { port: parseInt(process.env.SLACK_PORT || "3001", 10) }),
+    });
+
+    this.registerEventHandlers();
+    await this.app.start();
+  }
+
+  // ---------------------------------------------------------------------------
+  // Shared event handlers (used by both modes)
+  // ---------------------------------------------------------------------------
+
+  private registerEventHandlers(): void {
+    if (!this.app) return;
+
+    // DMs only -- handle direct messages to the bot
     this.app.message(async ({ message, say }) => {
       const msg = message as SlackMessageEvent;
       if (msg.subtype) return;
@@ -78,34 +248,10 @@ export class SlackAdapter implements ChannelAdapter {
       const isDM = msg.channel_type === "im";
       if (!isDM) return;
 
-      // Extract file attachments from the Slack event
-      const attachments: Attachment[] = [];
-      const files = (msg as unknown as Record<string, unknown>).files as Array<{
-        url_private: string;
-        url_private_download?: string;
-        mimetype: string;
-        name: string;
-      }> | undefined;
-
-      if (files) {
-        for (const file of files) {
-          if (file.mimetype?.startsWith("image/")) {
-            attachments.push({
-              type: "image",
-              url: file.url_private_download || file.url_private,
-              mimeType: file.mimetype,
-              filename: file.name,
-            });
-          } else {
-            attachments.push({
-              type: "file",
-              url: file.url_private_download || file.url_private,
-              mimeType: file.mimetype,
-              filename: file.name,
-            });
-          }
-        }
-      }
+      const files = (msg as unknown as Record<string, unknown>).files as
+        | SlackFile[]
+        | undefined;
+      const attachments = extractAttachments(files);
 
       const normalized: NormalizedMessage = {
         id: randomUUID(),
@@ -127,49 +273,30 @@ export class SlackAdapter implements ChannelAdapter {
       }
     });
 
-    // Channel @mentions — handle @CodeSpar in channels
+    // Channel @mentions -- handle @CodeSpar in channels
     this.app.event("app_mention", async ({ event, say }) => {
       if (!this.messageHandler) {
         await say(`[codespar] Agent initializing. Try again in a moment.`);
         return;
       }
 
-      const cleanText = this.botUserId
-        ? event.text.replace(new RegExp(`<@${this.botUserId}>`, "g"), "").trim()
+      // Resolve bot user ID: use cached value (legacy) or look up per workspace (OAuth)
+      const botUserId = await this.resolveBotUserId(
+        (event as unknown as Record<string, unknown>).team as string | undefined
+      );
+
+      const cleanText = botUserId
+        ? event.text.replace(new RegExp(`<@${botUserId}>`, "g"), "").trim()
         : event.text;
 
       // Use event.thread_ts if already in a thread, otherwise event.ts
       // so the response is always sent as a thread reply to the mention.
       const threadTs = event.thread_ts || event.ts;
 
-      // Extract file attachments from the Slack event
-      const attachments: Attachment[] = [];
-      const files = (event as unknown as Record<string, unknown>).files as Array<{
-        url_private: string;
-        url_private_download?: string;
-        mimetype: string;
-        name: string;
-      }> | undefined;
-
-      if (files) {
-        for (const file of files) {
-          if (file.mimetype?.startsWith("image/")) {
-            attachments.push({
-              type: "image",
-              url: file.url_private_download || file.url_private,
-              mimeType: file.mimetype,
-              filename: file.name,
-            });
-          } else {
-            attachments.push({
-              type: "file",
-              url: file.url_private_download || file.url_private,
-              mimeType: file.mimetype,
-              filename: file.name,
-            });
-          }
-        }
-      }
+      const files = (event as unknown as Record<string, unknown>).files as
+        | SlackFile[]
+        | undefined;
+      const attachments = extractAttachments(files);
 
       const normalized: NormalizedMessage = {
         id: randomUUID(),
@@ -190,9 +317,33 @@ export class SlackAdapter implements ChannelAdapter {
 
       await this.messageHandler(normalized);
     });
-
-    await this.app.start();
   }
+
+  /**
+   * Resolve the bot user ID for mention cleaning.
+   *
+   * In legacy mode, it was resolved once at startup and cached on `this.botUserId`.
+   * In OAuth mode, each workspace has a different bot user ID stored in the
+   * installation record.
+   */
+  private async resolveBotUserId(
+    teamId: string | undefined
+  ): Promise<string | null> {
+    // Legacy mode: use the cached value
+    if (this.botUserId) return this.botUserId;
+
+    // OAuth mode: look up per workspace
+    if (this.storage && teamId) {
+      const installation = await this.storage.getSlackInstallation(teamId);
+      return installation?.botUserId || null;
+    }
+
+    return null;
+  }
+
+  // ---------------------------------------------------------------------------
+  // ChannelAdapter interface
+  // ---------------------------------------------------------------------------
 
   async disconnect(): Promise<void> {
     if (this.app) {
@@ -200,6 +351,7 @@ export class SlackAdapter implements ChannelAdapter {
       this.app = null;
     }
     this.botUserId = null;
+    this.mode = null;
   }
 
   onMessage(handler: MessageHandler): void {
@@ -243,7 +395,7 @@ export class SlackAdapter implements ChannelAdapter {
     channelId: string,
     filename: string,
     content: string,
-    threadTs?: string,
+    threadTs?: string
   ): Promise<void> {
     if (!this.app) {
       throw new Error("Slack adapter not connected. Call connect() first.");
@@ -258,7 +410,7 @@ export class SlackAdapter implements ChannelAdapter {
       args.thread_ts = threadTs;
     }
     await this.app.client.files.uploadV2(
-      args as unknown as Parameters<typeof this.app.client.files.uploadV2>[0],
+      args as unknown as Parameters<typeof this.app.client.files.uploadV2>[0]
     );
   }
 
