@@ -14,7 +14,7 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { createHmac, timingSafeEqual } from "node:crypto";
-import Fastify, { type FastifyInstance } from "fastify";
+import Fastify, { type FastifyInstance, type FastifyReply } from "fastify";
 import cors from "@fastify/cors";
 import { parseGitHubWebhook, type CIEvent } from "../webhooks/github-handler.js";
 import { getRegisteredTypes, getAgentFactory, isRegisteredType } from "../agents/agent-registry.js";
@@ -116,6 +116,24 @@ async function sendWelcomeEmail(email: string): Promise<void> {
     newsletterLog.info("Welcome email sent", { email });
   } catch (err) {
     newsletterLog.error("Failed to send welcome email", { email, error: err instanceof Error ? err.message : String(err) });
+  }
+}
+
+// ── Server-Sent Events (SSE) ─────────────────────────────────────
+const sseConnections = new Set<{ reply: FastifyReply; orgId: string }>();
+
+/**
+ * Broadcast an event to all connected SSE clients.
+ * If orgId is provided, only clients matching that org (or "default") receive it.
+ */
+export function broadcastEvent(event: { type: string; data: unknown }, orgId?: string): void {
+  for (const conn of sseConnections) {
+    if (orgId && conn.orgId !== orgId && conn.orgId !== "default") continue;
+    try {
+      conn.reply.raw.write(`data: ${JSON.stringify(event)}\n\n`);
+    } catch {
+      sseConnections.delete(conn);
+    }
   }
 }
 
@@ -313,6 +331,35 @@ export class WebhookServer {
       };
     });
 
+    // SSE endpoint for real-time updates
+    route("get", "/api/events", async (request: any, reply: any) => {
+      const orgId = (request.headers["x-org-id"] as string) || "default";
+
+      reply.raw.writeHead(200, {
+        "Content-Type": "text/event-stream",
+        "Cache-Control": "no-cache",
+        Connection: "keep-alive",
+        "Access-Control-Allow-Origin": "*",
+      });
+
+      const connection = { reply, orgId };
+      sseConnections.add(connection);
+
+      // Send initial ping
+      reply.raw.write(`data: ${JSON.stringify({ type: "connected" })}\n\n`);
+
+      // Heartbeat every 30s
+      const heartbeat = setInterval(() => {
+        reply.raw.write(`: heartbeat\n\n`);
+      }, 30000);
+
+      // Clean up on disconnect
+      request.raw.on("close", () => {
+        clearInterval(heartbeat);
+        sseConnections.delete(connection);
+      });
+    });
+
     // Metrics endpoint
     route("get", "/api/metrics", async (_request: any, _reply: any) => {
       const uptimeMs = Date.now() - this.startedAt.getTime();
@@ -482,6 +529,8 @@ export class WebhookServer {
             });
           }
 
+          broadcastEvent({ type: "agent.created", data: { id: name, name, type } });
+
           return {
             success: true,
             agent: {
@@ -542,6 +591,8 @@ export class WebhookServer {
             },
           });
         }
+
+        broadcastEvent({ type: "agent.removed", data: { id } });
 
         return { success: true, removed: id };
       }
@@ -748,6 +799,7 @@ export class WebhookServer {
           }
 
           const labels = ["Passive", "Notify", "Suggest", "Auto-Low", "Auto-Med", "Full Auto"];
+          broadcastEvent({ type: "agent.status", data: { id, status: `L${level}` } });
           return {
             success: true,
             action: "set_autonomy",
@@ -763,6 +815,7 @@ export class WebhookServer {
             if (!ok) {
               return reply.status(500).send({ error: "Restart failed" });
             }
+            broadcastEvent({ type: "agent.status", data: { id, status: "restarted" } });
             return { success: true, action: "restart", agentId: id };
           }
           return reply.status(501).send({ error: "Restart not supported" });
@@ -787,6 +840,8 @@ export class WebhookServer {
             },
           });
         }
+
+        broadcastEvent({ type: "agent.status", data: { id, status: newState } });
 
         return { success: true, action, agentId: id, newState };
       }
@@ -936,6 +991,11 @@ export class WebhookServer {
               votesRequired: result.votesRequired,
               detail: `Vote '${vote}' via dashboard. Status: ${result.status}`,
             },
+          });
+
+          broadcastEvent({
+            type: "audit.new",
+            data: { action: "approval.voted", vote, status: result.status },
           });
         }
 
