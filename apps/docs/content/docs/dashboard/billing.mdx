@@ -1,0 +1,59 @@
+---
+title: Billing & Usage
+description: API usage metrics, agent statistics, and plan information.
+---
+
+# Billing & Usage
+
+The Billing & Usage page provides visibility into your CodeSpar instance's resource consumption, agent activity, and plan details. It is accessible at `/dashboard/admin/billing`.
+
+## Access
+
+This page is available to organization owners through the Admin Panel. Navigate to `/dashboard/admin/billing` or click the **Billing & Usage** link in the admin sidebar.
+
+## API Usage
+
+The API Usage card displays metrics pulled from `GET /api/metrics`:
+
+| Metric | Description |
+|--------|-------------|
+| Total Requests | Cumulative API requests processed |
+| Webhook Events | Total webhook events received (GitHub, channel callbacks) |
+| Avg Latency | Average response time across all API endpoints |
+
+These metrics reset on server restart in the current implementation. Persistent metric storage is planned for a future release.
+
+## Agent Usage
+
+The Agent Usage card summarizes agent activity across your organization:
+
+| Metric | Description |
+|--------|-------------|
+| Agent Count | Number of currently registered agents (persistent + ephemeral) |
+| Tasks Handled | Total tasks processed by all agents |
+
+## Current Plan
+
+During the beta period, all organizations are on the **Beta (Free)** plan with full access to all features. There are no usage caps during beta.
+
+Paid plans with usage-based billing are planned for a future release.
+
+## Rate Limits
+
+Rate limits are displayed as visual progress bars showing current consumption against the allowed maximum:
+
+| Limit | Threshold | Scope |
+|-------|-----------|-------|
+| API Requests | 100 requests/minute | Per IP address |
+| Webhook Events | 30 requests/minute | Per IP address |
+
+The progress bars update in real time. When usage approaches the limit (above 80%), the bar color changes from green to amber as a warning.
+
+## Future: Stripe Integration
+
+Billing will be powered by Stripe with usage-based pricing. Planned features include:
+
+- Plan selection and upgrade/downgrade
+- Usage-based billing tied to agent activity and API calls
+- Invoice history and payment method management
+- Spending alerts and budget caps

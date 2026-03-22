@@ -401,6 +401,57 @@ curl http://localhost:3000/api/agent-types
 ]
 ```
 
+## Agent State Persistence
+
+Agent state changes (suspend, resume, autonomy level updates) are automatically persisted to disk. This means agent states survive server restarts without manual intervention.
+
+### How It Works
+
+1. When an agent action is performed (suspend, resume, set_autonomy), the new state is saved immediately
+2. State is stored in `.codespar/agent-states.json` in the working directory
+3. On server startup, the agent supervisor reads this file and restores each agent to its last known state
+4. If the file does not exist (first run), agents start with their default state (ACTIVE, L1)
+
+### Storage Format
+
+Each entry in `agent-states.json` follows the `AgentStateEntry` type:
+
+```typescript
+interface AgentStateEntry {
+  agentId: string;       // Unique agent identifier
+  state: string;         // ACTIVE, SUSPENDED, IDLE, ERROR
+  autonomyLevel: number; // 0-5
+  updatedAt: string;     // ISO 8601 timestamp of last change
+}
+```
+
+### Example File
+
+```json
+[
+  {
+    "agentId": "agent-proj-abc123",
+    "state": "SUSPENDED",
+    "autonomyLevel": 3,
+    "updatedAt": "2026-03-21T14:35:00Z"
+  },
+  {
+    "agentId": "agent-coord-ghi789",
+    "state": "ACTIVE",
+    "autonomyLevel": 1,
+    "updatedAt": "2026-03-21T10:00:00Z"
+  }
+]
+```
+
+### Notes
+
+- The file is written atomically (write to temp file, then rename) to prevent corruption on crash
+- Agents that no longer exist in the registry are ignored during restore
+- State persistence applies to all agent types (project, task, review, deploy, incident, coordinator)
+
+---
+
 ## Next Steps
 
 - [Audit API](/docs/api/audit) -- Query the audit trail

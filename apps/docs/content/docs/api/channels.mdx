@@ -285,8 +285,117 @@ curl -s http://localhost:3000/api/channels \
 
 ---
 
+## Configure a Channel
+
+Programmatically configure a channel's connection settings. This is an alternative to setting environment variables manually.
+
+```
+POST /api/channels/configure
+```
+
+### Request Body
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `channel` | string | Yes | Channel name: `telegram`, `whatsapp`, `discord`, `slack` |
+| `config` | object | Yes | Channel-specific configuration (see below) |
+
+### Channel Config Objects
+
+**Telegram:**
+
+```json
+{
+  "channel": "telegram",
+  "config": {
+    "botToken": "123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11"
+  }
+}
+```
+
+**WhatsApp:**
+
+```json
+{
+  "channel": "whatsapp",
+  "config": {
+    "evolutionApiUrl": "http://localhost:8084",
+    "evolutionApiKey": "your-evolution-api-key",
+    "evolutionInstance": "codespar"
+  }
+}
+```
+
+**Discord:**
+
+```json
+{
+  "channel": "discord",
+  "config": {
+    "botToken": "your-discord-bot-token"
+  }
+}
+```
+
+**Slack:**
+
+```json
+{
+  "channel": "slack",
+  "config": {
+    "botToken": "xoxb-...",
+    "appToken": "xapp-..."
+  }
+}
+```
+
+### Request Example
+
+```bash
+curl -X POST http://localhost:3000/api/channels/configure \
+  -H "Content-Type: application/json" \
+  -d '{
+    "channel": "telegram",
+    "config": {
+      "botToken": "123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11"
+    }
+  }'
+```
+
+### Response
+
+```json
+{
+  "success": true,
+  "channel": "telegram",
+  "configured": true
+}
+```
+
+### Validation
+
+The endpoint validates:
+
+- The `channel` field must be one of: `telegram`, `whatsapp`, `discord`, `slack`
+- The `config` object must contain all required fields for the specified channel
+- Empty or missing config values are rejected with a 400 error
+
+Invalid channel names return:
+
+```json
+{
+  "error": "Invalid channel. Must be one of: telegram, whatsapp, discord, slack",
+  "code": "INVALID_CHANNEL",
+  "status": 400
+}
+```
+
+All configuration changes are logged to the [Audit Trail](/docs/api/audit) for traceability.
+
+---
+
 ## Next Steps
 
-- [Configuration](/docs/configuration) — Channel environment variables
-- [Multi-Channel Setup](/docs/guides/multi-channel) — Enable multiple channels simultaneously
-- [Agent API](/docs/api/agents) — Manage agents that use channels
+- [Configuration](/docs/configuration) -- Channel environment variables
+- [Multi-Channel Setup](/docs/guides/multi-channel) -- Enable multiple channels simultaneously
+- [Agent API](/docs/api/agents) -- Manage agents that use channels

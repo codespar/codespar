@@ -95,11 +95,43 @@ After adding the scope, attach an image to a message with a CodeSpar command. Th
 
 | Channel | Status | Notes |
 |---------|--------|-------|
-| Slack | Supported | Requires `files:read` bot scope |
-| WhatsApp | Planned | Coming in a future release |
-| Discord | Planned | Coming in a future release |
-| Telegram | Planned | Coming in a future release |
+| Slack | Supported | Requires `files:read` bot scope, downloads via bot token auth |
+| Discord | Supported | Public attachment URLs from `message.attachments`, no auth needed |
+| Telegram | Supported | Resolves file URLs via `getFile` API, downloads from Telegram CDN |
+| WhatsApp | Supported | Extracts `imageMessage.url` / `mediaUrl` from Evolution API payload |
 | CLI | Not applicable | CLI does not support image attachments |
+
+## Channel Implementation Details
+
+Each channel handles image extraction differently based on its platform API.
+
+### Slack
+
+Slack image URLs use the `url_private_download` field from the event payload. These URLs require authentication. The adapter downloads the image using a `Bearer` token (the bot's `SLACK_BOT_TOKEN`) in the `Authorization` header. The `files:read` OAuth scope must be granted to the bot for this to work.
+
+### Discord
+
+Discord attachments are included in the `message.attachments` collection on the message event. Each attachment has a public `url` property that can be downloaded directly without any authentication. This makes Discord the simplest channel for image vision since no additional scopes or tokens are required beyond the standard bot setup.
+
+### Telegram
+
+Telegram does not include direct file URLs in message events. Instead, the message payload contains a `file_id`. The adapter calls the Bot API's `getFile` method with this ID:
+
+```
+GET https://api.telegram.org/bot<token>/getFile?file_id=<file_id>
+```
+
+This returns a `file_path`, which is then used to construct the download URL:
+
+```
+https://api.telegram.org/file/bot<token>/<file_path>
+```
+
+The file is downloaded from Telegram's CDN and base64-encoded for Claude.
+
+### WhatsApp
+
+WhatsApp image messages arrive via the Evolution API webhook payload. The image URL is available in the `imageMessage.url` or `mediaUrl` field, depending on the Evolution API version. The adapter downloads the image directly from this URL. No additional authentication is needed since the Evolution API provides pre-authenticated media URLs.
 
 ## Next Steps
 
