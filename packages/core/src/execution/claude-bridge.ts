@@ -26,6 +26,8 @@ export interface ExecutionRequest {
 export interface RepoExecutionRequest extends ExecutionRequest {
   repoOwner: string;
   repoName: string;
+  /** Per-workspace GitHub token (from OAuth). Falls back to GITHUB_TOKEN env var. */
+  githubToken?: string;
 }
 
 export interface ExecutionResult {
@@ -473,7 +475,7 @@ Respond with ONLY the file paths, one per line. No explanations, no markdown, no
    * Falls back to generic `execute()` if GITHUB_TOKEN is not set.
    */
   async executeWithRepo(request: RepoExecutionRequest): Promise<ExecutionResult> {
-    const github = new GitHubClient();
+    const github = new GitHubClient(request.githubToken);
     if (!github.isConfigured()) {
       // Fall back to generic execution without repo context
       return this.execute(request);

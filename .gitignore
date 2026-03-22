@@ -11,3 +11,4 @@ dist/
 apps/docs/.next/
 apps/docs/.source/
 apps/docs/node_modules/
+.vercel
