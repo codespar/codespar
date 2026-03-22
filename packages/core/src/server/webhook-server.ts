@@ -1421,6 +1421,122 @@ export class WebhookServer {
       return reply.redirect(redirectUrl);
     });
 
+    // ── GitHub OAuth (per-workspace) ──────────────────────────────────
+
+    // Initiate GitHub OAuth flow by redirecting to the authorization page
+    route("get", "/api/github/install", async (_request: any, reply: any) => {
+      const clientId = process.env.GITHUB_CLIENT_ID;
+      if (!clientId) {
+        return reply.status(503).send({ error: "GitHub OAuth not configured. Set GITHUB_CLIENT_ID." });
+      }
+
+      const redirectUri =
+        process.env.GITHUB_OAUTH_REDIRECT_URI ||
+        `${process.env.WEBHOOK_BASE_URL || "https://codespar-production.up.railway.app"}/api/github/callback`;
+      const scope = "repo,read:user";
+      const state = Math.random().toString(36).slice(2, 10);
+      const url = `https://github.com/login/oauth/authorize?client_id=${clientId}&redirect_uri=${encodeURIComponent(redirectUri)}&scope=${scope}&state=${state}`;
+      return reply.redirect(url);
+    });
+
+    // Handle OAuth callback from GitHub, exchange code for access token, and save per-org
+    route("get", "/api/github/callback", async (request: any, reply: any) => {
+      const { code } = request.query as { code?: string };
+      if (!code) {
+        return reply.status(400).send({ error: "Missing code parameter" });
+      }
+
+      const clientId = process.env.GITHUB_CLIENT_ID;
+      const clientSecret = process.env.GITHUB_CLIENT_SECRET;
+      if (!clientId || !clientSecret) {
+        return reply.status(503).send({ error: "GitHub OAuth not configured" });
+      }
+
+      try {
+        const tokenRes = await fetch("https://github.com/login/oauth/access_token", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Accept: "application/json" },
+          body: JSON.stringify({
+            client_id: clientId,
+            client_secret: clientSecret,
+            code,
+          }),
+        });
+
+        if (!tokenRes.ok) {
+          log.error("GitHub token exchange HTTP error", { status: tokenRes.status });
+          return reply.status(500).send({ error: "Failed to exchange code for token" });
+        }
+
+        const tokenData = (await tokenRes.json()) as {
+          access_token?: string;
+          token_type?: string;
+          scope?: string;
+          error?: string;
+        };
+
+        if (!tokenData.access_token) {
+          log.error("GitHub token exchange failed", { error: tokenData.error });
+          return reply.status(400).send({ error: tokenData.error || "No access token received" });
+        }
+
+        // Get GitHub user info
+        const userRes = await fetch("https://api.github.com/user", {
+          headers: {
+            Authorization: `Bearer ${tokenData.access_token}`,
+            Accept: "application/vnd.github.v3+json",
+          },
+        });
+        const userData = (await userRes.json()) as { login?: string; id?: number; name?: string };
+
+        // Save the GitHub installation per org
+        const orgId = this.getOrgId(request);
+        const storage = this.getOrgStorage(orgId);
+
+        await storage.setMemory("github-oauth", "token", tokenData.access_token);
+        await storage.setMemory("github-oauth", "user", userData.login || "unknown");
+        await storage.setMemory("github-oauth", "scope", tokenData.scope || "");
+        await storage.setMemory("github-oauth", "connectedAt", new Date().toISOString());
+
+        await storage.appendAudit({
+          actorType: "user",
+          actorId: userData.login || "unknown",
+          action: "github.connected",
+          result: "success",
+          metadata: {
+            orgId,
+            githubUser: userData.login,
+            scope: tokenData.scope,
+          },
+        });
+
+        log.info("GitHub OAuth connected", { orgId, user: userData.login });
+
+        const dashboardUrl = process.env.DASHBOARD_URL || "https://codespar.dev";
+        return reply.redirect(`${dashboardUrl}/dashboard/setup?github=connected`);
+      } catch (err) {
+        log.error("GitHub OAuth callback error", { error: err instanceof Error ? err.message : String(err) });
+        const dashboardUrl = process.env.DASHBOARD_URL || "https://codespar.dev";
+        return reply.redirect(`${dashboardUrl}/dashboard/setup?github=error`);
+      }
+    });
+
+    // Check if GitHub is connected for the current org
+    route("get", "/api/github/status", async (request: any, _reply: any) => {
+      const orgId = this.getOrgId(request);
+      const storage = this.getOrgStorage(orgId);
+
+      const token = await storage.getMemory("github-oauth", "token");
+      const user = await storage.getMemory("github-oauth", "user");
+      const connectedAt = await storage.getMemory("github-oauth", "connectedAt");
+
+      return {
+        connected: !!token,
+        user: (user as string) || null,
+        connectedAt: (connectedAt as string) || null,
+      };
+    });
+
     // GitHub webhook receiver
     route("post", "/webhooks/github", async (request: any, reply: any) => {
       metrics.increment("webhook.received");

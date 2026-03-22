@@ -123,7 +123,16 @@ export class TaskAgent implements Agent {
         }
         console.log(`[${this.config.id}] Project config lookup: parentAgent=${parentAgentId}, found=${!!projectConfig}${projectConfig ? ` repo=${projectConfig.repoOwner}/${projectConfig.repoName}` : ""}`);
       }
-      const github = new GitHubClient();
+      // Resolve per-org GitHub token (from OAuth) or fall back to env var
+      let githubToken: string | undefined;
+      if (this.storage) {
+        const orgToken = await this.storage.getMemory("github-oauth", "token");
+        if (orgToken && typeof orgToken === "string") {
+          githubToken = orgToken;
+        }
+      }
+
+      const github = new GitHubClient(githubToken);
       console.log(`[${this.config.id}] GitHub configured: ${github.isConfigured()}, hasProjectConfig: ${!!projectConfig}`);
 
       if (projectConfig && github.isConfigured()) {
@@ -134,6 +143,7 @@ export class TaskAgent implements Agent {
           projectContext: this.config.projectId || undefined,
           repoOwner: projectConfig.repoOwner,
           repoName: projectConfig.repoName,
+          githubToken,
           timeout: 120_000,
           imageUrls,
         });
