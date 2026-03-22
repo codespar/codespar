@@ -262,9 +262,39 @@ If the agent needs to know framework specifics:
 
 For tasks that exceed these limits, break the work into smaller, focused tasks.
 
+## Merging PRs from Chat
+
+After reviewing a pull request (either manually or via the Review Agent), you can merge it directly from your messaging channel:
+
+```
+@codespar merge PR #42
+```
+
+This uses the repository's default merge strategy. You can also specify a merge strategy explicitly:
+
+```
+@codespar merge PR #42 squash
+@codespar merge PR #42 rebase
+```
+
+**Example flow:**
+
+```
+@codespar instruct add a health check endpoint at /api/health
+  → PR #42 opened
+
+@codespar review PR #42
+  → Review: approve with suggestions
+
+@codespar merge PR #42 squash
+  → PR #42 merged (squash) into main
+```
+
+The merge command checks that the PR exists, that CI checks have passed (if configured), and that you have the required permissions before proceeding.
+
 ## Next Steps
 
-- [Dev Agent](/docs/agents/dev-agent) — technical deep dive into the Dev Agent
-- [Review Pull Requests](/docs/guides/review-prs) — automated PR review
-- [Approval System](/docs/guides/approval-system) — configure approval workflows
-- [Command Reference](/docs/commands) — full list of all commands
+- [Dev Agent](/docs/agents/dev-agent) -- technical deep dive into the Dev Agent
+- [Review Pull Requests](/docs/guides/review-prs) -- automated PR review
+- [Approval System](/docs/guides/approval-system) -- configure approval workflows
+- [Command Reference](/docs/commands) -- full list of all commands

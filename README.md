@@ -38,6 +38,8 @@
 | Task Scheduler (cron-like recurring tasks) | ✅ Working |
 | Streaming Responses (SSE from Anthropic API) | ✅ Working |
 | Slack Thread Support (responses in threads) | ✅ Working |
+| Image Vision (screenshot analysis in Slack) | ✅ Working |
+| Smart File Picker (Claude Haiku file selection) | ✅ Working |
 | File Attachments (Slack files.uploadV2) | ✅ Working |
 | API Versioning (/v1/ prefix on all endpoints) | ✅ Working |
 | Create/Delete Agent API | ✅ Working |
@@ -196,12 +198,13 @@ Enable channels by setting their env vars. All channels are optional. Enable onl
 | `@codespar agents` | Lists all active agents and their states |
 | `@codespar audit [n]` | Shows recent audit trail entries |
 | `@codespar permissions` | Shows your roles and permissions |
+| `@codespar merge PR #<n> [squash\|rebase]` | Merges a pull request (default, squash, or rebase) |
 | `@codespar help` | Shows all available commands |
 | Natural language | Works in any language (Portuguese, Spanish, etc.) |
 
 ## Dev Agent
 
-The Dev Agent reads your actual codebase via the GitHub API, sends context to Claude Sonnet, and creates pull requests. The full flow: search code, read files, prompt Claude, parse output, create branch, commit changes, open PR. All from a single WhatsApp or Slack message.
+The Dev Agent reads your actual codebase via the GitHub API, sends context to Claude Sonnet, and creates pull requests. A smart file picker (Claude Haiku) selects the most relevant files from the full repo tree instead of relying on keyword search. Changes are generated using diff-based edits (SEARCH/REPLACE format) for precise modifications instead of full-file output. The full flow: pick files, read contents, prompt Claude, parse diffs, create branch, commit changes, open PR. All from a single WhatsApp or Slack message.
 
 ```
 @codespar instruct add input validation to the signup endpoint

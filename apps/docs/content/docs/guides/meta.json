@@ -15,6 +15,7 @@
     "production-deploy",
     "cli",
     "streaming",
-    "scheduled-tasks"
+    "scheduled-tasks",
+    "image-vision"
   ]
 }
