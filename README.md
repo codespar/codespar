@@ -38,7 +38,7 @@
 | Task Scheduler (cron-like recurring tasks) | ✅ Working |
 | Streaming Responses (SSE from Anthropic API) | ✅ Working |
 | Slack Thread Support (responses in threads) | ✅ Working |
-| Image Vision (screenshot analysis in Slack) | ✅ Working |
+| Image Vision (screenshot analysis, all channels) | ✅ Working |
 | Smart File Picker (Claude Haiku file selection) | ✅ Working |
 | File Attachments (Slack files.uploadV2) | ✅ Working |
 | API Versioning (/v1/ prefix on all endpoints) | ✅ Working |
@@ -50,6 +50,10 @@
 | GitHub Actions CI/CD | ✅ Working |
 | Docker Compose | ✅ Working |
 | Railway Deploy | ✅ Working |
+| Agent State Persistence (.codespar/agent-states.json) | ✅ Working |
+| Channel Configure API (POST /api/channels/configure) | ✅ Working |
+| Admin Panel (waitlist + newsletter management) | ✅ Working |
+| Billing & Usage Page (API metrics, agent stats) | ✅ Working |
 | Dashboard (codespar.dev/dashboard) | ✅ Working |
 | Docs Site (docs.codespar.dev, 62 pages) | ✅ Working |
 | Docs Search (Cmd+K) | ✅ Working |
@@ -80,7 +84,7 @@ Each project gets its own persistent agent that monitors builds, investigates fa
 - **GitHub Actions CI/CD** -- automated build and test pipeline on every push and pull request.
 - **Docs search** -- Cmd+K full-text search across all 62 documentation pages.
 - **CONTRIBUTING.md and CHANGELOG.md** -- contribution guidelines and a detailed changelog are now included in the repository.
-- **85 unit tests** -- Intent Parser, RBAC, FileStorage, Identity, and more.
+- **94 unit tests** -- Intent Parser, RBAC, FileStorage, Identity, and more.
 
 ## Quick Start
 

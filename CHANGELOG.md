@@ -4,9 +4,18 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [0.1.0] - 2026-03-21
+## [0.1.0] - 2026-03-22
 
 ### Added
+- Discord OAuth install endpoint (`GET /api/discord/install`) for streamlined bot setup
+- Image vision for Discord, Telegram, and WhatsApp channels (previously Slack-only)
+- Agent state persistence: suspend/resume/autonomy changes saved to `.codespar/agent-states.json`, survives server restarts
+- Channel configure endpoint (`POST /api/channels/configure`) for programmatic channel setup
+- Admin panel with waitlist management and newsletter subscriber overview (`/dashboard/admin`)
+- Billing and usage tracking page with API metrics, agent stats, and rate limit visualization (`/dashboard/admin/billing`)
+- Unit tests: 94 tests (was 85)
+
+### Previously added
 - Six agent types: Project (persistent), Task/Dev, Review, Deploy, Incident (ephemeral), Coordinator (persistent)
 - Five channel adapters: Slack (Socket Mode), WhatsApp (Evolution API v2.3.7), Discord, Telegram, CLI
 - Dev Agent: reads codebase via GitHub API, creates PRs with Claude Sonnet, diff-based edits (SEARCH/REPLACE format)
@@ -48,7 +57,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - CONTRIBUTING.md with contribution guidelines, code of conduct, and PR workflow
 - Documentation site: 62 pages (docs.codespar.dev, Fumadocs MDX)
 - Docs search: Cmd+K full-text search across all documentation pages
-- Unit tests: 85 tests (Intent Parser, RBAC, FileStorage, Identity)
+- Unit tests: 94 tests (Intent Parser, RBAC, FileStorage, Identity)
 
 ### Infrastructure
 - Turborepo monorepo with 13 TypeScript packages

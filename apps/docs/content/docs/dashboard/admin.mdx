@@ -1,0 +1,42 @@
+---
+title: Admin Panel
+description: Waitlist management, subscriber overview, and usage metrics.
+---
+
+# Admin Panel
+
+The Admin Panel provides organization owners with tools to manage waitlist subscribers, view newsletter signups, and monitor usage. It is accessible at `/dashboard/admin`.
+
+## Access
+
+The Admin Panel is restricted to users with the **owner** role in their organization. Other roles (maintainer, operator, reviewer, read-only) cannot access admin routes. Attempting to navigate to `/dashboard/admin` without owner permissions returns a 403 error.
+
+## Waitlist Tab
+
+The Waitlist tab displays all subscribers whose source is `waitlist`. This is the primary tool for reviewing and approving early access requests.
+
+Each row in the waitlist table shows:
+
+| Field | Description |
+|-------|-------------|
+| Email | The subscriber's email address |
+| Company | Company name (if provided during signup) |
+| Role | Job title or role (if provided) |
+| Date | When the subscriber joined the waitlist |
+| Actions | Approve button to grant access |
+
+Subscribers appear in reverse chronological order (newest first). The approve button moves a subscriber from the waitlist to an active user.
+
+### Future: Approval Emails
+
+When the approval flow is complete, clicking **Approve** will send an invite email to the subscriber via the Resend API. The email will contain onboarding instructions and a link to set up their account.
+
+## Newsletter Tab
+
+The Newsletter tab lists all blog subscribers (source `newsletter`). These are users who subscribed through the blog or marketing site, separate from the waitlist.
+
+The newsletter list is read-only in the admin panel. Subscriber management (subscribe, unsubscribe) is handled via the [Newsletter API](/docs/api/channels).
+
+## Subscriber Count
+
+The admin panel header displays the total subscriber count across both waitlist and newsletter sources. This provides a quick overview of signup activity without needing to switch tabs.

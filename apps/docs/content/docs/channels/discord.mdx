@@ -182,3 +182,70 @@ The bot lacks required permissions in the channel or server. Either:
 ### Rate limiting
 
 Discord enforces rate limits on API calls. CodeSpar handles this automatically with exponential backoff, but if you see delayed responses, check for excessive message volume in your channels.
+
+---
+
+## Add to Discord (OAuth Install)
+
+For a streamlined installation experience, CodeSpar provides an OAuth-based install flow. Instead of manually constructing an OAuth2 URL in the Developer Portal, you can use the built-in install endpoint.
+
+### Install Endpoint
+
+```
+GET /api/discord/install
+```
+
+This endpoint redirects the user to Discord's authorization URL with the correct scopes and permissions pre-configured. After the user authorizes the bot, Discord redirects back to your CodeSpar instance.
+
+The redirect URL is constructed using the `DISCORD_CLIENT_ID` environment variable:
+
+```
+https://discord.com/api/oauth2/authorize?client_id=<DISCORD_CLIENT_ID>&permissions=277025770560&scope=bot
+```
+
+### Environment Variable
+
+Add `DISCORD_CLIENT_ID` to your `.env` file to enable the OAuth install flow:
+
+```bash
+DISCORD_CLIENT_ID=your-discord-application-client-id
+```
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `DISCORD_CLIENT_ID` | For OAuth install | Application ID from the Discord Developer Portal (General Information tab) |
+
+This is separate from `DISCORD_BOT_TOKEN`. The client ID is public and safe to expose in URLs; the bot token must remain secret.
+
+---
+
+## Multi-Tenant Support
+
+Discord bots are inherently multi-tenant. A single bot token works across all servers (guilds) the bot has been added to. There is no per-server token or configuration required.
+
+When the bot receives a message, the Discord Gateway includes the guild ID and channel ID in the event payload. CodeSpar uses these identifiers to route messages to the correct project agent based on channel linking.
+
+This means:
+
+- One CodeSpar instance can serve multiple Discord servers simultaneously
+- Each server can have different channels linked to different projects
+- No additional configuration is needed per server beyond the initial bot invite
+
+---
+
+## Image Vision
+
+Discord supports image attachments natively. When a user attaches an image to a message that mentions the bot, CodeSpar extracts the image automatically and sends it to Claude for visual analysis.
+
+### How It Works
+
+1. The user sends a message with an image attachment: `@CodeSpar fix this UI bug [attached: screenshot.png]`
+2. The Discord adapter reads `message.attachments` from the event payload
+3. Each attachment has a public URL (`attachment.url`) that can be downloaded without authentication
+4. The image is downloaded, base64-encoded, and included as an image content block in the Claude request
+
+Unlike Slack (which requires `files:read` scope and bot token authentication), Discord attachment URLs are publicly accessible. No additional scopes or permissions are needed beyond the standard bot setup.
+
+### Supported Formats
+
+PNG, JPEG, GIF, and WEBP images up to 4 MB. Larger images are skipped with a warning. See [Image Vision](/docs/guides/image-vision) for full details.
