@@ -361,6 +361,24 @@ npm test       # run all tests
 | Dashboard | https://codespar.dev/dashboard |
 | Backend | codespar-production.up.railway.app |
 
+## Enterprise
+
+CodeSpar Enterprise adds production monitoring integrations, MCP connectors, and advanced incident response on top of the open source core.
+
+| Feature | Open Source (MIT) | Enterprise |
+|---------|------------------|------------|
+| Core engine | 6 agents, 5 channels, RBAC, audit | Included |
+| Integrations | GitHub webhooks (CI/CD) | Sentry, Datadog, PagerDuty, New Relic, Grafana, Jira, Linear |
+| Protocol | REST webhooks | MCP (Model Context Protocol), custom connectors |
+| Analysis | Build failure investigation | Production error root cause, performance regression |
+| Fix automation | PR creation via GitHub API | Auto-fix with test validation, staging deploy + verify |
+| Dashboard | Overview, audit, agents | Integration marketplace, SLA tracking, cost analytics |
+| Infrastructure | FileStorage, single instance | PostgreSQL, Redis, horizontal scaling |
+| Auth | Clerk basic | SSO/SAML, custom RBAC policies, audit compliance |
+| Support | Community (GitHub Issues) | Dedicated, SLA |
+
+Contact: [enterprise@codespar.dev](mailto:enterprise@codespar.dev)
+
 ## Contributing
 
 We welcome contributions. See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
