@@ -1,0 +1,277 @@
+---
+title: Enterprise Integrations
+description: Production monitoring, issue tracking, and CI/CD integrations for enterprise teams.
+---
+
+# Enterprise Integrations
+
+CodeSpar Enterprise extends the open source core with production monitoring, issue tracking, and CI/CD integrations. These connectors bridge external services with CodeSpar's agent system, enabling automated incident response and fix workflows.
+
+> Enterprise integrations are part of the `codespar-enterprise` repo (commercial license). The open source core includes GitHub webhook integration only. Contact [enterprise@codespar.dev](mailto:enterprise@codespar.dev) for access.
+
+## Architecture
+
+Enterprise integrations follow a pipeline architecture where external events flow through a normalized interface into the agent system:
+
+```
+External Service (Sentry, Linear, Jira, ...)
+       │
+       │  webhook POST
+       ▼
+┌──────────────────────┐
+│ IntegrationConnector  │  Parses webhook, verifies signature,
+│                       │  extracts structured data
+└──────────┬───────────┘
+           │
+           ▼
+┌──────────────────────┐
+│  IntegrationEvent     │  Normalized event with severity,
+│                       │  stack trace, affected files
+└──────────┬───────────┘
+           │
+           ▼
+┌──────────────────────┐
+│   Incident Agent      │  Correlates with recent commits,
+│                       │  identifies root cause
+└──────────┬───────────┘
+           │
+           ▼
+┌──────────────────────┐
+│    Dev Agent          │  Proposes fix, creates PR,
+│                       │  runs tests
+└──────────┬───────────┘
+           │
+           ▼
+        Pull Request
+```
+
+## IntegrationConnector Interface
+
+Every connector implements a common interface that normalizes external service data into a format the agent system understands:
+
+```typescript
+interface IntegrationConnector {
+  /** Unique identifier for this connector type */
+  type: string;
+
+  /** Parse an incoming webhook payload into an IntegrationEvent */
+  parseWebhook(payload: unknown, headers: Record<string, string>): IntegrationEvent;
+
+  /** Verify the webhook signature to prevent spoofing */
+  verifySignature(payload: string, signature: string): boolean;
+
+  /** Check if the external service is reachable */
+  healthCheck(): Promise<{ healthy: boolean; latencyMs: number }>;
+}
+```
+
+This uniform interface means the agent system does not need to know the specifics of each external service. The connector handles all the parsing and verification, and the agents work with normalized events.
+
+## IntegrationEvent
+
+The normalized event format that all connectors produce:
+
+```typescript
+interface IntegrationEvent {
+  /** Source connector type (e.g., "sentry", "linear", "jira") */
+  source: string;
+
+  /** Event type (e.g., "error", "issue_created", "alert") */
+  eventType: string;
+
+  /** Severity level */
+  severity: "info" | "warning" | "error" | "critical";
+
+  /** Human-readable title */
+  title: string;
+
+  /** Detailed description or error message */
+  description: string;
+
+  /** Stack trace, if available */
+  stackTrace?: string;
+
+  /** Files likely affected by this event */
+  affectedFiles?: string[];
+
+  /** Raw payload from the external service */
+  rawPayload: unknown;
+
+  /** Timestamp of the original event */
+  timestamp: string;
+}
+```
+
+## Available Connectors
+
+| Connector | Status | Description |
+|-----------|--------|-------------|
+| **Sentry** | Beta | Error monitoring -- new errors, regressions, spike detection |
+| **Linear** | Beta | Issue tracking -- new issues, status changes, assignments |
+| **Jira** | Beta | Issue tracking -- new tickets, transitions, comments |
+| **Datadog** | Planned | Infrastructure monitoring -- alerts, anomalies, SLO breaches |
+| **PagerDuty** | Planned | Incident management -- triggered/acknowledged/resolved incidents |
+| **New Relic** | Planned | APM -- error rates, response time degradation, deployment markers |
+| **Grafana** | Planned | Alerting -- threshold breaches, anomaly detection |
+
+## Sentry Integration
+
+The Sentry connector is the most mature enterprise integration. It demonstrates the full pipeline from external event to automated fix.
+
+### Setup
+
+1. Configure a Sentry webhook to point to your CodeSpar instance:
+   ```
+   https://your-codespar-instance.com/api/integrations/sentry/webhook
+   ```
+
+2. Set the webhook secret in your environment:
+   ```
+   SENTRY_WEBHOOK_SECRET=your-webhook-secret
+   SENTRY_DSN=https://...@sentry.io/...
+   ```
+
+3. Select which Sentry event types to forward (recommended: `error`, `issue`).
+
+### How It Works
+
+When a new error occurs in your application:
+
+1. **Sentry fires a webhook** with the error details, stack trace, and affected files
+2. **SentryConnector** parses the webhook, verifies the HMAC signature, and extracts the stack trace and affected file paths
+3. **IntegrationEvent** is created with severity, title, description, stack trace, and affected files
+4. **Incident Agent** receives the event, correlates the stack trace with recent commits (last 24h), and identifies which change likely introduced the error
+5. **Dev Agent** is spawned with the root cause analysis, proposes a fix, creates a branch, and opens a PR
+6. **Notification** is sent to the team's messaging channel with the error summary, root cause, and PR link
+
+### Example Flow
+
+```
+Sentry: New error in production
+        TypeError: Cannot read property 'email' of undefined
+        at UserService.getProfile (src/services/user-service.ts:42)
+
+CodeSpar: 🚨 Production Error (via Sentry)
+          ─────────────────
+          TypeError: Cannot read property 'email' of undefined
+          File: src/services/user-service.ts:42
+          First seen: 2 minutes ago
+          Events: 14
+
+          🔍 Correlating with recent commits...
+
+          Root cause: commit abc1234 ("refactor: update user model")
+          changed the User type to make 'profile' optional but
+          getProfile() does not handle the null case.
+
+          🔧 Dev Agent proposing fix...
+
+          ✅ PR #89 opened: "fix: handle null profile in getProfile"
+          Files changed: 1 | Lines: +5 / -1
+```
+
+## Linear and Jira Integration
+
+The Linear and Jira connectors follow the same pattern as Sentry but are triggered by issue tracker events instead of errors.
+
+### Use Cases
+
+- **New issue created** -- the Incident Agent analyzes the issue description, identifies relevant code, and either proposes a fix or provides context to the developer
+- **Issue assigned to CodeSpar** -- when an issue is assigned to the CodeSpar bot user, the Dev Agent automatically starts working on it
+- **Status change** -- the agent can react to status transitions (e.g., when an issue moves to "In Progress", the agent starts investigating)
+
+### Example: Linear Issue
+
+```
+Linear: New issue LIN-342 assigned to CodeSpar
+        Title: "API returns 500 when user has no avatar"
+        Priority: High
+
+CodeSpar: 📋 Issue Received (Linear LIN-342)
+          ─────────────────
+          "API returns 500 when user has no avatar"
+          Priority: High
+
+          🔍 Investigating...
+          Found: src/api/users.ts:67 -- avatar URL is dereferenced
+          without null check.
+
+          🔧 PR #91 opened: "fix: handle missing avatar in user API"
+          Linked to: LIN-342
+```
+
+## Framework Upgrade Guides
+
+CodeSpar Enterprise includes a knowledge base of framework upgrade guides that the Planning Agent and Dev Agent use when handling migration tasks:
+
+| Framework | Upgrade Path |
+|-----------|-------------|
+| Next.js | 14 to 15 |
+| React | 18 to 19 |
+| Angular | 16 to 18 |
+
+When you request a framework migration, the agent consults the relevant upgrade guide to understand breaking changes, deprecated APIs, and recommended migration patterns. This produces more accurate plans and fewer migration errors compared to relying on the model's general knowledge alone.
+
+```
+@codespar plan migrate from Next.js 14 to Next.js 15
+```
+
+The Planning Agent references the Next.js 14-to-15 upgrade guide and produces steps that account for specific breaking changes like the async request APIs, changed caching defaults, and updated configuration format.
+
+## Writing a Custom Connector
+
+To add a new integration, implement the `IntegrationConnector` interface:
+
+```typescript
+import { IntegrationConnector, IntegrationEvent } from '@codespar/types';
+
+export class CustomConnector implements IntegrationConnector {
+  type = 'custom-service';
+
+  parseWebhook(payload: unknown, headers: Record<string, string>): IntegrationEvent {
+    // Extract relevant data from the webhook payload
+    return {
+      source: this.type,
+      eventType: 'alert',
+      severity: 'warning',
+      title: payload.alertName,
+      description: payload.message,
+      stackTrace: payload.trace,
+      affectedFiles: payload.files,
+      rawPayload: payload,
+      timestamp: new Date().toISOString(),
+    };
+  }
+
+  verifySignature(payload: string, signature: string): boolean {
+    // Verify HMAC or other signature scheme
+    const expected = computeHmac(payload, process.env.CUSTOM_WEBHOOK_SECRET);
+    return timingSafeEqual(expected, signature);
+  }
+
+  async healthCheck(): Promise<{ healthy: boolean; latencyMs: number }> {
+    const start = Date.now();
+    const response = await fetch('https://custom-service.com/health');
+    return {
+      healthy: response.ok,
+      latencyMs: Date.now() - start,
+    };
+  }
+}
+```
+
+Register the connector in your CodeSpar configuration:
+
+```typescript
+import { registerConnector } from '@codespar/enterprise';
+import { CustomConnector } from './custom-connector';
+
+registerConnector(new CustomConnector());
+```
+
+## Contact
+
+For enterprise licensing, connector requests, or integration support:
+
+- Email: [enterprise@codespar.dev](mailto:enterprise@codespar.dev)
+- Website: [codespar.dev/enterprise](https://codespar.dev/enterprise)

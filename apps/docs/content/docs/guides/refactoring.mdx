@@ -1,0 +1,172 @@
+---
+title: Multi-file Refactoring
+description: How to use CodeSpar for large-scale code changes across many files.
+---
+
+# Multi-file Refactoring
+
+CodeSpar's Task Agent is optimized for refactoring operations that span many files. The combination of smart file selection, large context windows, and diff-based edits makes it effective for renaming functions across a codebase, updating import paths, extracting shared utilities, and other cross-cutting changes.
+
+## How It Works
+
+### 1. Smart File Picker
+
+When you send a refactoring instruction, the Task Agent uses Claude Haiku to select the most relevant files from the full repository tree. The picker analyzes your instruction and the repository structure to identify which files are likely to need changes.
+
+- Up to **15 files** are selected per task
+- Each file can contribute up to **30KB** of context
+- The picker considers file names, directory structure, and the nature of the instruction
+
+```
+@codespar instruct rename the "getUserById" function to "findUser" across the codebase
+
+CodeSpar: 🔍 Reading codebase...
+          Selected 12 files (of 847 in repo):
+            src/services/user-service.ts
+            src/controllers/user-controller.ts
+            src/routes/user-routes.ts
+            src/middleware/auth.ts
+            ... (8 more)
+```
+
+### 2. Refactoring-Optimized System Prompt
+
+For refactoring tasks, the system prompt instructs Claude to:
+
+- **Output diffs for ALL affected files**, not just the primary file
+- Use SEARCH/REPLACE format for precise, minimal changes
+- Consider ripple effects (imports, type references, test assertions)
+- Preserve existing code style and formatting
+
+This means Claude produces targeted diffs instead of rewriting entire files, keeping the output compact even when many files are affected.
+
+### 3. Diff-Based Edits (SEARCH/REPLACE)
+
+Changes are expressed as SEARCH/REPLACE blocks rather than full file contents. This format is both more precise and more token-efficient:
+
+```
+--- src/services/user-service.ts ---
+
+<<<< SEARCH
+export async function getUserById(id: string): Promise<User | null> {
+>>>>
+<<<< REPLACE
+export async function findUser(id: string): Promise<User | null> {
+>>>>
+
+--- src/controllers/user-controller.ts ---
+
+<<<< SEARCH
+import { getUserById } from '../services/user-service';
+>>>>
+<<<< REPLACE
+import { findUser } from '../services/user-service';
+>>>>
+
+<<<< SEARCH
+  const user = await getUserById(req.params.id);
+>>>>
+<<<< REPLACE
+  const user = await findUser(req.params.id);
+>>>>
+```
+
+### 4. Multi-Turn Continuation
+
+If Claude's response is truncated (due to output token limits), the Task Agent automatically requests a continuation. This is particularly important for large refactoring operations that affect many files -- the agent keeps requesting until all affected files have been covered.
+
+The continuation prompt includes context about which files have already been handled, so Claude picks up exactly where it left off without duplicating work.
+
+## Examples
+
+### Rename a Function Across the Codebase
+
+```
+@codespar instruct rename the "formatDate" utility to "toISOString" in all files
+```
+
+The agent finds every import and usage of `formatDate`, updates the function definition, all import statements, and all call sites.
+
+### Update Import Paths After Directory Restructure
+
+```
+@codespar instruct update all imports from "@/lib/utils" to "@/shared/utils" across the project
+```
+
+The agent identifies every file that imports from the old path and updates it to the new path, handling both named and default imports.
+
+### Extract Shared Utilities
+
+```
+@codespar instruct extract the validation logic that's duplicated in user-controller.ts and order-controller.ts into a shared validation utility
+```
+
+The agent reads both files, identifies the duplicated code, creates a new shared utility file, and updates both controllers to import from the shared module.
+
+### Convert Class Components to Hooks
+
+```
+@codespar instruct convert the UserProfile class component to a functional component with hooks
+```
+
+The agent rewrites the component from a class-based pattern to a functional pattern with `useState`, `useEffect`, and other hooks, preserving all existing behavior.
+
+### Update API Response Format
+
+```
+@codespar instruct change all API endpoints to return responses in the format { data: ..., meta: { timestamp, requestId } } instead of returning data directly
+```
+
+The agent finds all route handlers, wraps their return values in the new format, and updates corresponding tests and type definitions.
+
+## Tips for Effective Refactoring
+
+### Be Specific About What to Change
+
+More specific instructions produce better results:
+
+| Less effective | More effective |
+|----------------|----------------|
+| "clean up the auth code" | "extract the JWT verification logic from auth-middleware.ts into a separate jwt-utils.ts module" |
+| "refactor the database layer" | "replace all raw SQL queries in the user repository with Drizzle ORM query builder calls" |
+| "fix the imports" | "update all relative imports in src/components/ to use the @/components path alias" |
+
+### Mention File Patterns When Possible
+
+If you know which files or directories are affected, mention them explicitly:
+
+```
+@codespar instruct rename all "Handler" suffixes to "Controller" in the src/api/ directory
+```
+
+This helps the smart file picker focus on the right files and avoids selecting unrelated files that happen to match keywords.
+
+### Use Planning Agent for Very Large Refactors
+
+If your refactoring involves more than 15 files or has steps that depend on each other, consider using the [Planning Agent](/docs/agents/planning-agent) to break the work into sequential phases:
+
+```
+@codespar plan migrate the entire data layer from Mongoose to Drizzle ORM
+```
+
+This creates an ordered plan where each step builds on the previous one, which is more reliable than a single large refactoring task.
+
+### Review the PR Before Merging
+
+Refactoring PRs often touch many files. Always review the diff carefully to ensure:
+
+- All call sites were updated (no missed references)
+- Import paths are correct
+- Tests still pass (the agent updates test assertions, but edge cases can be missed)
+- No unintended changes were introduced
+
+## Limitations
+
+| Constraint | Value |
+|------------|-------|
+| Maximum files per task | 15 |
+| Maximum context per file | 30KB |
+| Total context window | Depends on model (Claude Sonnet: 200K tokens) |
+| Multi-turn continuations | Automatic, no limit |
+
+If your refactoring requires more than 15 files, the smart file picker selects the 15 most relevant ones. For broader changes, split the work into multiple `instruct` commands targeting different parts of the codebase, or use the Planning Agent for structured decomposition.
