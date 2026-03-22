@@ -12,7 +12,7 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { randomUUID } from "node:crypto";
-import type { AgentMemory, AuditEntry, NewsletterSubscriber, ProjectConfig, ProjectListEntry, SlackInstallation, StorageProvider } from "./types.js";
+import type { AgentMemory, AgentStateEntry, AuditEntry, ChannelConfig, NewsletterSubscriber, ProjectConfig, ProjectListEntry, SlackInstallation, StorageProvider } from "./types.js";
 import { createLogger } from "../observability/logger.js";
 
 const log = createLogger("storage");
@@ -42,6 +42,8 @@ export class FileStorage implements StorageProvider {
   private readonly projectsListPath: string;
   private readonly subscribersPath: string;
   private readonly slackInstallationsPath: string;
+  private readonly agentStatesPath: string;
+  private readonly channelConfigsPath: string;
 
   /**
    * @param baseDir  Root storage directory (default ".codespar")
@@ -58,6 +60,8 @@ export class FileStorage implements StorageProvider {
     this.projectsListPath = path.join(this.dir, "projects-list.json");
     this.subscribersPath = path.join(this.dir, "subscribers.json");
     this.slackInstallationsPath = path.join(this.dir, "slack-installations.json");
+    this.agentStatesPath = path.join(this.dir, "agent-states.json");
+    this.channelConfigsPath = path.join(this.dir, "channel-configs.json");
   }
 
   // ── Agent Memory ───────────────────────────────────────────────
@@ -259,6 +263,46 @@ export class FileStorage implements StorageProvider {
     await this.writeFile(this.slackInstallationsPath, filtered);
   }
 
+  // ── Agent State Persistence ─────────────────────────────────────
+
+  async saveAgentState(agentId: string, state: AgentStateEntry): Promise<void> {
+    const states = await this.readAgentStatesFile();
+    const index = states.findIndex((s) => s.agentId === agentId);
+    if (index >= 0) {
+      states[index] = state;
+    } else {
+      states.push(state);
+    }
+    await this.writeFile(this.agentStatesPath, states);
+  }
+
+  async getAgentState(agentId: string): Promise<AgentStateEntry | null> {
+    const states = await this.readAgentStatesFile();
+    return states.find((s) => s.agentId === agentId) ?? null;
+  }
+
+  async getAllAgentStates(): Promise<AgentStateEntry[]> {
+    return this.readAgentStatesFile();
+  }
+
+  // ── Channel Configuration ─────────────────────────────────────
+
+  async saveChannelConfig(channel: string, config: Record<string, string>): Promise<void> {
+    const configs = await this.readChannelConfigsFile();
+    configs[channel] = {
+      channel,
+      config,
+      configuredAt: new Date().toISOString(),
+      configuredBy: "dashboard",
+    };
+    await this.writeFile(this.channelConfigsPath, configs);
+  }
+
+  async getChannelConfig(channel: string): Promise<Record<string, string> | null> {
+    const configs = await this.readChannelConfigsFile();
+    return configs[channel]?.config ?? null;
+  }
+
   // ── Internal helpers ───────────────────────────────────────────
 
   private async ensureDir(): Promise<void> {
@@ -307,6 +351,24 @@ export class FileStorage implements StorageProvider {
       return JSON.parse(raw) as SlackInstallation[];
     } catch {
       return [];
+    }
+  }
+
+  private async readAgentStatesFile(): Promise<AgentStateEntry[]> {
+    try {
+      const raw = await fs.readFile(this.agentStatesPath, "utf-8");
+      return JSON.parse(raw) as AgentStateEntry[];
+    } catch {
+      return [];
+    }
+  }
+
+  private async readChannelConfigsFile(): Promise<Record<string, ChannelConfig>> {
+    try {
+      const raw = await fs.readFile(this.channelConfigsPath, "utf-8");
+      return JSON.parse(raw) as Record<string, ChannelConfig>;
+    } catch {
+      return {};
     }
   }
 

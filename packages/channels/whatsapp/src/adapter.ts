@@ -1,21 +1,22 @@
 /**
- * WhatsApp Channel Adapter — via Evolution API.
+ * WhatsApp Channel Adapter -- via Evolution API.
  *
  * Connects to an Evolution API instance (REST wrapper over Baileys,
  * community-maintained) that handles QR pairing, session persistence,
  * reconnection, and anti-ban. Messages arrive via webhook.
  *
  * ENV:
- *   EVOLUTION_API_URL      — Evolution API base URL (default: http://localhost:8084)
- *   EVOLUTION_API_KEY      — API authentication key
- *   EVOLUTION_INSTANCE     — Instance name (default: codespar)
- *   WHATSAPP_WEBHOOK_PORT  — Port for incoming webhooks (default: 3001)
- *   WHATSAPP_BOT_MENTION   — Bot mention pattern (default: @codespar)
+ *   EVOLUTION_API_URL      -- Evolution API base URL (default: http://localhost:8084)
+ *   EVOLUTION_API_KEY      -- API authentication key
+ *   EVOLUTION_INSTANCE     -- Instance name (default: codespar)
+ *   WHATSAPP_WEBHOOK_PORT  -- Port for incoming webhooks (default: 3001)
+ *   WHATSAPP_BOT_MENTION   -- Bot mention pattern (default: @codespar)
  */
 
 import Fastify, { type FastifyInstance } from "fastify";
 import { randomUUID } from "node:crypto";
 import type {
+  Attachment,
   ChannelAdapter,
   ChannelCapabilities,
   ChannelResponse,
@@ -39,6 +40,19 @@ interface EvolutionWebhookPayload {
     message?: {
       conversation?: string;
       extendedTextMessage?: { text?: string };
+      imageMessage?: {
+        url?: string;
+        mediaUrl?: string;
+        directPath?: string;
+        mimetype?: string;
+        caption?: string;
+      };
+      documentMessage?: {
+        url?: string;
+        mediaUrl?: string;
+        mimetype?: string;
+        fileName?: string;
+      };
     };
     pushName?: string;
     messageTimestamp?: number;
@@ -92,7 +106,7 @@ export class WhatsAppAdapter implements ChannelAdapter {
     const connected = await this.isInstanceConnected();
 
     if (!connected) {
-      // 2. Try to create the instance (idempotent — may already exist)
+      // 2. Try to create the instance (idempotent -- may already exist)
       await this.ensureInstance();
 
       // 3. Fetch QR code for pairing
@@ -119,7 +133,7 @@ export class WhatsAppAdapter implements ChannelAdapter {
         headers: this.headers,
       });
     } catch {
-      // Ignore errors during logout — instance may already be gone
+      // Ignore errors during logout -- instance may already be gone
     }
 
     if (this.webhookServer) {
@@ -139,7 +153,7 @@ export class WhatsAppAdapter implements ChannelAdapter {
   }
 
   // ---------------------------------------------------------------------------
-  // sendToChannel() — send to group or individual chat
+  // sendToChannel() -- send to group or individual chat
   // ---------------------------------------------------------------------------
 
   async sendToChannel(
@@ -154,7 +168,7 @@ export class WhatsAppAdapter implements ChannelAdapter {
   }
 
   // ---------------------------------------------------------------------------
-  // sendDM() — send private message to a user
+  // sendDM() -- send private message to a user
   // ---------------------------------------------------------------------------
 
   async sendDM(userId: string, response: ChannelResponse): Promise<void> {
@@ -242,7 +256,7 @@ export class WhatsAppAdapter implements ChannelAdapter {
       // If we get a raw code, print it directly; otherwise decode the base64.
       const qrString = body.code || body.base64 || "";
       if (!qrString) {
-        console.log("[whatsapp] No QR code returned — instance may already be paired.");
+        console.log("[whatsapp] No QR code returned -- instance may already be paired.");
         return;
       }
 
@@ -278,18 +292,53 @@ export class WhatsAppAdapter implements ChannelAdapter {
       // Skip our own messages
       if (key.fromMe) return { ok: true };
 
-      // Skip non-text messages
+      // Skip messages with no content at all
       if (!message) return { ok: true };
 
       const rawText =
         message.conversation ||
         message.extendedTextMessage?.text ||
+        message.imageMessage?.caption ||
         "";
-
-      if (!rawText) return { ok: true };
 
       const remoteJid = key.remoteJid;
       if (!remoteJid) return { ok: true };
+
+      // Extract attachments (images, documents)
+      const attachments: Attachment[] = [];
+
+      if (message.imageMessage) {
+        const mediaUrl =
+          message.imageMessage.url ||
+          message.imageMessage.mediaUrl ||
+          message.imageMessage.directPath;
+        if (mediaUrl) {
+          attachments.push({
+            type: "image",
+            url: mediaUrl,
+            mimeType: message.imageMessage.mimetype || "image/jpeg",
+            filename: "whatsapp_image.jpg",
+          });
+        }
+      }
+
+      if (message.documentMessage) {
+        const mediaUrl =
+          message.documentMessage.url ||
+          message.documentMessage.mediaUrl;
+        if (mediaUrl) {
+          const isImage = message.documentMessage.mimetype?.startsWith("image/") ?? false;
+          attachments.push({
+            type: isImage ? "image" : "file",
+            url: mediaUrl,
+            mimeType: message.documentMessage.mimetype || "application/octet-stream",
+            filename: message.documentMessage.fileName || "document",
+          });
+        }
+      }
+
+      // Skip messages with no text and no attachments
+      if (!rawText && attachments.length === 0) return { ok: true };
 
       const isDM = !remoteJid.endsWith("@g.us");
       const mentionPattern = this.botMention.toLowerCase();
@@ -311,6 +360,7 @@ export class WhatsAppAdapter implements ChannelAdapter {
         isDM,
         isMentioningBot: isDM || isMentioningBot,
         text: cleanText,
+        ...(attachments.length > 0 ? { attachments } : {}),
         timestamp: new Date((messageTimestamp ?? 0) * 1000),
       };
 

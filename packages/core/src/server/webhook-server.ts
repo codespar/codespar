@@ -27,7 +27,7 @@ const newsletterLog = createLogger("newsletter");
 import { GitHubClient } from "../github/github-client.js";
 import type { AgentStatus, AgentState, AgentConfig, AutonomyLevel } from "../types/agent.js";
 import type { ChannelAdapter } from "../types/channel-adapter.js";
-import type { StorageProvider, ProjectConfig, ProjectListEntry, SlackInstallation } from "../storage/types.js";
+import type { StorageProvider, ProjectConfig, ProjectListEntry, SlackInstallation, AgentStateEntry } from "../storage/types.js";
 import { FileStorage } from "../storage/file-storage.js";
 import type { ApprovalManager } from "../approval/approval-manager.js";
 import type { IdentityStore } from "../auth/identity-store.js";
@@ -785,6 +785,12 @@ export class WebhookServer {
           // Persist via storage
           if (this.storageProvider) {
             await this.storageProvider.setMemory(id, "autonomyLevel", level);
+            await this.storageProvider.saveAgentState(id, {
+              agentId: id,
+              state: "active",
+              autonomyLevel: level,
+              updatedAt: new Date().toISOString(),
+            });
             await this.storageProvider.appendAudit({
               actorType: "user",
               actorId: "dashboard",
@@ -828,6 +834,14 @@ export class WebhookServer {
         const newState: AgentState = action === "suspend" ? "SUSPENDED" : "IDLE";
 
         if (this.storageProvider) {
+          // Persist agent state so it survives restart
+          const currentLevel = (agentStatus as unknown as Record<string, unknown>).autonomyLevel as number ?? 1;
+          await this.storageProvider.saveAgentState(id, {
+            agentId: id,
+            state: action === "suspend" ? "suspended" : "active",
+            autonomyLevel: currentLevel,
+            updatedAt: new Date().toISOString(),
+          });
           await this.storageProvider.appendAudit({
             actorType: "user",
             actorId: "dashboard",
@@ -936,6 +950,61 @@ export class WebhookServer {
           const msg = err instanceof Error ? err.message : String(err);
           return reply.status(500).send({ error: `Reconnect failed: ${msg}` });
         }
+      }
+    );
+
+    // ── Channel configure (store credentials for onboarding) ──
+    route("post", "/api/channels/configure",
+      async (request: any, reply: any) => {
+        const { channel, config } = request.body as {
+          channel?: string;
+          config?: Record<string, string>;
+        };
+
+        const validChannels = ["telegram", "whatsapp", "discord", "slack"];
+        if (!channel || !validChannels.includes(channel)) {
+          return reply.status(400).send({
+            error: `channel must be one of: ${validChannels.join(", ")}`,
+          });
+        }
+
+        if (!config || typeof config !== "object" || Object.keys(config).length === 0) {
+          return reply.status(400).send({
+            error: "config must be a non-empty object with string values",
+          });
+        }
+
+        // Validate that all config values are strings
+        for (const [key, value] of Object.entries(config)) {
+          if (typeof value !== "string") {
+            return reply.status(400).send({
+              error: `config.${key} must be a string`,
+            });
+          }
+        }
+
+        if (!this.storageProvider) {
+          return reply.status(500).send({ error: "Storage not configured" });
+        }
+
+        await this.storageProvider.saveChannelConfig(channel, config);
+
+        // Log to audit trail
+        await this.storageProvider.appendAudit({
+          actorType: "user",
+          actorId: "dashboard",
+          action: "channel.configure",
+          result: "success",
+          metadata: {
+            channel,
+            configKeys: Object.keys(config),
+            detail: `Channel ${channel} configured via dashboard`,
+          },
+        });
+
+        log.info("Channel configured", { channel, configKeys: Object.keys(config) });
+
+        return { success: true, channel, configured: true };
       }
     );
 
@@ -1331,6 +1400,25 @@ export class WebhookServer {
       const storage = this.storageProvider ?? new FileStorage(this.storageBaseDir);
       const installations = await storage.getAllSlackInstallations();
       return { installations };
+    });
+
+    // ── Discord install (multi-tenant bot invite) ─────────────────────
+    // Discord bots are inherently multi-tenant: one bot token works across
+    // all servers. This endpoint redirects to the Discord authorize URL so
+    // users can add the bot to their server.
+    route("get", "/api/discord/install", async (_request: any, reply: any) => {
+      const clientId = process.env.DISCORD_CLIENT_ID;
+      if (!clientId) {
+        return reply.status(503).send({ error: "Discord not configured. Set DISCORD_CLIENT_ID." });
+      }
+
+      // Permissions bitfield:
+      //   Send Messages (2048) + Read Message History (65536)
+      //   + Attach Files (32768) + Use Slash Commands (2147483648)
+      const permissions = "2147581952";
+      const scope = "bot";
+      const redirectUrl = `https://discord.com/api/oauth2/authorize?client_id=${encodeURIComponent(clientId)}&permissions=${permissions}&scope=${scope}`;
+      return reply.redirect(redirectUrl);
     });
 
     // GitHub webhook receiver

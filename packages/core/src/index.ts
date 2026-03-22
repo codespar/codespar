@@ -28,7 +28,9 @@ export { INTENT_RISK } from "./types/intent.js";
 // Storage
 export type {
   AgentMemory,
+  AgentStateEntry,
   AuditEntry,
+  ChannelConfig,
   NewsletterSubscriber,
   ProjectConfig,
   ProjectListEntry,
