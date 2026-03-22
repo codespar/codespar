@@ -47,6 +47,17 @@ export interface NewsletterSubscriber {
   confirmed: boolean;
 }
 
+export interface SlackInstallation {
+  teamId: string;
+  teamName: string;
+  botToken: string;
+  botUserId: string;
+  appId: string;
+  installedBy: string;
+  installedAt: string;
+  scopes: string[];
+}
+
 export interface StorageProvider {
   // Agent memory
   getMemory(agentId: string, key: string): Promise<unknown | null>;
@@ -68,6 +79,12 @@ export interface StorageProvider {
   getSubscribers(): Promise<NewsletterSubscriber[]>;
   removeSubscriber(email: string): Promise<void>;
   getSubscriberCount(): Promise<number>;
+
+  // Slack installations
+  saveSlackInstallation(installation: SlackInstallation): Promise<void>;
+  getSlackInstallation(teamId: string): Promise<SlackInstallation | null>;
+  getAllSlackInstallations(): Promise<SlackInstallation[]>;
+  removeSlackInstallation(teamId: string): Promise<void>;
 
   // Audit log
   appendAudit(

@@ -12,7 +12,7 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { randomUUID } from "node:crypto";
-import type { AgentMemory, AuditEntry, NewsletterSubscriber, ProjectConfig, ProjectListEntry, StorageProvider } from "./types.js";
+import type { AgentMemory, AuditEntry, NewsletterSubscriber, ProjectConfig, ProjectListEntry, SlackInstallation, StorageProvider } from "./types.js";
 import { createLogger } from "../observability/logger.js";
 
 const log = createLogger("storage");
@@ -41,6 +41,7 @@ export class FileStorage implements StorageProvider {
   private readonly projectsPath: string;
   private readonly projectsListPath: string;
   private readonly subscribersPath: string;
+  private readonly slackInstallationsPath: string;
 
   /**
    * @param baseDir  Root storage directory (default ".codespar")
@@ -56,6 +57,7 @@ export class FileStorage implements StorageProvider {
     this.projectsPath = path.join(this.dir, "projects.json");
     this.projectsListPath = path.join(this.dir, "projects-list.json");
     this.subscribersPath = path.join(this.dir, "subscribers.json");
+    this.slackInstallationsPath = path.join(this.dir, "slack-installations.json");
   }
 
   // ── Agent Memory ───────────────────────────────────────────────
@@ -229,6 +231,34 @@ export class FileStorage implements StorageProvider {
     return subscribers.length;
   }
 
+  // ── Slack Installations ──────────────────────────────────────────
+
+  async saveSlackInstallation(installation: SlackInstallation): Promise<void> {
+    const installations = await this.readSlackInstallationsFile();
+    const index = installations.findIndex((i) => i.teamId === installation.teamId);
+    if (index >= 0) {
+      installations[index] = installation;
+    } else {
+      installations.push(installation);
+    }
+    await this.writeFile(this.slackInstallationsPath, installations);
+  }
+
+  async getSlackInstallation(teamId: string): Promise<SlackInstallation | null> {
+    const installations = await this.readSlackInstallationsFile();
+    return installations.find((i) => i.teamId === teamId) ?? null;
+  }
+
+  async getAllSlackInstallations(): Promise<SlackInstallation[]> {
+    return this.readSlackInstallationsFile();
+  }
+
+  async removeSlackInstallation(teamId: string): Promise<void> {
+    const installations = await this.readSlackInstallationsFile();
+    const filtered = installations.filter((i) => i.teamId !== teamId);
+    await this.writeFile(this.slackInstallationsPath, filtered);
+  }
+
   // ── Internal helpers ───────────────────────────────────────────
 
   private async ensureDir(): Promise<void> {
@@ -266,6 +296,15 @@ export class FileStorage implements StorageProvider {
     try {
       const raw = await fs.readFile(this.subscribersPath, "utf-8");
       return JSON.parse(raw) as NewsletterSubscriber[];
+    } catch {
+      return [];
+    }
+  }
+
+  private async readSlackInstallationsFile(): Promise<SlackInstallation[]> {
+    try {
+      const raw = await fs.readFile(this.slackInstallationsPath, "utf-8");
+      return JSON.parse(raw) as SlackInstallation[];
     } catch {
       return [];
     }

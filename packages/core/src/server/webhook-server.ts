@@ -27,7 +27,7 @@ const newsletterLog = createLogger("newsletter");
 import { GitHubClient } from "../github/github-client.js";
 import type { AgentStatus, AgentState, AgentConfig, AutonomyLevel } from "../types/agent.js";
 import type { ChannelAdapter } from "../types/channel-adapter.js";
-import type { StorageProvider, ProjectConfig, ProjectListEntry } from "../storage/types.js";
+import type { StorageProvider, ProjectConfig, ProjectListEntry, SlackInstallation } from "../storage/types.js";
 import { FileStorage } from "../storage/file-storage.js";
 import type { ApprovalManager } from "../approval/approval-manager.js";
 import type { IdentityStore } from "../auth/identity-store.js";
@@ -1174,6 +1174,104 @@ export class WebhookServer {
         return { success: true };
       }
     );
+
+    // ── Slack OAuth 2.0 ─────────────────────────────────────────────
+
+    const SLACK_OAUTH_SCOPES = "app_mentions:read,chat:write,channels:read,files:read,users:read";
+
+    // Initiate Slack OAuth flow by redirecting to the Slack authorization page
+    route("get", "/api/slack/install", async (_request: any, reply: any) => {
+      const clientId = process.env.SLACK_CLIENT_ID;
+      if (!clientId) {
+        return reply.status(500).send({ error: "SLACK_CLIENT_ID is not configured" });
+      }
+
+      const redirectUri = process.env.SLACK_OAUTH_REDIRECT_URI || "";
+      const params = new URLSearchParams({
+        client_id: clientId,
+        scope: SLACK_OAUTH_SCOPES,
+        redirect_uri: redirectUri,
+      });
+
+      const authorizeUrl = `https://slack.com/oauth/v2/authorize?${params.toString()}`;
+      return reply.redirect(authorizeUrl);
+    });
+
+    // Handle OAuth callback from Slack, exchange code for bot token, and save installation
+    route("get", "/api/slack/callback", async (request: any, reply: any) => {
+      const { code, error: oauthError } = request.query as { code?: string; error?: string };
+
+      if (oauthError) {
+        log.warn("Slack OAuth denied", { error: oauthError });
+        return reply.redirect("/?slack=error&reason=denied");
+      }
+
+      if (!code) {
+        return reply.status(400).send({ error: "Missing authorization code" });
+      }
+
+      const clientId = process.env.SLACK_CLIENT_ID;
+      const clientSecret = process.env.SLACK_CLIENT_SECRET;
+      if (!clientId || !clientSecret) {
+        return reply.status(500).send({ error: "Slack OAuth credentials are not configured" });
+      }
+
+      try {
+        const tokenRes = await fetch("https://slack.com/api/oauth.v2.access", {
+          method: "POST",
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          body: new URLSearchParams({
+            client_id: clientId,
+            client_secret: clientSecret,
+            code,
+            redirect_uri: process.env.SLACK_OAUTH_REDIRECT_URI || "",
+          }),
+        });
+
+        const tokenData = await tokenRes.json() as {
+          ok: boolean;
+          error?: string;
+          team?: { id: string; name: string };
+          bot_user_id?: string;
+          app_id?: string;
+          access_token?: string;
+          authed_user?: { id: string };
+          scope?: string;
+        };
+
+        if (!tokenData.ok) {
+          log.error("Slack token exchange failed", { error: tokenData.error });
+          return reply.redirect("/?slack=error&reason=token_exchange");
+        }
+
+        const installation: SlackInstallation = {
+          teamId: tokenData.team?.id ?? "",
+          teamName: tokenData.team?.name ?? "",
+          botToken: tokenData.access_token ?? "",
+          botUserId: tokenData.bot_user_id ?? "",
+          appId: tokenData.app_id ?? "",
+          installedBy: tokenData.authed_user?.id ?? "",
+          installedAt: new Date().toISOString(),
+          scopes: tokenData.scope?.split(",") ?? [],
+        };
+
+        const storage = this.storageProvider ?? new FileStorage(this.storageBaseDir);
+        await storage.saveSlackInstallation(installation);
+
+        log.info("Slack installation saved", { teamId: installation.teamId, teamName: installation.teamName });
+        return reply.redirect("/?slack=success");
+      } catch (err) {
+        log.error("Slack OAuth callback error", { error: err instanceof Error ? err.message : String(err) });
+        return reply.redirect("/?slack=error&reason=internal");
+      }
+    });
+
+    // List all Slack installations (admin endpoint)
+    route("get", "/api/slack/installations", async (_request: any, _reply: any) => {
+      const storage = this.storageProvider ?? new FileStorage(this.storageBaseDir);
+      const installations = await storage.getAllSlackInstallations();
+      return { installations };
+    });
 
     // GitHub webhook receiver
     route("post", "/webhooks/github", async (request: any, reply: any) => {

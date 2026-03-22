@@ -32,6 +32,7 @@ export type {
   NewsletterSubscriber,
   ProjectConfig,
   ProjectListEntry,
+  SlackInstallation,
   StorageProvider,
 } from "./storage/index.js";
 
