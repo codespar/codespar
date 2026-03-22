@@ -61,6 +61,7 @@
 | Dashboard (codespar.dev/dashboard) | ✅ Working |
 | Docs Site (docs.codespar.dev, 62 pages) | ✅ Working |
 | Docs Search (Cmd+K) | ✅ Working |
+| MCP Server Generator (enterprise) | ✅ Working |
 
 ---
 

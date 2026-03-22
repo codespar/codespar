@@ -1,0 +1,175 @@
+---
+title: MCP Server Generator
+description: Generate MCP servers from any codebase without needing an OpenAPI specification.
+---
+
+# MCP Server Generator
+
+The MCP Server Generator is an enterprise feature that scans your source code for API endpoints and produces a complete, production-ready MCP server. It works directly with your codebase, so you do not need an OpenAPI specification or any other API documentation.
+
+> This feature is available in CodeSpar Enterprise (the `codespar-enterprise` repo). Contact [enterprise@codespar.dev](mailto:enterprise@codespar.dev) for access.
+
+## What It Does
+
+The generator performs three steps:
+
+1. **Scans source code** for API endpoint definitions (route handlers, decorators, middleware)
+2. **Generates MCP tool definitions** with parameter schemas, descriptions, and auth requirements
+3. **Outputs a complete MCP server** that speaks JSON-RPC 2.0 over stdio, ready to connect to any MCP client
+
+## Supported Frameworks
+
+| Framework | Detection Method |
+|-----------|-----------------|
+| **Express** | `app.get()`, `app.post()`, `router.use()`, middleware chains |
+| **Fastify** | `fastify.route()`, `fastify.get()`, schema definitions |
+| **Next.js (App Router)** | `route.ts` exports (`GET`, `POST`, `PUT`, `DELETE`, `PATCH`) |
+| **Next.js (Pages Router)** | `pages/api/*.ts` default exports with `req.method` checks |
+
+## What It Detects
+
+For each endpoint, the generator extracts:
+
+- **Route definitions**: HTTP method, path pattern, middleware stack
+- **Path parameters**: `/users/:id` becomes a required `id` parameter in the MCP tool schema
+- **Body fields**: TypeScript interfaces, Zod schemas, or inline type annotations used in request body parsing
+- **JSDoc descriptions**: `@description`, `@param`, and `@returns` tags are mapped to MCP tool descriptions
+- **Auth requirements**: middleware like `requireAuth`, `isAdmin`, or custom auth guards are noted in the tool metadata
+
+## How to Use
+
+From any messaging channel where your CodeSpar agent is active:
+
+```
+@codespar generate mcp-server
+```
+
+The agent scans the linked repository, generates the MCP server, and creates a PR with the output.
+
+## The Generated MCP Server
+
+The output is a self-contained TypeScript package that includes:
+
+- **JSON-RPC 2.0 over stdio**: compatible with any MCP client (Claude Desktop, Cursor, custom clients)
+- **Tool definitions**: one tool per API endpoint, with typed parameters and descriptions
+- **Auth header forwarding**: configurable auth headers passed through to the target API
+- **Fetch-based handlers**: each tool calls the original API endpoint using `fetch`, so no code duplication
+
+### Generated Structure
+
+```
+generated-mcp-server/
+  package.json
+  tsconfig.json
+  src/
+    index.ts          # MCP server entry point (stdio transport)
+    tools/
+      get-users.ts    # Tool: GET /api/users
+      create-user.ts  # Tool: POST /api/users
+      get-user.ts     # Tool: GET /api/users/:id
+    types.ts          # Shared types extracted from source
+```
+
+## Example
+
+Given this Express application:
+
+```typescript
+// src/routes/users.ts
+import { Router } from 'express';
+import { requireAuth } from '../middleware/auth';
+
+const router = Router();
+
+/**
+ * @description List all users with optional filtering
+ * @param role - Filter by user role
+ * @param limit - Maximum number of results (default: 50)
+ */
+router.get('/users', requireAuth, async (req, res) => {
+  const { role, limit = 50 } = req.query;
+  const users = await UserService.list({ role, limit: Number(limit) });
+  res.json(users);
+});
+
+/**
+ * @description Create a new user account
+ */
+router.post('/users', requireAuth, async (req, res) => {
+  const { email, name, role } = req.body;
+  const user = await UserService.create({ email, name, role });
+  res.status(201).json(user);
+});
+
+export default router;
+```
+
+The generator produces these MCP tools:
+
+```json
+{
+  "tools": [
+    {
+      "name": "list_users",
+      "description": "List all users with optional filtering",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "role": {
+            "type": "string",
+            "description": "Filter by user role"
+          },
+          "limit": {
+            "type": "number",
+            "description": "Maximum number of results (default: 50)"
+          }
+        }
+      }
+    },
+    {
+      "name": "create_user",
+      "description": "Create a new user account",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "email": { "type": "string" },
+          "name": { "type": "string" },
+          "role": { "type": "string" }
+        },
+        "required": ["email", "name", "role"]
+      }
+    }
+  ]
+}
+```
+
+Each tool handler calls the original API using `fetch` with configurable base URL and auth headers:
+
+```typescript
+// generated: src/tools/list-users.ts
+export async function listUsers(params: { role?: string; limit?: number }) {
+  const url = new URL('/users', process.env.API_BASE_URL);
+  if (params.role) url.searchParams.set('role', params.role);
+  if (params.limit) url.searchParams.set('limit', String(params.limit));
+
+  const response = await fetch(url.toString(), {
+    headers: { Authorization: `Bearer ${process.env.API_TOKEN}` },
+  });
+  return response.json();
+}
+```
+
+## Why This Matters
+
+90% of enterprise codebases do not have current OpenAPI specs. API documentation drifts out of sync within weeks of being written. The MCP Server Generator reads the source code directly, which means:
+
+- No manual spec maintenance
+- Always up to date with the actual implementation
+- Detects undocumented endpoints and parameters
+- Works with legacy codebases that never had documentation
+
+## Enterprise Only
+
+The MCP Server Generator is available in CodeSpar Enterprise (the `codespar-enterprise` repo, commercial license). It builds on the [Repository Index](/docs/guides/enterprise-integrations#repository-index) for codebase analysis and uses the same MCP infrastructure as the [Integration Connectors](/docs/guides/enterprise-integrations#available-connectors).
+
+Contact [enterprise@codespar.dev](mailto:enterprise@codespar.dev) for access and pricing.

@@ -20,6 +20,7 @@
     "waitlist",
     "parallel-tasks",
     "refactoring",
+    "mcp-generator",
     "enterprise-integrations"
   ]
 }
