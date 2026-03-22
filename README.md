@@ -28,6 +28,7 @@
 | Incident Agent (CI failure investigation) | ✅ Working |
 | Coordinator Agent (cross-project, cascading deploy) | ✅ Working |
 | Planning Agent (feature decomposition, 3-8 sub-tasks) | ✅ Working |
+| Lens Agent (data analysis, SQL queries, visualizations) | ✅ Working |
 | Parallel Task Execution (3 concurrent per agent) | ✅ Working |
 | Multi-file Refactoring (15 files, 30KB context) | ✅ Working |
 | RBAC (6 roles, 15 permissions) | ✅ Working |
@@ -225,6 +226,7 @@ Enable channels by setting their env vars. All channels are optional. Enable onl
 | `@codespar permissions` | Shows your roles and permissions |
 | `@codespar plan <feature>` | Breaks feature into 3-8 sequential sub-tasks |
 | `@codespar merge PR #<n> [squash\|rebase]` | Merges a pull request (default, squash, or rebase) |
+| `@codespar lens <question>` | Queries data, generates SQL, returns insights and visualization suggestions |
 | `@codespar help` | Shows all available commands |
 | Natural language | Works in any language (Portuguese, Spanish, etc.) |
 
@@ -242,7 +244,7 @@ The Dev Agent reads your actual codebase via the GitHub API, sends context to Cl
    → 3 files changed, 47 additions
 ```
 
-## Seven Agent Types
+## Eight Agent Types
 
 | Agent | Lifecycle | What it does |
 |-------|----------|-------------|
@@ -252,6 +254,7 @@ The Dev Agent reads your actual codebase via the GitHub API, sends context to Cl
 | **Deploy Agent** | Ephemeral | Orchestrates deploys with approvals and health monitoring. |
 | **Incident Agent** | Ephemeral | Investigates CI failures and production errors. Correlates with recent changes. |
 | **Planning Agent** | Ephemeral | Decomposes features into 3-8 ordered sub-tasks for structured execution. |
+| **Lens Agent** | Ephemeral | Queries databases, generates SQL, returns insights and visualization suggestions. |
 | **Coordinator** | Persistent | Cross-project orchestration. Cascading deploys, shared locks. |
 
 ## Five Channels, Same Syntax
@@ -377,7 +380,7 @@ CodeSpar Enterprise adds production monitoring integrations, MCP connectors, and
 
 | Feature | Open Source (MIT) | Enterprise |
 |---------|------------------|------------|
-| Core engine | 7 agents, 5 channels, RBAC, audit | Included |
+| Core engine | 8 agents, 5 channels, RBAC, audit | Included |
 | Integrations | GitHub webhooks (CI/CD) | Sentry, Datadog, PagerDuty, New Relic, Grafana, Jira, Linear |
 | Protocol | REST webhooks | MCP (Model Context Protocol), custom connectors |
 | Analysis | Build failure investigation | Production error root cause, performance regression |
