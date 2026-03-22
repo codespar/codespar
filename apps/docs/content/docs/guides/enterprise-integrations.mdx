@@ -1,11 +1,13 @@
 ---
-title: Enterprise Integrations
-description: Production monitoring, issue tracking, and CI/CD integrations for enterprise teams.
+title: "Enterprise Integrations — CodeSpar AgentGate"
+description: Production monitoring, issue tracking, MCP Server Generator, and CI/CD integrations for enterprise teams.
 ---
 
-# Enterprise Integrations
+# Enterprise Integrations — CodeSpar AgentGate
 
-CodeSpar Enterprise extends the open source core with production monitoring, issue tracking, and CI/CD integrations. These connectors bridge external services with CodeSpar's agent system, enabling automated incident response and fix workflows.
+CodeSpar AgentGate is the enterprise feature tier within CodeSpar Enterprise. It extends the open source core with production monitoring, issue tracking, and CI/CD integrations. These connectors bridge external services with CodeSpar's agent system, enabling automated incident response and fix workflows.
+
+AgentGate covers the full lifecycle from API discovery to production governance, including the [MCP Server Generator](/docs/guides/mcp-generator), the Repository Index, Integration Connectors, and Governance + Payments (coming soon).
 
 > Enterprise integrations are part of the `codespar-enterprise` repo (commercial license). The open source core includes GitHub webhook integration only. Contact [enterprise@codespar.dev](mailto:enterprise@codespar.dev) for access.
 
@@ -101,6 +103,12 @@ interface IntegrationEvent {
   timestamp: string;
 }
 ```
+
+## MCP Server Generator
+
+The MCP Server Generator scans your source code for API endpoints and produces a complete MCP server, without requiring an OpenAPI spec. It supports Express, Fastify, and Next.js (both App Router and Pages Router).
+
+See the full guide: [MCP Server Generator](/docs/guides/mcp-generator).
 
 ## Repository Index
 

@@ -7,6 +7,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [0.1.0] - 2026-03-22
 
 ### Added
+- MCP Server Generator: scan codebases and generate MCP servers from source code (enterprise)
 - Planning Agent: breaks features into 3-8 sequential sub-tasks with approval flow before execution
 - Parallel task execution: up to 3 concurrent tasks per Project Agent with automatic queue and dequeue
 - Multi-file refactoring: smart file picker selects up to 15 files, 30KB context per file, refactoring-optimized prompts
