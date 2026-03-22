@@ -15,7 +15,8 @@ export type AgentType =
   | "deploy"
   | "incident"
   | "coordinator"
-  | "planning";
+  | "planning"
+  | "lens";
 
 export type AgentState =
   | "INITIALIZING"

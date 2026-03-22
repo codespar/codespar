@@ -14,7 +14,8 @@
     "@codespar/agent-task": "*",
     "@codespar/agent-deploy": "*",
     "@codespar/agent-review": "*",
-    "@codespar/agent-incident": "*"
+    "@codespar/agent-incident": "*",
+    "@codespar/agent-lens": "0.1.0"
   },
   "devDependencies": {
     "typescript": "^5.8.0"
