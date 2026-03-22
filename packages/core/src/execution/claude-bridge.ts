@@ -254,9 +254,21 @@ export class ClaudeBridge {
           }
         }
 
+        console.log(`[claude-bridge] Downloading image: ${img.url.slice(0, 100)}`);
+        console.log(`[claude-bridge] Auth header: ${headers["Authorization"] ? "Bearer ..." : "none"}`);
+
         const imgRes = await fetch(img.url, { headers, redirect: "follow" });
         if (!imgRes.ok) {
           console.log(`[claude-bridge] Image download failed: ${imgRes.status} ${img.url.slice(0, 80)}`);
+          continue;
+        }
+
+        const contentType = imgRes.headers.get("content-type") || "";
+        console.log(`[claude-bridge] Response content-type: ${contentType}`);
+
+        // If response is HTML, it's a login redirect, not an image
+        if (contentType.includes("text/html")) {
+          console.log(`[claude-bridge] Got HTML instead of image (auth redirect?), skipping`);
           continue;
         }
 
@@ -268,14 +280,27 @@ export class ClaudeBridge {
           continue;
         }
 
+        // Verify it looks like a real image (check magic bytes)
+        const firstBytes = new Uint8Array(buffer.slice(0, 4));
+        const isPNG = firstBytes[0] === 0x89 && firstBytes[1] === 0x50;
+        const isJPEG = firstBytes[0] === 0xFF && firstBytes[1] === 0xD8;
+        const isGIF = firstBytes[0] === 0x47 && firstBytes[1] === 0x49;
+        const isWEBP = firstBytes[0] === 0x52 && firstBytes[1] === 0x49;
+
+        if (!isPNG && !isJPEG && !isGIF && !isWEBP) {
+          const preview = Buffer.from(buffer.slice(0, 100)).toString("utf-8");
+          console.log(`[claude-bridge] Not a valid image file. First bytes: ${preview.slice(0, 80)}`);
+          continue;
+        }
+
         const base64 = Buffer.from(buffer).toString("base64");
 
-        // Clean media type: strip charset and parameters
-        // Claude only accepts: image/jpeg, image/png, image/gif, image/webp
-        let rawType = img.mimeType || imgRes.headers.get("content-type") || "image/png";
-        rawType = rawType.split(";")[0].trim().toLowerCase();
-        const allowedTypes = ["image/jpeg", "image/png", "image/gif", "image/webp"];
-        const mediaType = allowedTypes.includes(rawType) ? rawType : "image/png";
+        // Determine media type from actual content, not headers
+        let mediaType = "image/png";
+        if (isJPEG) mediaType = "image/jpeg";
+        else if (isPNG) mediaType = "image/png";
+        else if (isGIF) mediaType = "image/gif";
+        else if (isWEBP) mediaType = "image/webp";
 
         console.log(`[claude-bridge] Image loaded: ${mediaType}, ${(buffer.byteLength / 1024).toFixed(0)}KB`);
 
