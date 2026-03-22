@@ -4,6 +4,7 @@ export type {
   NewsletterSubscriber,
   ProjectConfig,
   ProjectListEntry,
+  SlackInstallation,
   StorageProvider,
 } from "./types.js";
 
