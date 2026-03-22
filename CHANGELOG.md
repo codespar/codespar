@@ -11,6 +11,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Parallel task execution: up to 3 concurrent tasks per Project Agent with automatic queue and dequeue
 - Multi-file refactoring: smart file picker selects up to 15 files, 30KB context per file, refactoring-optimized prompts
 - Enterprise connectors: Sentry (Beta), Linear (Beta), Jira (Beta) integrations with IntegrationConnector interface; framework upgrade guides for Next.js 14-15, React 18-19, Angular 16-18 (codespar-enterprise repo, commercial license)
+- Enterprise repo index: full repository indexing with symbol extraction, dependency graph, and semantic search for cross-repo refactoring and framework migration
+- Dashboard Integrations page: 17 services across 4 categories (Monitoring, Issue Tracking, CI/CD, Communication) with inline configuration
 - Discord OAuth install endpoint (`GET /api/discord/install`) for streamlined bot setup
 - Image vision for Discord, Telegram, and WhatsApp channels (previously Slack-only)
 - Agent state persistence: suspend/resume/autonomy changes saved to `.codespar/agent-states.json`, survives server restarts
