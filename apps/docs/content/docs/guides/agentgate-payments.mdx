@@ -1,0 +1,105 @@
+---
+title: AgentGate Payments
+description: Cross-border payment orchestration for agent-initiated transactions.
+---
+
+AgentGate Payments provides a unified payment layer for agent-to-agent and agent-to-vendor transactions. It handles routing, currency conversion, escrow, and authorization mandates across multiple payment rails.
+
+<Callout type="info">
+AgentGate Payments is an **enterprise-only** feature. Contact [enterprise@codespar.dev](mailto:enterprise@codespar.dev) for access.
+</Callout>
+
+## Payment Router
+
+The Payment Router selects the optimal path for each transaction based on destination, currency pair, and cost. Supported payment methods:
+
+| Method | Currencies | Fee | Settlement |
+|--------|-----------|-----|------------|
+| Stripe ACP | USD, EUR, GBP, CAD, AUD | 2.9% + $0.30 | 2 days |
+| Pix | BRL | 0.5% | Instant |
+| SEPA | EUR | 0.1% + €0.20 | 1 day |
+| USDC | USD, EUR, BRL | 0.1% | 1 min |
+| Wire Transfer | USD, EUR, GBP, JPY | $25 flat | 3 days |
+| ACH | USD | 0.8% | 3 days |
+
+The router considers three factors when selecting a path:
+
+1. **Availability** -- whether the method supports the target currency and region.
+2. **Total cost** -- the sum of processing fees and FX spread for the currency pair.
+3. **Settlement speed** -- prioritized when the agent or mandate specifies urgency.
+
+## Currency Support
+
+AgentGate Payments supports 12 currencies with real-time FX quotes sourced from multiple providers:
+
+- **Americas:** USD, CAD, BRL
+- **Europe:** EUR, GBP, CHF
+- **Asia-Pacific:** JPY, AUD, SGD
+- **Stablecoins:** USDC, USDT, DAI
+
+FX rates are refreshed every 60 seconds. Each quote includes the mid-market rate, the applied spread, and the total cost breakdown so agents can make informed routing decisions.
+
+## Cost Optimization
+
+When an agent initiates a payment, the router evaluates all eligible methods and selects the cheapest route. The cost calculation includes:
+
+- **Processing fee** -- the base fee charged by the payment method.
+- **FX spread** -- the markup over mid-market rate for cross-currency transactions.
+- **Settlement cost** -- opportunity cost of delayed settlement, weighted by mandate urgency.
+
+Agents can override the automatic selection by specifying a preferred method in the payment request.
+
+## Escrow
+
+Escrow contracts hold funds during agent-to-agent or agent-to-vendor transactions until predefined conditions are met.
+
+### How it works
+
+1. The payer agent creates an escrow contract specifying the amount, payee, hold percentage, and release conditions.
+2. Funds are locked in the escrow account. The hold percentage determines how much of the total amount is held (10% for partial holds, 100% for full holds).
+3. When the conditions are satisfied (e.g., delivery confirmed, milestone approved), the payer or an authorized agent releases the funds.
+4. If conditions are not met before the expiration date, the funds are returned to the payer.
+
+### Dispute Resolution
+
+If a dispute arises, the escrow contract enters a `disputed` state. Resolution requires:
+
+- A human operator with `owner` or `maintainer` role to review the dispute.
+- Evidence submitted by both parties through the dashboard or channel commands.
+- A final decision recorded in the audit trail with hash chain integrity.
+
+## Mandates
+
+Mandates are HMAC-signed authorization tokens that grant agents permission to execute payments within defined limits.
+
+### Mandate Types
+
+- **Payment mandate** -- authorizes a single payment up to a specified amount. One-time use by default.
+- **Delegation mandate** -- authorizes an agent to create sub-mandates for other agents, with a delegation cap that limits the total amount that can be delegated.
+
+### Properties
+
+| Property | Description |
+|----------|-------------|
+| `maxAmount` | Maximum amount the agent can spend per transaction |
+| `currency` | Currency the mandate is denominated in |
+| `expires` | Time-to-live for the mandate (e.g., 7 days, 30 days) |
+| `authorizedBy` | The user who created the mandate |
+| `type` | `payment` or `delegation` |
+
+### Security
+
+Each mandate is signed with HMAC-SHA256 using a per-tenant secret key. The signature covers the agent ID, amount, currency, expiration, and type. Mandates cannot be forged, extended, or reused after expiration.
+
+Mandate creation and revocation are recorded in the audit trail.
+
+## Dashboard
+
+The payments dashboard is available at `/dashboard/payments` and provides:
+
+- **Transaction history** -- all agent-initiated payments with amount, currency pair, method, fees, FX rate, status, and timestamps.
+- **Escrow management** -- active escrow contracts with status, conditions, expiration, and release actions.
+- **Mandate overview** -- active mandates with agent, authorization, limits, type, and revocation actions.
+- **Summary metrics** -- total volume, active escrow value, active mandate count, and total fees.
+
+Three tabs organize the data: Transactions, Payment Methods, and Escrow & Mandates.

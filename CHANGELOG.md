@@ -4,6 +4,23 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.3.0] - 2026-03-22
+
+### Added
+- AgentGate Payments: cross-border payment orchestration with routing (Stripe, Pix, SEPA, USDC, Wire, ACH), 12 currencies, FX quotes, escrow contracts, and HMAC-signed mandates (enterprise)
+- Dashboard Payments page: transaction history, escrow management, mandate overview at `/dashboard/payments`
+- Payments docs page: `guides/agentgate-payments.mdx`
+
+## [0.2.0] - 2026-03-22
+
+### Added
+- AgentGate Governance: policy engine with allow/deny, budget limits, rate limits, time windows, and approval requirements (enterprise)
+- Compliance templates: SOX, HIPAA, PCI-DSS pre-built rule sets
+- MCP Observability: tool metrics, hallucination detection, anomaly detection, cost reports
+- Drift Detection: monitors API changes that break MCP tool definitions
+- Secrets Vault: AES-256-GCM encrypted per-tenant credential storage
+- Governance docs page: `guides/agentgate-governance.mdx`
+
 ## [0.1.0] - 2026-03-22
 
 ### Added

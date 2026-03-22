@@ -1,0 +1,135 @@
+---
+title: AgentGate Governance
+description: Policy engine, compliance templates, and secrets management for agent operations.
+---
+
+AgentGate Governance provides the control plane for agent operations. It includes a policy engine, compliance templates, MCP observability, drift detection, and a secrets vault.
+
+<Callout type="info">
+AgentGate Governance is an **enterprise-only** feature. Contact [enterprise@codespar.dev](mailto:enterprise@codespar.dev) for access.
+</Callout>
+
+## Policy Engine
+
+The policy engine evaluates every agent action against a set of rules before execution. Policies are defined as JSON documents and stored per-tenant.
+
+### Rule Types
+
+| Rule Type | Description | Example |
+|-----------|-------------|---------|
+| Allow/Deny | Permit or block specific actions | Deny `deploy production` for agents below L4 |
+| Budget Limits | Cap spending per agent, per project, or per time window | Max $5,000/day for `agent-procurement` |
+| Rate Limits | Throttle action frequency | Max 10 deploys/hour per project |
+| Time Windows | Restrict actions to specific hours | No production deploys between 6 PM and 8 AM |
+| Approval Requirements | Require human approval for specific actions | Production deploys require 2 approvals |
+
+### Evaluation Order
+
+Policies are evaluated in this order:
+
+1. **Deny rules** -- if any deny rule matches, the action is blocked immediately.
+2. **Approval rules** -- if an approval rule matches, the action is queued for human review.
+3. **Budget and rate limits** -- checked against current counters.
+4. **Time windows** -- checked against the current time in the tenant's timezone.
+5. **Allow rules** -- if no allow rule matches, the action is blocked by default (deny-by-default).
+
+All policy evaluations are recorded in the audit trail.
+
+## Compliance Templates
+
+Pre-built rule sets for common regulatory frameworks. Each template installs a set of policies that enforce the framework's requirements.
+
+### Available Templates
+
+| Template | Framework | Key Policies |
+|----------|-----------|-------------|
+| SOX | Sarbanes-Oxley | Separation of duties, approval quorum for financial operations, audit retention (7 years) |
+| HIPAA | Health Insurance Portability and Accountability Act | Data access logging, encryption requirements, minimum necessary access |
+| PCI-DSS | Payment Card Industry Data Security Standard | Network segmentation, credential rotation, vulnerability scanning schedules |
+
+Templates can be customized after installation. Each policy within a template can be individually enabled, disabled, or modified.
+
+### Applying a Template
+
+Templates are applied through the dashboard at `/dashboard/policies` or via the API:
+
+```bash
+curl -X POST https://api.codespar.dev/v1/policies/templates/sox \
+  -H "Authorization: Bearer $API_KEY" \
+  -H "x-org-id: $ORG_ID"
+```
+
+## MCP Observability
+
+The MCP (Model Context Protocol) observability layer monitors all agent-tool interactions and provides metrics, anomaly detection, and cost tracking.
+
+### Tool Metrics
+
+For every MCP tool call, the system records:
+
+- **Call count** -- total invocations per tool, per agent, per time window.
+- **Success rate** -- percentage of calls that completed without errors.
+- **Latency** -- average and P95 response times.
+- **Cost** -- estimated cost per call based on token usage and API pricing.
+- **Trend** -- directional indicator (stable, up, down) based on the last 24 hours.
+
+### Hallucination Detection
+
+The system detects three types of hallucinations:
+
+1. **Unknown tool** -- the agent attempted to call a tool that does not exist in its MCP schema.
+2. **Invalid params** -- the agent provided parameters that do not match the tool's schema.
+3. **Type mismatch** -- the agent provided values of the wrong type for a tool parameter.
+
+Each hallucination event is logged with the agent ID, tool name, reason, and timestamp. Repeated hallucinations trigger an alert to the tenant's notification channel.
+
+### Anomaly Detection
+
+Statistical anomaly detection identifies unusual patterns in tool usage:
+
+- **Spike detection** -- sudden increase in call volume for a specific tool.
+- **Error rate deviation** -- success rate drops below the 7-day rolling average by more than 2 standard deviations.
+- **Cost anomalies** -- per-agent cost exceeds the 30-day rolling average by more than 50%.
+
+### Cost Reports
+
+Cost reports break down spending by agent, by tool, and by time period. Reports are available at `/dashboard/observability` and can be exported as CSV.
+
+## Drift Detection
+
+Drift detection monitors the APIs that MCP tool definitions depend on. When an external API changes its schema, endpoints, or behavior, the system detects the mismatch and alerts the tenant.
+
+### How it works
+
+1. The system periodically probes each registered API endpoint with a lightweight health check.
+2. Response schemas are compared against the stored MCP tool definitions.
+3. If a field is added, removed, or its type changes, a drift event is created.
+4. The drift event includes the affected tool, the specific field, the expected type, and the actual type.
+
+Drift events are surfaced in the dashboard and sent as notifications to the configured channel.
+
+## Secrets Vault
+
+The secrets vault provides AES-256-GCM encrypted, per-tenant credential storage for API keys, tokens, and other sensitive values that agents need to access external services.
+
+### Features
+
+- **Per-tenant isolation** -- each tenant's secrets are encrypted with a unique key derived from the tenant ID and a master key.
+- **Access control** -- secrets are scoped to specific agents and tools. An agent can only access secrets it has been explicitly granted.
+- **Rotation support** -- secrets can be rotated without downtime. The vault maintains the previous version for a configurable grace period.
+- **Audit logging** -- every secret read, write, and rotation is recorded in the audit trail.
+- **No plaintext storage** -- secrets are encrypted at rest and decrypted only in memory at the moment of use.
+
+### Dashboard
+
+The secrets vault is managed through the dashboard at `/dashboard/secrets`. The UI allows creating, viewing (masked), rotating, and deleting secrets. Secret values are never displayed in full after creation.
+
+## Dashboard Pages
+
+AgentGate Governance features are managed through three dashboard pages:
+
+| Page | Path | Purpose |
+|------|------|---------|
+| Policies | `/dashboard/policies` | Create, edit, and manage policy rules. Apply compliance templates. |
+| Observability | `/dashboard/observability` | Monitor tool metrics, hallucinations, anomalies, and costs. |
+| Secrets | `/dashboard/secrets` | Manage encrypted credentials for agent-tool integrations. |
