@@ -44,6 +44,7 @@ const COMMANDS_HELP = `Available commands:
   approve [token]           — Approve pending action
   autonomy [L0-L5]          — Set autonomy level
   prs [open|closed|all]     — List pull requests
+  merge PR #<number>        — Merge a pull request
   memory                    — Show agent memory stats
   whoami                    — Show your identity and linked channels
   register <name>           — Register your display name`;
@@ -278,6 +279,11 @@ export class ProjectAgent implements Agent {
 
       case "prs": {
         response = await this.handleListPRs(intent, message);
+        break;
+      }
+
+      case "merge": {
+        response = await this.handleMergePR(message, intent);
         break;
       }
 
@@ -936,6 +942,77 @@ export class ProjectAgent implements Agent {
     return {
       text: `[${this.config.id}] Recent activity (${entries.length} entries):\n${lines.join("\n")}`,
     };
+  }
+
+  private async handleMergePR(
+    message: NormalizedMessage,
+    intent: ParsedIntent,
+  ): Promise<ChannelResponse> {
+    if (!this.storage) {
+      return { text: `[${this.config.id}] No storage configured.` };
+    }
+
+    const config = await this.storage.getProjectConfig(this.config.id);
+    if (!config) {
+      return { text: `[${this.config.id}] No project linked. Use: link <repo-url>` };
+    }
+
+    const github = new GitHubClient();
+    if (!github.isConfigured()) {
+      return { text: `[${this.config.id}] GitHub not configured. Set GITHUB_TOKEN.` };
+    }
+
+    const prNumber = intent.params.prNumber ? parseInt(intent.params.prNumber, 10) : 0;
+    if (!prNumber) {
+      return { text: `[${this.config.id}] Usage: merge PR #<number>\n  Example: merge PR #42` };
+    }
+
+    const mergeMethod = (intent.params.mergeMethod || "merge") as "merge" | "squash" | "rebase";
+
+    // Get PR info first
+    const pr = await github.getPR(config.repoOwner, config.repoName, prNumber);
+    if (!pr) {
+      return { text: `[${this.config.id}] PR #${prNumber} not found in ${config.repoOwner}/${config.repoName}.` };
+    }
+
+    if (pr.state !== "open") {
+      return { text: `[${this.config.id}] PR #${prNumber} is already ${pr.state}.` };
+    }
+
+    // Merge
+    const result = await github.mergePR(config.repoOwner, config.repoName, prNumber, mergeMethod);
+
+    if (!result) {
+      return { text: `[${this.config.id}] Failed to merge PR #${prNumber}.` };
+    }
+
+    // Audit
+    await this.storage.appendAudit({
+      actorType: "user",
+      actorId: message.channelUserId,
+      action: "pr.merged",
+      result: result.merged ? "success" : "failure",
+      metadata: {
+        agentId: this.config.id,
+        project: this.config.projectId || "unknown",
+        risk: intent.risk,
+        detail: `PR #${prNumber} ${result.merged ? "merged" : "failed"} (${mergeMethod}): ${pr.title}`,
+        channel: message.channelType,
+      },
+    });
+
+    if (result.merged) {
+      return {
+        text: [
+          `[${this.config.id}] PR #${prNumber} merged (${mergeMethod})`,
+          `  Title: ${pr.title}`,
+          `  Author: ${pr.author}`,
+          `  ${pr.url}`,
+        ].join("\n"),
+      };
+    }
+
+    return { text: `[${this.config.id}] Failed to merge PR #${prNumber}: ${result.message}` };
   }
 
   private async handleListPRs(

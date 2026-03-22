@@ -146,6 +146,7 @@ const INTENT_PERMISSION: Record<IntentType, Permission | null> = {
   whoami: null, // always allowed — shows your own identity
   register: null, // always allowed — self-registration
   prs: "view_status", // listing PRs is read-only
+  merge: "approve_pr",
   unknown: null, // always allowed — agent will respond with help text
 };
 
