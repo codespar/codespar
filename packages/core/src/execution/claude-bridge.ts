@@ -324,6 +324,128 @@ export class ClaudeBridge {
     return contentParts.length > 1 ? contentParts : text;
   }
 
+  /**
+   * Recursively get the full file tree of a repository.
+   * GitHub contents API only returns one level, so we recurse into directories.
+   */
+  private async getFullFileTree(
+    github: GitHubClient,
+    owner: string,
+    repo: string,
+    path = "",
+    depth = 0,
+  ): Promise<string[]> {
+    if (depth > 4) return []; // Max 4 levels deep
+    const entries = await github.getFileTree(owner, repo, path);
+    const files: string[] = [];
+    for (const entry of entries) {
+      if (entry.type === "file") {
+        files.push(entry.path);
+      } else if (
+        entry.type === "dir" &&
+        !entry.path.startsWith(".") &&
+        entry.path !== "node_modules" &&
+        entry.path !== "dist" &&
+        entry.path !== ".next"
+      ) {
+        const nested = await this.getFullFileTree(github, owner, repo, entry.path, depth + 1);
+        files.push(...nested);
+      }
+    }
+    return files;
+  }
+
+  /**
+   * Use Claude to pick the most relevant files for an instruction.
+   * Sends the file tree and instruction, asks Claude to return file paths.
+   */
+  private async pickRelevantFiles(
+    apiKey: string,
+    instruction: string,
+    filePaths: string[],
+    imageUrls?: Array<{ url: string; mimeType?: string }>,
+  ): Promise<string[]> {
+    const model = process.env.NLU_MODEL || "claude-haiku-4-5-20251001";
+
+    const fileList = filePaths.slice(0, 500).join("\n");
+
+    const prompt = `You are a code assistant. Given a user's instruction and a list of file paths from a repository, pick the 3-8 most relevant files that would need to be read or modified to fulfill the instruction.
+
+INSTRUCTION: ${instruction}
+
+FILE TREE:
+${fileList}
+
+Respond with ONLY the file paths, one per line. No explanations, no markdown, no numbering. Just the raw file paths.`;
+
+    try {
+      const contentParts: Array<Record<string, unknown>> = [];
+
+      // Include images if available (helps Claude understand UI issues)
+      if (imageUrls && imageUrls.length > 0) {
+        for (const img of imageUrls) {
+          try {
+            const headers: Record<string, string> = {};
+            if (img.url.includes("slack") || img.url.includes("files.slack.com")) {
+              const slackToken = process.env.SLACK_BOT_TOKEN;
+              if (slackToken) headers["Authorization"] = `Bearer ${slackToken}`;
+            }
+            const imgRes = await fetch(img.url, { headers, redirect: "follow" });
+            if (!imgRes.ok) continue;
+            const ct = imgRes.headers.get("content-type") || "";
+            if (ct.includes("text/html")) continue;
+            const buffer = await imgRes.arrayBuffer();
+            if (buffer.byteLength > 4 * 1024 * 1024) continue;
+            const firstBytes = new Uint8Array(buffer.slice(0, 4));
+            const isPNG = firstBytes[0] === 0x89 && firstBytes[1] === 0x50;
+            const isJPEG = firstBytes[0] === 0xFF && firstBytes[1] === 0xD8;
+            if (!isPNG && !isJPEG) continue;
+            contentParts.push({
+              type: "image",
+              source: {
+                type: "base64",
+                media_type: isPNG ? "image/png" : "image/jpeg",
+                data: Buffer.from(buffer).toString("base64"),
+              },
+            });
+          } catch { /* skip */ }
+        }
+      }
+
+      contentParts.push({ type: "text", text: prompt });
+
+      const res = await fetch("https://api.anthropic.com/v1/messages", {
+        method: "POST",
+        headers: {
+          "x-api-key": apiKey,
+          "anthropic-version": "2023-06-01",
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          model,
+          max_tokens: 500,
+          messages: [{ role: "user", content: contentParts.length > 1 ? contentParts : prompt }],
+        }),
+        signal: AbortSignal.timeout(15000),
+      });
+
+      if (!res.ok) return [];
+
+      const data = (await res.json()) as { content?: Array<{ text?: string }> };
+      const text = data.content?.[0]?.text || "";
+
+      // Parse file paths from response (one per line, filter to paths that exist in our tree)
+      const pathSet = new Set(filePaths);
+      return text
+        .split("\n")
+        .map((line) => line.trim().replace(/^[-*\d.)\s]+/, "").trim())
+        .filter((line) => pathSet.has(line));
+    } catch (err) {
+      console.log(`[claude-bridge] File picker error: ${err instanceof Error ? err.message : String(err)}`);
+      return [];
+    }
+  }
+
   private async simulate(request: ExecutionRequest): Promise<ExecutionResult> {
     const startTime = Date.now();
     await new Promise((r) => setTimeout(r, 100 + Math.random() * 200));
@@ -366,45 +488,55 @@ export class ClaudeBridge {
     const { repoOwner, repoName, instruction } = request;
 
     try {
-      // 1. Search for relevant files
-      const searchTerms = instruction
-        .split(/\s+/)
-        .filter((w) => w.length > 3)
-        .slice(0, 3);
-      const searchResults = await github.searchCode(
-        repoOwner,
-        repoName,
-        searchTerms.join(" "),
+      // 1. Get the full file tree so Claude can pick the right files
+      const fullTree = await this.getFullFileTree(github, repoOwner, repoName);
+      const srcFiles = fullTree.filter(
+        (f) =>
+          f.endsWith(".ts") ||
+          f.endsWith(".tsx") ||
+          f.endsWith(".js") ||
+          f.endsWith(".jsx") ||
+          f.endsWith(".css") ||
+          f.endsWith(".json"),
       );
 
-      // 2. Read top relevant files (max 5, skip files > 20KB)
+      console.log(`[claude-bridge] File tree: ${srcFiles.length} source files in ${repoOwner}/${repoName}`);
+
+      // 2. Ask Claude which files are relevant to the instruction
+      const relevantPaths = await this.pickRelevantFiles(
+        apiKey, instruction, srcFiles, request.imageUrls,
+      );
+
+      console.log(`[claude-bridge] Claude picked ${relevantPaths.length} files: ${relevantPaths.join(", ")}`);
+
+      // 3. Read the selected files
       const fileContents: Array<{ path: string; content: string; sha: string }> = [];
-      for (const result of searchResults.slice(0, 5)) {
-        const file = await github.readFile(repoOwner, repoName, result.path);
+      for (const filePath of relevantPaths.slice(0, 8)) {
+        const file = await github.readFile(repoOwner, repoName, filePath);
         if (file && file.content.length < 20_000) {
           fileContents.push({
-            path: result.path,
+            path: filePath,
             content: file.content,
             sha: file.sha,
           });
         }
       }
 
-      // If no files found via search, get the file tree and pick likely candidates
+      // 4. Fallback: if Claude picked nothing or files don't exist, try keyword search
       if (fileContents.length === 0) {
-        const tree = await github.getFileTree(repoOwner, repoName);
-        const srcFiles = tree.filter(
-          (f) =>
-            f.type === "file" &&
-            (f.path.endsWith(".ts") ||
-              f.path.endsWith(".js") ||
-              f.path.endsWith(".tsx")),
+        console.log(`[claude-bridge] Claude file pick returned nothing, falling back to keyword search`);
+        const searchTerms = instruction
+          .split(/\s+/)
+          .filter((w) => w.length > 3)
+          .slice(0, 3);
+        const searchResults = await github.searchCode(
+          repoOwner, repoName, searchTerms.join(" "),
         );
-        for (const f of srcFiles.slice(0, 5)) {
-          const file = await github.readFile(repoOwner, repoName, f.path);
+        for (const result of searchResults.slice(0, 5)) {
+          const file = await github.readFile(repoOwner, repoName, result.path);
           if (file && file.content.length < 20_000) {
             fileContents.push({
-              path: f.path,
+              path: result.path,
               content: file.content,
               sha: file.sha,
             });
