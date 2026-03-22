@@ -247,32 +247,48 @@ export class ClaudeBridge {
       try {
         // Slack file URLs require bot token authentication
         const headers: Record<string, string> = {};
-        if (img.url.includes("slack")) {
+        if (img.url.includes("slack") || img.url.includes("files.slack.com")) {
           const slackToken = process.env.SLACK_BOT_TOKEN;
           if (slackToken) {
             headers["Authorization"] = `Bearer ${slackToken}`;
           }
         }
 
-        const imgRes = await fetch(img.url, { headers });
-        if (imgRes.ok) {
-          const buffer = await imgRes.arrayBuffer();
-          const base64 = Buffer.from(buffer).toString("base64");
-          const mediaType =
-            img.mimeType ||
-            imgRes.headers.get("content-type") ||
-            "image/png";
-          contentParts.push({
-            type: "image",
-            source: {
-              type: "base64",
-              media_type: mediaType,
-              data: base64,
-            },
-          });
+        const imgRes = await fetch(img.url, { headers, redirect: "follow" });
+        if (!imgRes.ok) {
+          console.log(`[claude-bridge] Image download failed: ${imgRes.status} ${img.url.slice(0, 80)}`);
+          continue;
         }
-      } catch {
-        // Skip failed image downloads silently
+
+        const buffer = await imgRes.arrayBuffer();
+
+        // Skip images larger than 4MB (Claude limit ~5MB, leave margin)
+        if (buffer.byteLength > 4 * 1024 * 1024) {
+          console.log(`[claude-bridge] Image too large: ${(buffer.byteLength / 1024 / 1024).toFixed(1)}MB, skipping`);
+          continue;
+        }
+
+        const base64 = Buffer.from(buffer).toString("base64");
+
+        // Clean media type: strip charset and parameters
+        // Claude only accepts: image/jpeg, image/png, image/gif, image/webp
+        let rawType = img.mimeType || imgRes.headers.get("content-type") || "image/png";
+        rawType = rawType.split(";")[0].trim().toLowerCase();
+        const allowedTypes = ["image/jpeg", "image/png", "image/gif", "image/webp"];
+        const mediaType = allowedTypes.includes(rawType) ? rawType : "image/png";
+
+        console.log(`[claude-bridge] Image loaded: ${mediaType}, ${(buffer.byteLength / 1024).toFixed(0)}KB`);
+
+        contentParts.push({
+          type: "image",
+          source: {
+            type: "base64",
+            media_type: mediaType,
+            data: base64,
+          },
+        });
+      } catch (err) {
+        console.log(`[claude-bridge] Image download error: ${err instanceof Error ? err.message : String(err)}`);
       }
     }
 

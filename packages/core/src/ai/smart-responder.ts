@@ -73,32 +73,35 @@ Keep responses under 300 words. Use bullet points for lists. Be direct and actio
       for (const img of imageUrls) {
         try {
           const headers: Record<string, string> = {};
-          if (img.url.includes("slack")) {
+          if (img.url.includes("slack") || img.url.includes("files.slack.com")) {
             const slackToken = process.env.SLACK_BOT_TOKEN;
             if (slackToken) {
               headers["Authorization"] = `Bearer ${slackToken}`;
             }
           }
 
-          const imgRes = await fetch(img.url, { headers });
-          if (imgRes.ok) {
-            const buffer = await imgRes.arrayBuffer();
-            const base64 = Buffer.from(buffer).toString("base64");
-            const mediaType =
-              img.mimeType ||
-              imgRes.headers.get("content-type") ||
-              "image/png";
-            contentParts.push({
-              type: "image",
-              source: {
-                type: "base64",
-                media_type: mediaType,
-                data: base64,
-              },
-            });
-          }
+          const imgRes = await fetch(img.url, { headers, redirect: "follow" });
+          if (!imgRes.ok) continue;
+
+          const buffer = await imgRes.arrayBuffer();
+          if (buffer.byteLength > 4 * 1024 * 1024) continue;
+
+          const base64 = Buffer.from(buffer).toString("base64");
+          let rawType = img.mimeType || imgRes.headers.get("content-type") || "image/png";
+          rawType = rawType.split(";")[0].trim().toLowerCase();
+          const allowedTypes = ["image/jpeg", "image/png", "image/gif", "image/webp"];
+          const mediaType = allowedTypes.includes(rawType) ? rawType : "image/png";
+
+          contentParts.push({
+            type: "image",
+            source: {
+              type: "base64",
+              media_type: mediaType,
+              data: base64,
+            },
+          });
         } catch {
-          // Skip failed image downloads silently
+          // Skip failed image downloads
         }
       }
 
@@ -190,32 +193,35 @@ Keep responses under 300 words. Use bullet points for lists. Be direct and actio
       for (const img of imageUrls) {
         try {
           const headers: Record<string, string> = {};
-          if (img.url.includes("slack")) {
+          if (img.url.includes("slack") || img.url.includes("files.slack.com")) {
             const slackToken = process.env.SLACK_BOT_TOKEN;
             if (slackToken) {
               headers["Authorization"] = `Bearer ${slackToken}`;
             }
           }
 
-          const imgRes = await fetch(img.url, { headers });
-          if (imgRes.ok) {
-            const buffer = await imgRes.arrayBuffer();
-            const base64 = Buffer.from(buffer).toString("base64");
-            const mediaType =
-              img.mimeType ||
-              imgRes.headers.get("content-type") ||
-              "image/png";
-            contentParts.push({
-              type: "image",
-              source: {
-                type: "base64",
-                media_type: mediaType,
-                data: base64,
-              },
-            });
-          }
+          const imgRes = await fetch(img.url, { headers, redirect: "follow" });
+          if (!imgRes.ok) continue;
+
+          const buffer = await imgRes.arrayBuffer();
+          if (buffer.byteLength > 4 * 1024 * 1024) continue;
+
+          const base64 = Buffer.from(buffer).toString("base64");
+          let rawType = img.mimeType || imgRes.headers.get("content-type") || "image/png";
+          rawType = rawType.split(";")[0].trim().toLowerCase();
+          const allowedTypes = ["image/jpeg", "image/png", "image/gif", "image/webp"];
+          const mediaType = allowedTypes.includes(rawType) ? rawType : "image/png";
+
+          contentParts.push({
+            type: "image",
+            source: {
+              type: "base64",
+              media_type: mediaType,
+              data: base64,
+            },
+          });
         } catch {
-          // Skip failed image downloads silently
+          // Skip failed image downloads
         }
       }
 
