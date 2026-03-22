@@ -544,11 +544,11 @@ Respond with ONLY the file paths, one per line. No explanations, no markdown, no
         }
       }
 
-      // 3. Build context for Claude
+      // 3. Build context for Claude (full file content, up to 15KB per file)
       const fileContext = fileContents
         .map(
           (f) =>
-            `### File: ${f.path}\n\`\`\`\n${f.content.slice(0, 5000)}\n\`\`\``,
+            `### File: ${f.path}\n\`\`\`\n${f.content.slice(0, 15000)}\n\`\`\``,
         )
         .join("\n\n");
 
@@ -560,14 +560,18 @@ ${fileContext}
 
 When given an instruction:
 1. Analyze the existing code
-2. Make the specific changes needed
-3. For EACH file you modify, output in this exact format:
+2. Make ONLY the specific changes needed
+3. For EACH file you modify, output ONLY the changed sections using this format:
 
-===FILE: path/to/file.ts===
-(complete updated file content)
+===DIFF: path/to/file.ts===
+<<<SEARCH
+(exact lines to find in the original file)
+>>>REPLACE
+(replacement lines)
 ===END===
 
-Only include files you actually change. Include the COMPLETE file content, not just the diff.
+You can have multiple SEARCH/REPLACE blocks per file. Keep each block small and focused.
+Do NOT output the entire file. Only output the specific lines that change, with enough context (2-3 surrounding lines) to locate them uniquely.
 Be precise and production-ready.`;
 
       const model = process.env.TASK_MODEL || "claude-sonnet-4-20250514";
@@ -578,46 +582,73 @@ Be precise and production-ready.`;
         request.imageUrls,
       );
 
-      const res = await fetch("https://api.anthropic.com/v1/messages", {
-        method: "POST",
-        headers: {
-          "x-api-key": apiKey,
-          "anthropic-version": "2023-06-01",
-          "content-type": "application/json",
-        },
-        body: JSON.stringify({
-          model,
-          max_tokens: 4000,
-          system: systemPrompt,
-          messages: [{ role: "user", content: userContent }],
-        }),
-        signal: AbortSignal.timeout(request.timeout ?? 120_000),
-      });
+      // Use multi-turn if needed: initial request + continuation
+      const messages: Array<Record<string, unknown>> = [
+        { role: "user", content: userContent },
+      ];
 
-      if (!res.ok) {
-        const errText = await res.text().catch(() => "");
-        return {
-          taskId: request.taskId,
-          status: "failed",
-          output: `API error: ${res.status} ${errText.slice(0, 200)}`,
-          durationMs: Date.now() - startTime,
-          exitCode: null,
-          simulated: false,
+      let fullOutput = "";
+
+      // Allow up to 2 turns (initial + 1 continuation)
+      for (let turn = 0; turn < 2; turn++) {
+        const res = await fetch("https://api.anthropic.com/v1/messages", {
+          method: "POST",
+          headers: {
+            "x-api-key": apiKey,
+            "anthropic-version": "2023-06-01",
+            "content-type": "application/json",
+          },
+          body: JSON.stringify({
+            model,
+            max_tokens: 8192,
+            system: systemPrompt,
+            messages,
+          }),
+          signal: AbortSignal.timeout(request.timeout ?? 120_000),
+        });
+
+        if (!res.ok) {
+          const errText = await res.text().catch(() => "");
+          return {
+            taskId: request.taskId,
+            status: "failed",
+            output: `API error: ${res.status} ${errText.slice(0, 200)}`,
+            durationMs: Date.now() - startTime,
+            exitCode: null,
+            simulated: false,
+          };
+        }
+
+        const data = (await res.json()) as {
+          content?: Array<{ text?: string }>;
+          stop_reason?: string;
         };
+        const turnOutput = data.content?.[0]?.text || "";
+        fullOutput += turnOutput;
+
+        // If Claude finished naturally, we're done
+        if (data.stop_reason !== "max_tokens") break;
+
+        // If truncated, ask to continue
+        console.log(`[claude-bridge] Response truncated at turn ${turn + 1}, requesting continuation`);
+        messages.push({ role: "assistant", content: turnOutput });
+        messages.push({ role: "user", content: "Continue from where you left off. Complete the remaining changes." });
       }
 
-      const data = (await res.json()) as { content?: Array<{ text?: string }> };
-      const output = data.content?.[0]?.text || "";
+      // 4. Parse file changes from Claude's output (supports both DIFF and FILE formats)
+      let fileChanges = parseDiffChanges(fullOutput, fileContents);
 
-      // 4. Parse file changes from Claude's output
-      const fileChanges = parseFileChanges(output);
+      // Fallback: try legacy ===FILE:=== format
+      if (fileChanges.length === 0) {
+        fileChanges = parseFileChanges(fullOutput);
+      }
 
       if (fileChanges.length === 0) {
-        // Claude gave advice but no file changes — return as-is
+        // Claude gave advice but no file changes
         return {
           taskId: request.taskId,
           status: "completed",
-          output: output.slice(0, 3000),
+          output: fullOutput.slice(0, 5000),
           durationMs: Date.now() - startTime,
           exitCode: 0,
           simulated: false,
@@ -699,7 +730,7 @@ Be precise and production-ready.`;
 }
 
 /**
- * Parse Claude's output for file change blocks.
+ * Parse Claude's output for file change blocks (legacy full-file format).
  *
  * Expected format:
  *   ===FILE: path/to/file.ts===
@@ -715,5 +746,97 @@ function parseFileChanges(
   while ((match = regex.exec(output)) !== null) {
     changes.push({ path: match[1].trim(), content: match[2].trim() });
   }
+  return changes;
+}
+
+/**
+ * Parse Claude's diff-based output and apply changes to original files.
+ *
+ * Expected format:
+ *   ===DIFF: path/to/file.ts===
+ *   <<<SEARCH
+ *   (lines to find)
+ *   >>>REPLACE
+ *   (replacement lines)
+ *   ===END===
+ */
+function parseDiffChanges(
+  output: string,
+  originalFiles: Array<{ path: string; content: string; sha: string }>,
+): Array<{ path: string; content: string }> {
+  const changes: Array<{ path: string; content: string }> = [];
+  const diffRegex = /===DIFF:\s*(.+?)===\n([\s\S]*?)===END===/g;
+  let diffMatch;
+
+  while ((diffMatch = diffRegex.exec(output)) !== null) {
+    const filePath = diffMatch[1].trim();
+    const diffBody = diffMatch[2];
+
+    // Find the original file
+    const original = originalFiles.find((f) => f.path === filePath);
+    if (!original) {
+      console.log(`[claude-bridge] Diff references unknown file: ${filePath}`);
+      continue;
+    }
+
+    let content = original.content;
+
+    // Apply each SEARCH/REPLACE block
+    const blockRegex = /<<<SEARCH\n([\s\S]*?)>>>REPLACE\n([\s\S]*?)(?=<<<SEARCH|$)/g;
+    let blockMatch;
+    let applied = 0;
+
+    while ((blockMatch = blockRegex.exec(diffBody)) !== null) {
+      const search = blockMatch[1].trimEnd();
+      const replace = blockMatch[2].trimEnd();
+
+      if (content.includes(search)) {
+        content = content.replace(search, replace);
+        applied++;
+      } else {
+        // Try with trimmed whitespace
+        const searchTrimmed = search.trim();
+        const lines = content.split("\n");
+        let found = false;
+        for (let i = 0; i < lines.length; i++) {
+          // Find a line that contains the first line of search
+          const firstSearchLine = searchTrimmed.split("\n")[0].trim();
+          if (lines[i].trim().includes(firstSearchLine.trim())) {
+            // Try matching from this position
+            const searchLines = searchTrimmed.split("\n");
+            let match = true;
+            for (let j = 0; j < searchLines.length && i + j < lines.length; j++) {
+              if (lines[i + j].trim() !== searchLines[j].trim()) {
+                match = false;
+                break;
+              }
+            }
+            if (match) {
+              const replaceLines = replace.trim().split("\n");
+              // Preserve original indentation of first line
+              const indent = lines[i].match(/^\s*/)?.[0] || "";
+              const indentedReplace = replaceLines.map((l, idx) =>
+                idx === 0 ? indent + l.trim() : indent + l.trim()
+              );
+              lines.splice(i, searchLines.length, ...indentedReplace);
+              content = lines.join("\n");
+              found = true;
+              applied++;
+              break;
+            }
+          }
+        }
+        if (!found) {
+          console.log(`[claude-bridge] Could not find search block in ${filePath}: ${search.slice(0, 60)}...`);
+        }
+      }
+    }
+
+    if (applied > 0) {
+      console.log(`[claude-bridge] Applied ${applied} diff block(s) to ${filePath}`);
+      changes.push({ path: filePath, content });
+    }
+  }
+
   return changes;
 }
