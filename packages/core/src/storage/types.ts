@@ -47,6 +47,20 @@ export interface NewsletterSubscriber {
   confirmed: boolean;
 }
 
+export interface AgentStateEntry {
+  agentId: string;
+  state: "active" | "suspended";
+  autonomyLevel: number;
+  updatedAt: string;
+}
+
+export interface ChannelConfig {
+  channel: string;
+  config: Record<string, string>;
+  configuredAt: string;
+  configuredBy: string;
+}
+
 export interface SlackInstallation {
   teamId: string;
   teamName: string;
@@ -85,6 +99,15 @@ export interface StorageProvider {
   getSlackInstallation(teamId: string): Promise<SlackInstallation | null>;
   getAllSlackInstallations(): Promise<SlackInstallation[]>;
   removeSlackInstallation(teamId: string): Promise<void>;
+
+  // Agent state persistence
+  saveAgentState(agentId: string, state: AgentStateEntry): Promise<void>;
+  getAgentState(agentId: string): Promise<AgentStateEntry | null>;
+  getAllAgentStates(): Promise<AgentStateEntry[]>;
+
+  // Channel configuration
+  saveChannelConfig(channel: string, config: Record<string, string>): Promise<void>;
+  getChannelConfig(channel: string): Promise<Record<string, string> | null>;
 
   // Audit log
   appendAudit(

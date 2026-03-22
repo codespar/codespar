@@ -241,3 +241,95 @@ describe("Projects List", () => {
     ).resolves.toBeUndefined();
   });
 });
+
+// ── Agent State Persistence ──────────────────────────────────────
+describe("Agent State Persistence", () => {
+  it("saveAgentState and getAgentState round-trip", async () => {
+    const state = {
+      agentId: "agent-1",
+      state: "suspended" as const,
+      autonomyLevel: 3,
+      updatedAt: "2025-01-01T00:00:00Z",
+    };
+    await storage.saveAgentState("agent-1", state);
+    const result = await storage.getAgentState("agent-1");
+    expect(result).toEqual(state);
+  });
+
+  it("getAgentState returns null for non-existent agent", async () => {
+    const result = await storage.getAgentState("no-agent");
+    expect(result).toBeNull();
+  });
+
+  it("saveAgentState overwrites existing entry", async () => {
+    await storage.saveAgentState("agent-1", {
+      agentId: "agent-1",
+      state: "active",
+      autonomyLevel: 1,
+      updatedAt: "2025-01-01T00:00:00Z",
+    });
+    await storage.saveAgentState("agent-1", {
+      agentId: "agent-1",
+      state: "suspended",
+      autonomyLevel: 4,
+      updatedAt: "2025-01-02T00:00:00Z",
+    });
+    const result = await storage.getAgentState("agent-1");
+    expect(result?.state).toBe("suspended");
+    expect(result?.autonomyLevel).toBe(4);
+  });
+
+  it("getAllAgentStates returns all entries", async () => {
+    await storage.saveAgentState("agent-1", {
+      agentId: "agent-1",
+      state: "active",
+      autonomyLevel: 1,
+      updatedAt: "2025-01-01T00:00:00Z",
+    });
+    await storage.saveAgentState("agent-2", {
+      agentId: "agent-2",
+      state: "suspended",
+      autonomyLevel: 0,
+      updatedAt: "2025-01-01T00:00:00Z",
+    });
+    const states = await storage.getAllAgentStates();
+    expect(states).toHaveLength(2);
+    expect(states.map((s) => s.agentId).sort()).toEqual(["agent-1", "agent-2"]);
+  });
+
+  it("getAllAgentStates returns empty array when no states", async () => {
+    const states = await storage.getAllAgentStates();
+    expect(states).toEqual([]);
+  });
+});
+
+// ── Channel Configuration ────────────────────────────────────────
+describe("Channel Configuration", () => {
+  it("saveChannelConfig and getChannelConfig round-trip", async () => {
+    const config = { botToken: "test-token-123" };
+    await storage.saveChannelConfig("telegram", config);
+    const result = await storage.getChannelConfig("telegram");
+    expect(result).toEqual(config);
+  });
+
+  it("getChannelConfig returns null for non-existent channel", async () => {
+    const result = await storage.getChannelConfig("nonexistent");
+    expect(result).toBeNull();
+  });
+
+  it("saveChannelConfig overwrites existing config", async () => {
+    await storage.saveChannelConfig("telegram", { botToken: "old-token" });
+    await storage.saveChannelConfig("telegram", { botToken: "new-token" });
+    const result = await storage.getChannelConfig("telegram");
+    expect(result?.botToken).toBe("new-token");
+  });
+
+  it("saveChannelConfig stores multiple channels independently", async () => {
+    await storage.saveChannelConfig("telegram", { botToken: "tg-token" });
+    await storage.saveChannelConfig("discord", { botToken: "dc-token" });
+    const tg = await storage.getChannelConfig("telegram");
+    const dc = await storage.getChannelConfig("discord");
+    expect(tg?.botToken).toBe("tg-token");
+    expect(dc?.botToken).toBe("dc-token");
+  });
+});

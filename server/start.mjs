@@ -133,6 +133,28 @@ for (const proj of savedProjects) {
 // 6. Start supervisor
 await supervisor.start();
 
+// 6b. Restore persisted agent states (suspend/resume and autonomy survive restart)
+try {
+  const savedStates = await storage.getAllAgentStates();
+  for (const savedState of savedStates) {
+    const restoredAgent = supervisor.getAgentById(savedState.agentId);
+    if (!restoredAgent) continue;
+
+    if (savedState.state === "suspended") {
+      // Record suspended state so the agent skips processing on next tick
+      console.log(`[server] Restoring suspended state for ${savedState.agentId}`);
+      await storage.setMemory(savedState.agentId, "suspendedState", "SUSPENDED");
+    }
+
+    if (savedState.autonomyLevel !== undefined && savedState.autonomyLevel !== 1) {
+      console.log(`[server] Restoring autonomy L${savedState.autonomyLevel} for ${savedState.agentId}`);
+      restoredAgent.config.autonomyLevel = savedState.autonomyLevel;
+    }
+  }
+} catch (err) {
+  console.error("[server] Failed to restore agent states:", err.message);
+}
+
 // 7. Start webhook server
 const webhookServer = new WebhookServer({ port });
 

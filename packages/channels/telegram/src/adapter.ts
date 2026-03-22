@@ -1,17 +1,18 @@
 /**
- * Telegram Channel Adapter — via grammy framework.
+ * Telegram Channel Adapter -- via grammy framework.
  *
  * Implements the ChannelAdapter interface using the grammy Bot API.
  * Connects via long polling, normalizes messages, and sends responses
  * with Markdown formatting.
  *
  * Required environment variables:
- *   TELEGRAM_BOT_TOKEN — Bot token from @BotFather
+ *   TELEGRAM_BOT_TOKEN -- Bot token from @BotFather
  */
 
 import { Bot } from "grammy";
 import { randomUUID } from "node:crypto";
 import type {
+  Attachment,
   ChannelAdapter,
   ChannelCapabilities,
   ChannelResponse,
@@ -39,11 +40,15 @@ export class TelegramAdapter implements ChannelAdapter {
     const me = await this.bot.api.getMe();
     this.botUsername = me.username ?? null;
 
-    // Register message handler — only process DMs or messages mentioning the bot
-    this.bot.on("message:text", async (ctx) => {
+    // Register message handler -- process text, photo, and document messages.
+    // Only process DMs or messages that mention the bot.
+    this.bot.on("message", async (ctx) => {
       if (!this.messageHandler) return;
 
-      const text = ctx.message.text ?? "";
+      const msg = ctx.message;
+
+      // Extract text from text messages or captions on media
+      const text = (msg as any).text ?? (msg as any).caption ?? "";
       const isDM = ctx.chat.type === "private";
 
       // Check if the message mentions the bot by @username
@@ -63,6 +68,48 @@ export class TelegramAdapter implements ChannelAdapter {
         cleanText = cleanText.replace(new RegExp(mentionPattern, "g"), "").trim();
       }
 
+      // Extract attachments (photos, documents)
+      const attachments: Attachment[] = [];
+
+      // Photos: array of PhotoSize objects, largest is last
+      const photo = (msg as any).photo;
+      if (photo && Array.isArray(photo) && photo.length > 0) {
+        const largest = photo[photo.length - 1];
+        try {
+          const fileInfo = await ctx.api.getFile(largest.file_id);
+          const fileUrl = `https://api.telegram.org/file/bot${token}/${fileInfo.file_path}`;
+          attachments.push({
+            type: "image",
+            url: fileUrl,
+            mimeType: "image/jpeg",
+            filename: `photo_${largest.file_id}.jpg`,
+          });
+        } catch {
+          // Skip if file link cannot be resolved
+        }
+      }
+
+      // Documents (files sent as attachments)
+      const document = (msg as any).document;
+      if (document) {
+        try {
+          const fileInfo = await ctx.api.getFile(document.file_id);
+          const fileUrl = `https://api.telegram.org/file/bot${token}/${fileInfo.file_path}`;
+          const isImage = document.mime_type?.startsWith("image/") ?? false;
+          attachments.push({
+            type: isImage ? "image" : "file",
+            url: fileUrl,
+            mimeType: document.mime_type || "application/octet-stream",
+            filename: document.file_name || "document",
+          });
+        } catch {
+          // Skip if file link cannot be resolved
+        }
+      }
+
+      // Skip messages with no text and no attachments
+      if (!cleanText && attachments.length === 0) return;
+
       const normalized: NormalizedMessage = {
         id: randomUUID(),
         channelType: "telegram",
@@ -71,7 +118,8 @@ export class TelegramAdapter implements ChannelAdapter {
         isDM,
         isMentioningBot: isDM || isMentioningBot,
         text: cleanText,
-        timestamp: new Date(ctx.message.date * 1000),
+        ...(attachments.length > 0 ? { attachments } : {}),
+        timestamp: new Date(msg.date * 1000),
       };
 
       await this.messageHandler(normalized);
@@ -109,7 +157,7 @@ export class TelegramAdapter implements ChannelAdapter {
   }
 
   async sendDM(userId: string, response: ChannelResponse): Promise<void> {
-    // Telegram treats DMs as regular chats — same API call
+    // Telegram treats DMs as regular chats -- same API call
     await this.sendToChannel(userId, response);
   }
 
