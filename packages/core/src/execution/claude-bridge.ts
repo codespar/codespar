@@ -369,7 +369,7 @@ export class ClaudeBridge {
 
     const fileList = filePaths.slice(0, 500).join("\n");
 
-    const prompt = `You are a code assistant. Given a user's instruction and a list of file paths from a repository, pick the 3-8 most relevant files that would need to be read or modified to fulfill the instruction.
+    const prompt = `You are a code assistant. Given a user's instruction and a list of file paths from a repository, pick the 3-15 most relevant files that would need to be read or modified to fulfill the instruction. For refactoring tasks, err on the side of including more files.
 
 INSTRUCTION: ${instruction}
 
@@ -511,9 +511,9 @@ Respond with ONLY the file paths, one per line. No explanations, no markdown, no
 
       // 3. Read the selected files
       const fileContents: Array<{ path: string; content: string; sha: string }> = [];
-      for (const filePath of relevantPaths.slice(0, 8)) {
+      for (const filePath of relevantPaths.slice(0, 15)) {
         const file = await github.readFile(repoOwner, repoName, filePath);
-        if (file && file.content.length < 20_000) {
+        if (file && file.content.length < 30_000) {
           fileContents.push({
             path: filePath,
             content: file.content,
@@ -534,7 +534,7 @@ Respond with ONLY the file paths, one per line. No explanations, no markdown, no
         );
         for (const result of searchResults.slice(0, 5)) {
           const file = await github.readFile(repoOwner, repoName, result.path);
-          if (file && file.content.length < 20_000) {
+          if (file && file.content.length < 30_000) {
             fileContents.push({
               path: result.path,
               content: file.content,
@@ -544,11 +544,11 @@ Respond with ONLY the file paths, one per line. No explanations, no markdown, no
         }
       }
 
-      // 3. Build context for Claude (full file content, up to 15KB per file)
+      // 3. Build context for Claude (full file content, up to 20KB per file)
       const fileContext = fileContents
         .map(
           (f) =>
-            `### File: ${f.path}\n\`\`\`\n${f.content.slice(0, 15000)}\n\`\`\``,
+            `### File: ${f.path}\n\`\`\`\n${f.content.slice(0, 20000)}\n\`\`\``,
         )
         .join("\n\n");
 
@@ -572,6 +572,7 @@ When given an instruction:
 
 You can have multiple SEARCH/REPLACE blocks per file. Keep each block small and focused.
 Do NOT output the entire file. Only output the specific lines that change, with enough context (2-3 surrounding lines) to locate them uniquely.
+For refactoring tasks that touch many files, output diffs for ALL affected files. Do not skip files.
 Be precise and production-ready.`;
 
       const model = process.env.TASK_MODEL || "claude-sonnet-4-20250514";
