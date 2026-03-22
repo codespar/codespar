@@ -1333,6 +1333,25 @@ export class WebhookServer {
       return { installations };
     });
 
+    // ── Discord install (multi-tenant bot invite) ─────────────────────
+    // Discord bots are inherently multi-tenant: one bot token works across
+    // all servers. This endpoint redirects to the Discord authorize URL so
+    // users can add the bot to their server.
+    route("get", "/api/discord/install", async (_request: any, reply: any) => {
+      const clientId = process.env.DISCORD_CLIENT_ID;
+      if (!clientId) {
+        return reply.status(503).send({ error: "Discord not configured. Set DISCORD_CLIENT_ID." });
+      }
+
+      // Permissions bitfield:
+      //   Send Messages (2048) + Read Message History (65536)
+      //   + Attach Files (32768) + Use Slash Commands (2147483648)
+      const permissions = "2147581952";
+      const scope = "bot";
+      const redirectUrl = `https://discord.com/api/oauth2/authorize?client_id=${encodeURIComponent(clientId)}&permissions=${permissions}&scope=${scope}`;
+      return reply.redirect(redirectUrl);
+    });
+
     // GitHub webhook receiver
     route("post", "/webhooks/github", async (request: any, reply: any) => {
       metrics.increment("webhook.received");
