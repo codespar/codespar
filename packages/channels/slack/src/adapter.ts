@@ -82,6 +82,7 @@ export class SlackAdapter implements ChannelAdapter {
       const attachments: Attachment[] = [];
       const files = (msg as unknown as Record<string, unknown>).files as Array<{
         url_private: string;
+        url_private_download?: string;
         mimetype: string;
         name: string;
       }> | undefined;
@@ -91,14 +92,14 @@ export class SlackAdapter implements ChannelAdapter {
           if (file.mimetype?.startsWith("image/")) {
             attachments.push({
               type: "image",
-              url: file.url_private,
+              url: file.url_private_download || file.url_private,
               mimeType: file.mimetype,
               filename: file.name,
             });
           } else {
             attachments.push({
               type: "file",
-              url: file.url_private,
+              url: file.url_private_download || file.url_private,
               mimeType: file.mimetype,
               filename: file.name,
             });
@@ -154,14 +155,14 @@ export class SlackAdapter implements ChannelAdapter {
           if (file.mimetype?.startsWith("image/")) {
             attachments.push({
               type: "image",
-              url: file.url_private,
+              url: file.url_private_download || file.url_private,
               mimeType: file.mimetype,
               filename: file.name,
             });
           } else {
             attachments.push({
               type: "file",
-              url: file.url_private,
+              url: file.url_private_download || file.url_private,
               mimeType: file.mimetype,
               filename: file.name,
             });
