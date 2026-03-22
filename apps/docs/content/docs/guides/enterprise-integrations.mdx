@@ -102,13 +102,42 @@ interface IntegrationEvent {
 }
 ```
 
+## Repository Index
+
+The Repository Index is an enterprise feature that provides full codebase indexing with symbol extraction, dependency graph construction, and semantic search. It enables agents to answer structural questions about your codebase and perform cross-repo operations.
+
+### Capabilities
+
+- **Symbol extraction**: indexes functions, classes, interfaces, types, and exports across the entire repository
+- **Dependency graph**: maps import/export relationships between files and packages, including cross-repo dependencies in monorepos
+- **Semantic search**: natural language queries against the indexed codebase (e.g., "where is authentication implemented?")
+- **Cross-repo refactoring**: when multiple repos are indexed, agents can trace usage across repository boundaries and plan coordinated changes
+- **Framework migration**: the index identifies all usages of deprecated APIs, enabling the Planning Agent to generate comprehensive migration plans
+- **Codebase Q&A**: developers can ask the agent structural questions ("which services depend on the User model?") and get accurate, source-linked answers
+
+### Example
+
+```
+@codespar where is the payment flow implemented?
+
+🔍 Searching repository index...
+
+Found 4 relevant files:
+  src/services/payment-service.ts    (PaymentService class, 3 methods)
+  src/api/routes/payments.ts         (REST endpoints: POST /pay, GET /status)
+  src/workers/payment-processor.ts   (async queue consumer)
+  src/types/payment.ts               (PaymentIntent, PaymentStatus types)
+
+Dependencies: Stripe SDK, UserService, NotificationService
+```
+
 ## Available Connectors
 
 | Connector | Status | Description |
 |-----------|--------|-------------|
 | **Sentry** | Beta | Error monitoring -- new errors, regressions, spike detection |
-| **Linear** | Beta | Issue tracking -- new issues, status changes, assignments |
-| **Jira** | Beta | Issue tracking -- new tickets, transitions, comments |
+| **Linear** | Beta | Issue tracking -- new issues, status changes, priority mapping |
+| **Jira** | Beta | Issue tracking -- new tickets, transitions, REST API health check |
 | **Datadog** | Planned | Infrastructure monitoring -- alerts, anomalies, SLO breaches |
 | **PagerDuty** | Planned | Incident management -- triggered/acknowledged/resolved incidents |
 | **New Relic** | Planned | APM -- error rates, response time degradation, deployment markers |
@@ -170,9 +199,32 @@ CodeSpar: 🚨 Production Error (via Sentry)
           Files changed: 1 | Lines: +5 / -1
 ```
 
-## Linear and Jira Integration
+## Linear Integration
 
-The Linear and Jira connectors follow the same pattern as Sentry but are triggered by issue tracker events instead of errors.
+The Linear connector parses incoming webhooks, verifies HMAC signatures, and maps Linear priorities to CodeSpar severity levels.
+
+### Priority Mapping
+
+| Linear Priority | Value | CodeSpar Severity |
+|----------------|-------|-------------------|
+| Urgent | 1 | `critical` |
+| High | 2 | `error` |
+| Medium | 3 | `warning` |
+| Low | 4 | `info` |
+
+### Setup
+
+1. Configure a Linear webhook to point to your CodeSpar instance:
+   ```
+   https://your-codespar-instance.com/api/integrations/linear/webhook
+   ```
+
+2. Set the webhook secret in your environment:
+   ```
+   LINEAR_WEBHOOK_SECRET=your-webhook-secret
+   ```
+
+3. The connector verifies each request using HMAC signature validation against the `LINEAR_WEBHOOK_SECRET`.
 
 ### Use Cases
 
@@ -180,43 +232,85 @@ The Linear and Jira connectors follow the same pattern as Sentry but are trigger
 - **Issue assigned to CodeSpar** -- when an issue is assigned to the CodeSpar bot user, the Dev Agent automatically starts working on it
 - **Status change** -- the agent can react to status transitions (e.g., when an issue moves to "In Progress", the agent starts investigating)
 
-### Example: Linear Issue
+### Example
 
 ```
 Linear: New issue LIN-342 assigned to CodeSpar
         Title: "API returns 500 when user has no avatar"
-        Priority: High
+        Priority: High (2)
 
-CodeSpar: 📋 Issue Received (Linear LIN-342)
-          ─────────────────
+CodeSpar: Issue Received (Linear LIN-342)
           "API returns 500 when user has no avatar"
-          Priority: High
+          Severity: error (mapped from High)
 
-          🔍 Investigating...
+          Investigating...
           Found: src/api/users.ts:67 -- avatar URL is dereferenced
           without null check.
 
-          🔧 PR #91 opened: "fix: handle missing avatar in user API"
+          PR #91 opened: "fix: handle missing avatar in user API"
           Linked to: LIN-342
 ```
 
+## Jira Integration
+
+The Jira connector parses Jira webhook payloads, maps Jira priority levels to CodeSpar severity, and includes a REST API health check to verify connectivity with your Jira instance.
+
+### Priority Mapping
+
+| Jira Priority | CodeSpar Severity |
+|--------------|-------------------|
+| Highest / Blocker | `critical` |
+| High | `error` |
+| Medium | `warning` |
+| Low / Lowest | `info` |
+
+### Setup
+
+1. Configure a Jira webhook (System > Webhooks) to point to your CodeSpar instance:
+   ```
+   https://your-codespar-instance.com/api/integrations/jira/webhook
+   ```
+
+2. Set the connection variables in your environment:
+   ```
+   JIRA_WEBHOOK_SECRET=your-webhook-secret
+   JIRA_BASE_URL=https://your-org.atlassian.net
+   JIRA_API_TOKEN=your-api-token
+   JIRA_USER_EMAIL=bot@your-org.com
+   ```
+
+3. The connector verifies webhook signatures and uses the REST API credentials for the health check endpoint (`/rest/api/3/serverInfo`).
+
+### Use Cases
+
+- **New ticket created** -- same flow as Linear: analyze, investigate, propose fix
+- **Ticket assigned to CodeSpar** -- the Dev Agent picks up the ticket and starts working
+- **Transition events** -- react to workflow transitions (e.g., "To Do" to "In Progress")
+
 ## Framework Upgrade Guides
 
-CodeSpar Enterprise includes a knowledge base of framework upgrade guides that the Planning Agent and Dev Agent use when handling migration tasks:
+CodeSpar Enterprise includes a knowledge base of framework upgrade guides that the Planning Agent and Dev Agent use when handling migration tasks. Each guide contains a catalog of breaking changes and automated code transforms.
 
-| Framework | Upgrade Path |
-|-----------|-------------|
-| Next.js | 14 to 15 |
-| React | 18 to 19 |
-| Angular | 16 to 18 |
+| Framework | Upgrade Path | Key Breaking Changes |
+|-----------|-------------|---------------------|
+| Next.js | 14 to 15 | Async request APIs (`cookies()`, `headers()`, `params`), changed caching defaults, updated `next.config` format |
+| React | 18 to 19 | New JSX transform, `ref` as prop, `use()` hook, removal of legacy context |
+| Angular | 16 to 18 | Standalone components default, signal-based inputs, new control flow syntax (`@if`, `@for`) |
 
-When you request a framework migration, the agent consults the relevant upgrade guide to understand breaking changes, deprecated APIs, and recommended migration patterns. This produces more accurate plans and fewer migration errors compared to relying on the model's general knowledge alone.
+### How It Works
+
+When you request a framework migration, the agent:
+
+1. **Consults the upgrade guide** to enumerate all breaking changes relevant to the target version
+2. **Scans the repository index** to find every file affected by each breaking change
+3. **Generates a plan** with ordered sub-tasks, each targeting a specific breaking change category
+4. **Applies code transforms** that handle mechanical changes (e.g., adding `await` to `cookies()` calls, converting `*ngIf` to `@if`)
 
 ```
 @codespar plan migrate from Next.js 14 to Next.js 15
 ```
 
-The Planning Agent references the Next.js 14-to-15 upgrade guide and produces steps that account for specific breaking changes like the async request APIs, changed caching defaults, and updated configuration format.
+The Planning Agent references the Next.js 14-to-15 upgrade guide and produces steps that account for specific breaking changes like the async request APIs, changed caching defaults, and updated configuration format. The repository index identifies all affected files, so the plan covers the full scope of the migration rather than a subset.
 
 ## Writing a Custom Connector
 

@@ -1,0 +1,86 @@
+---
+title: Integrations
+description: Connect external monitoring, issue tracking, and CI/CD services to your agents.
+---
+
+# Integrations
+
+The Integrations page (`/dashboard/integrations`) lets you connect external services to your CodeSpar agents. Each integration is displayed as a card showing the service name, description, status badge, and a colored icon.
+
+## Categories
+
+Integrations are organized into four categories with 17 services total:
+
+### Monitoring (5 services)
+
+| Service | Status | Description |
+|---------|--------|-------------|
+| **Sentry** | Available | Error tracking and performance monitoring. Feeds production errors to the Incident Agent. |
+| **Datadog** | Planned | Infrastructure monitoring, APM, and log management. |
+| **New Relic** | Planned | Application performance monitoring and error analytics. |
+| **Grafana** | Planned | Metrics visualization and alerting. |
+| **PagerDuty** | Planned | Incident management and on-call scheduling. |
+
+### Issue Tracking (3 services)
+
+| Service | Status | Description |
+|---------|--------|-------------|
+| **Linear** | Available | Modern issue tracking with webhook-driven workflows. |
+| **Jira** | Available | Enterprise issue tracking with REST API connectivity. |
+| **GitHub Issues** | Built-in | Issue tracking via GitHub webhooks. No additional configuration needed. |
+
+### CI/CD (3 services)
+
+| Service | Status | Description |
+|---------|--------|-------------|
+| **GitHub Actions** | Built-in | CI/CD pipeline monitoring via GitHub webhooks. No additional configuration needed. |
+| **GitLab CI** | Planned | Pipeline and merge request integration. |
+| **CircleCI** | Planned | Build and deploy pipeline monitoring. |
+
+### Communication (6 services)
+
+| Service | Status | Description |
+|---------|--------|-------------|
+| **Slack** | Built-in | Real-time messaging via Socket Mode. No additional dashboard config needed. |
+| **WhatsApp** | Built-in | Messaging via Evolution API. No additional dashboard config needed. |
+| **Discord** | Built-in | Messaging via Discord Gateway. No additional dashboard config needed. |
+| **Telegram** | Built-in | Messaging via Telegram Bot API. No additional dashboard config needed. |
+| **MS Teams** | Planned | Microsoft Teams messaging integration. |
+
+## Status Types
+
+Each integration card displays one of the following status badges:
+
+| Status | Meaning |
+|--------|---------|
+| **Connected** | Service is configured, credentials verified, and actively receiving events. |
+| **Available** | Connector exists and is ready to configure. Click "Connect" to set up. |
+| **Built-in** | Service is part of the core platform. Configured via environment variables or the Setup page, not through the Integrations page. |
+| **Planned** | Connector is on the roadmap but not yet implemented. |
+
+## Connecting a Service
+
+For services with "Available" status:
+
+1. Click the **Connect** button on the integration card
+2. Fill in the required credentials in the inline configuration form:
+   - **API key** or **auth token** for the external service
+   - **Webhook secret** for signature verification
+   - **Base URL** (if the service is self-hosted, e.g., Jira Server)
+3. Click **Save** to store the configuration
+
+The configuration is submitted via `POST /api/channels/configure` and stored securely on the backend. The integration card updates to "Connected" status once credentials are verified.
+
+## Built-in Services
+
+Services marked as "Built-in" (GitHub Actions, GitHub Issues, Slack, WhatsApp, Discord, Telegram) are configured through environment variables or the [Setup page](/docs/dashboard/setup) rather than the Integrations page. They appear on the Integrations page for visibility but do not require additional configuration here.
+
+## Integration Cards
+
+Each card displays:
+
+- **Colored icon** matching the service's brand
+- **Service name** and short description
+- **Status badge** (Connected, Available, Built-in, or Planned)
+- **Connect button** (for Available services) or **Settings button** (for Connected services)
+- **Category label** indicating which group the service belongs to
