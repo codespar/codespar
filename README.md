@@ -27,6 +27,9 @@
 | Deploy Agent + Approval System | ✅ Working |
 | Incident Agent (CI failure investigation) | ✅ Working |
 | Coordinator Agent (cross-project, cascading deploy) | ✅ Working |
+| Planning Agent (feature decomposition, 3-8 sub-tasks) | ✅ Working |
+| Parallel Task Execution (3 concurrent per agent) | ✅ Working |
+| Multi-file Refactoring (15 files, 30KB context) | ✅ Working |
 | RBAC (6 roles, 15 permissions) | ✅ Working |
 | Audit Trail (hash chain integrity) | ✅ Working |
 | NLU (Claude Haiku intent classification) | ✅ Working |
@@ -144,6 +147,7 @@ Then, in your WhatsApp group:
 | `NLU_MODEL` | Model for intent classification | `claude-haiku` |
 | `SMART_MODEL` | Model for open-ended smart responses | `claude-sonnet` |
 | `REVIEW_MODEL` | Model for PR review and risk analysis | `claude-sonnet` |
+| `PLANNING_MODEL` | Model for plan decomposition | `claude-sonnet-4-20250514` |
 
 ### Channel Configuration
 
@@ -215,6 +219,7 @@ Enable channels by setting their env vars. All channels are optional. Enable onl
 | `@codespar agents` | Lists all active agents and their states |
 | `@codespar audit [n]` | Shows recent audit trail entries |
 | `@codespar permissions` | Shows your roles and permissions |
+| `@codespar plan <feature>` | Breaks feature into 3-8 sequential sub-tasks |
 | `@codespar merge PR #<n> [squash\|rebase]` | Merges a pull request (default, squash, or rebase) |
 | `@codespar help` | Shows all available commands |
 | Natural language | Works in any language (Portuguese, Spanish, etc.) |
@@ -233,7 +238,7 @@ The Dev Agent reads your actual codebase via the GitHub API, sends context to Cl
    → 3 files changed, 47 additions
 ```
 
-## Six Agent Types
+## Seven Agent Types
 
 | Agent | Lifecycle | What it does |
 |-------|----------|-------------|
@@ -242,6 +247,7 @@ The Dev Agent reads your actual codebase via the GitHub API, sends context to Cl
 | **Review Agent** | Ephemeral | Fetches PR diffs, classifies risk, auto-approves low-risk per policy. |
 | **Deploy Agent** | Ephemeral | Orchestrates deploys with approvals and health monitoring. |
 | **Incident Agent** | Ephemeral | Investigates CI failures and production errors. Correlates with recent changes. |
+| **Planning Agent** | Ephemeral | Decomposes features into 3-8 ordered sub-tasks for structured execution. |
 | **Coordinator** | Persistent | Cross-project orchestration. Cascading deploys, shared locks. |
 
 ## Five Channels, Same Syntax
@@ -367,7 +373,7 @@ CodeSpar Enterprise adds production monitoring integrations, MCP connectors, and
 
 | Feature | Open Source (MIT) | Enterprise |
 |---------|------------------|------------|
-| Core engine | 6 agents, 5 channels, RBAC, audit | Included |
+| Core engine | 7 agents, 5 channels, RBAC, audit | Included |
 | Integrations | GitHub webhooks (CI/CD) | Sentry, Datadog, PagerDuty, New Relic, Grafana, Jira, Linear |
 | Protocol | REST webhooks | MCP (Model Context Protocol), custom connectors |
 | Analysis | Build failure investigation | Production error root cause, performance regression |

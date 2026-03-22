@@ -1,0 +1,242 @@
+---
+title: Planning Agent
+description: Breaks down large features into sequential sub-tasks for structured execution.
+---
+
+# Planning Agent
+
+The Planning Agent decomposes complex instructions into **3-8 ordered sub-tasks** for structured, step-by-step execution. Instead of sending a large, ambiguous request to a single Task Agent, the Planning Agent breaks it down into concrete steps that can be reviewed, approved, and executed sequentially.
+
+## Characteristics
+
+| Property | Value |
+|----------|-------|
+| **Lifecycle** | Ephemeral -- spawned per planning request, terminated after plan is created |
+| **Cardinality** | One per planning request |
+| **Color** | Signal Blue (`#3B82F6`) |
+
+## When to Use the Planning Agent
+
+The Planning Agent is most valuable for:
+
+- **New features** that touch multiple files or modules (e.g., "add user authentication with OAuth")
+- **Large refactors** that need to happen in a specific order (e.g., "migrate from REST to GraphQL")
+- **Framework migrations** where steps have dependencies (e.g., "upgrade from Next.js 14 to 15")
+- **Multi-step workflows** where each step builds on the previous one
+
+For simple, single-file changes, use `instruct` directly. The Planning Agent adds value when the scope is too large for a single task.
+
+## Command
+
+```
+@codespar plan <feature description>
+```
+
+The `plan` command accepts a natural language description of what you want to build or change. The Planning Agent sends this to Claude with a specialized system prompt that returns a structured JSON array of sub-tasks.
+
+### Example: Creating a Plan
+
+```
+User: @codespar plan add user authentication with OAuth
+
+CodeSpar: 📋 Plan Created (plan-a1b2c3)
+          ─────────────────
+          Feature: "add user authentication with OAuth"
+          Steps: 6
+
+          1. Add OAuth dependencies (passport, passport-google-oauth20,
+             express-session) and create auth configuration file
+          2. Create User model with email, name, avatar, and OAuth
+             provider fields
+          3. Implement Google OAuth strategy with callback handler
+             and session serialization
+          4. Add auth middleware for protecting routes and checking
+             session validity
+          5. Create login/logout/callback API endpoints and wire up
+             the auth router
+          6. Add auth guard to existing protected routes and update
+             API documentation
+
+          To execute: @codespar approve plan-a1b2c3
+```
+
+## Approval Flow
+
+Plans require explicit approval before execution. This gives you the opportunity to review the decomposition, reorder steps, or refine the scope before any code is written.
+
+```
+@codespar approve plan-a1b2c3
+```
+
+After approval, the Project Agent executes each sub-task sequentially by spawning a Task Agent for each step. Each step receives context from the previous step's output, ensuring continuity across the plan.
+
+> **Future:** Auto-execute on approval is planned for L3+ autonomy levels, where the plan would begin executing immediately after approval without requiring a separate command for each step.
+
+## How It Works
+
+### Decomposition Pipeline
+
+```
+User instruction
+       │
+       ▼
+┌──────────────────┐
+│  Planning Agent   │  Sends instruction to Claude with planning
+│                   │  system prompt
+└────────┬─────────┘
+         │
+         ▼
+┌──────────────────┐
+│  Claude (Sonnet)  │  Returns JSON array of ordered sub-tasks
+│                   │  with descriptions and dependencies
+└────────┬─────────┘
+         │
+         ▼
+┌──────────────────┐
+│  Plan stored      │  Plan ID assigned, steps numbered,
+│  with metadata    │  status set to PENDING_APPROVAL
+└──────────────────┘
+```
+
+### System Prompt
+
+The Planning Agent uses a specialized system prompt that instructs Claude to:
+
+1. Analyze the feature request and identify logical boundaries
+2. Break the work into 3-8 concrete, ordered steps
+3. Ensure each step is small enough for a single Task Agent execution
+4. Order steps so that each builds on the previous one
+5. Return a structured JSON array with step descriptions
+
+### Response Format
+
+Claude returns a JSON array that the Planning Agent parses and stores:
+
+```typescript
+interface PlanStep {
+  /** Step number (1-based) */
+  order: number;
+
+  /** Short title for the step */
+  title: string;
+
+  /** Detailed description of what this step should do */
+  description: string;
+
+  /** Files likely to be created or modified */
+  estimatedFiles: string[];
+}
+
+interface Plan {
+  /** Unique plan identifier */
+  id: string;
+
+  /** Original user instruction */
+  instruction: string;
+
+  /** Ordered list of sub-tasks */
+  steps: PlanStep[];
+
+  /** Current plan status */
+  status: "PENDING_APPROVAL" | "APPROVED" | "IN_PROGRESS" | "COMPLETED" | "FAILED";
+
+  /** Timestamp of plan creation */
+  createdAt: string;
+}
+```
+
+## Configuration
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `PLANNING_MODEL` | AI model used for plan decomposition | `claude-sonnet-4-20250514` |
+
+The Planning Agent uses the same model configuration pattern as other agents. You can override the model via environment variable if you want to use a different Claude model for planning.
+
+## Use Cases
+
+### New Feature
+
+```
+@codespar plan add a notification system with email and in-app notifications
+```
+
+The Planning Agent might decompose this into:
+
+1. Create notification model and database schema
+2. Implement email notification service with templates
+3. Implement in-app notification service with WebSocket delivery
+4. Add notification preferences to user settings
+5. Create notification API endpoints (list, mark read, preferences)
+6. Integrate notifications into existing workflows (PR merged, deploy complete)
+
+### Large Refactor
+
+```
+@codespar plan extract the auth logic from the monolith into a standalone auth service
+```
+
+Steps might include:
+
+1. Define the auth service API contract and shared types
+2. Create the auth service project structure with health check endpoint
+3. Migrate user/session models and database queries to the auth service
+4. Implement auth API endpoints (login, logout, refresh, validate)
+5. Update the monolith to call the auth service instead of local auth logic
+6. Add integration tests for the auth service communication
+7. Remove deprecated auth code from the monolith
+
+### Framework Migration
+
+```
+@codespar plan migrate from Express to Fastify
+```
+
+Steps might include:
+
+1. Add Fastify dependencies and create the base server configuration
+2. Migrate middleware to Fastify hooks and plugins
+3. Convert route handlers from Express to Fastify route syntax
+4. Update error handling to use Fastify error handler pattern
+5. Migrate tests to use Fastify's inject method instead of supertest
+6. Remove Express dependencies and update documentation
+
+## Relationship with Other Agents
+
+The Planning Agent works closely with the Project Agent and Task Agent:
+
+```
+User: @codespar plan <feature>
+       │
+       ▼
+┌─────────────────┐
+│  Project Agent   │  Parses "plan" command
+└────────┬────────┘
+         │ supervisor.spawnAgent("planning", { ... })
+         ▼
+┌─────────────────┐
+│  Planning Agent  │  Decomposes into sub-tasks
+└────────┬────────┘
+         │ Returns plan, agent terminates
+         ▼
+┌─────────────────┐
+│  Project Agent   │  Stores plan, awaits approval
+└────────┬────────┘
+         │ User approves
+         ▼
+┌─────────────────┐
+│  Task Agent (1)  │  Executes step 1
+└────────┬────────┘
+         │ Step 1 complete
+         ▼
+┌─────────────────┐
+│  Task Agent (2)  │  Executes step 2 (with step 1 context)
+└────────┬────────┘
+         │ ...continues for each step
+         ▼
+┌─────────────────┐
+│  Project Agent   │  Reports plan completion
+└─────────────────┘
+```
+
+Plan steps are executed **sequentially**, not in parallel, because each step may depend on changes made by the previous one. For independent tasks that can run concurrently, use multiple `instruct` commands instead -- see the [Parallel Task Execution](/docs/guides/parallel-tasks) guide.

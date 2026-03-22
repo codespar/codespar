@@ -1,0 +1,152 @@
+---
+title: Parallel Task Execution
+description: How CodeSpar runs multiple coding tasks concurrently.
+---
+
+# Parallel Task Execution
+
+CodeSpar can run **up to 3 concurrent tasks** per Project Agent. When you send multiple `instruct` or `fix` commands in quick succession, each spawns its own Task Agent and runs in parallel -- no need to wait for one to finish before starting the next.
+
+## How It Works
+
+Each Project Agent maintains an `activeTaskCount` and a `taskQueue`. When a new task arrives:
+
+1. If `activeTaskCount < 3`, the task starts immediately in a new Task Agent
+2. If all 3 slots are busy, the task is added to the `taskQueue` with a position number
+3. When any running task completes, the next task in the queue is automatically dequeued and started
+
+```
+┌─────────────────────────────────────────────┐
+│              Project Agent                  │
+│                                             │
+│  Active Tasks (max 3):                      │
+│    Slot 1: task-abc123 (in progress)        │
+│    Slot 2: task-def456 (in progress)        │
+│    Slot 3: task-ghi789 (in progress)        │
+│                                             │
+│  Queue:                                     │
+│    Position 1: "write integration tests"    │
+│    Position 2: "update API documentation"   │
+│                                             │
+└─────────────────────────────────────────────┘
+```
+
+### Queue Feedback
+
+When a task is queued, you get immediate feedback with the queue position:
+
+```
+User: @codespar instruct add rate limiting to the /api/users endpoint
+
+CodeSpar: ⏳ Task Queued (position 1)
+          ─────────────────
+          Task: "add rate limiting to the /api/users endpoint"
+          Active tasks: 3/3
+          Estimated start: when next task completes
+
+          You'll be notified when this task starts.
+```
+
+When the task is dequeued and starts:
+
+```
+CodeSpar: 🔧 Task Started (dequeued from position 1)
+          ─────────────────
+          Task: "add rate limiting to the /api/users endpoint"
+          Agent: task-jkl012
+          Active tasks: 3/3
+```
+
+## Example: Running Tasks in Parallel
+
+Send three tasks in quick succession:
+
+```
+User: @codespar instruct add endpoint GET /api/products
+
+CodeSpar: 🔧 Task Agent Started
+          Task: "add endpoint GET /api/products"
+          Agent: task-abc123
+          Active tasks: 1/3
+
+User: @codespar instruct add endpoint POST /api/orders
+
+CodeSpar: 🔧 Task Agent Started
+          Task: "add endpoint POST /api/orders"
+          Agent: task-def456
+          Active tasks: 2/3
+
+User: @codespar instruct write unit tests for the auth module
+
+CodeSpar: 🔧 Task Agent Started
+          Task: "write unit tests for the auth module"
+          Agent: task-ghi789
+          Active tasks: 3/3
+```
+
+All three tasks run simultaneously, each in its own Task Agent with its own Claude session. As each completes, you receive the results independently:
+
+```
+CodeSpar: ✅ Task Completed (task-def456)
+          PR #51 opened: "feat: add POST /api/orders endpoint"
+          Files changed: 3 | Lines: +89 / -0
+
+CodeSpar: ✅ Task Completed (task-abc123)
+          PR #50 opened: "feat: add GET /api/products endpoint"
+          Files changed: 2 | Lines: +54 / -0
+
+CodeSpar: ✅ Task Completed (task-ghi789)
+          PR #52 opened: "test: add unit tests for auth module"
+          Files changed: 1 | Lines: +120 / -0
+```
+
+## Automatic Dequeue
+
+When a running task completes, the Project Agent automatically starts the next queued task:
+
+```typescript
+async onTaskComplete(taskId: string): Promise<void> {
+  this.activeTaskCount--;
+
+  if (this.taskQueue.length > 0) {
+    const nextTask = this.taskQueue.shift();
+    await this.startTask(nextTask);
+    await this.notify(
+      `Task dequeued: "${nextTask.description}" (was position 1, ` +
+      `${this.taskQueue.length} remaining in queue)`
+    );
+  }
+}
+```
+
+The dequeue process is automatic and immediate. You do not need to run any command to start queued tasks.
+
+## Limitations
+
+### Shared Repository Context
+
+All concurrent tasks operate on the same repository. This means:
+
+- Each task reads the current state of the codebase when it starts
+- Tasks do not see changes made by other concurrent tasks until those changes are merged
+- If two tasks modify the same file, the resulting PRs may have merge conflicts
+
+For tasks that need to build on each other's changes, use the [Planning Agent](/docs/agents/planning-agent) instead, which executes steps sequentially with context from previous steps.
+
+### No Dependency Ordering
+
+Parallel execution has no concept of task dependencies. All tasks in the queue are treated as independent and start in FIFO order. If your tasks have dependencies (e.g., "create the model first, then write the API endpoint"), use the Planning Agent for ordered execution.
+
+### Concurrency Limit
+
+The limit of 3 concurrent tasks is per Project Agent, not per CodeSpar instance. If you have multiple projects, each project's agent can run 3 tasks in parallel independently.
+
+## When to Use Parallel Tasks vs. Planning Agent
+
+| Scenario | Approach |
+|----------|----------|
+| Independent endpoints or features | Parallel tasks (`instruct` x3) |
+| Tests for different modules | Parallel tasks |
+| Sequential steps with dependencies | Planning Agent (`plan`) |
+| Large feature with ordered sub-tasks | Planning Agent (`plan`) |
+| Quick fixes to unrelated bugs | Parallel tasks (`fix` x3) |

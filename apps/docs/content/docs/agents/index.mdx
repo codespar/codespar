@@ -1,6 +1,6 @@
 ---
 title: Agents Overview
-description: CodeSpar's multi-agent architecture — six specialized agent types, lifecycle states, autonomy levels, and the supervisor pattern.
+description: CodeSpar's multi-agent architecture — seven specialized agent types, lifecycle states, autonomy levels, and the supervisor pattern.
 ---
 
 # Agent Architecture
@@ -59,7 +59,8 @@ type AgentType =
   | "review"
   | "deploy"
   | "incident"
-  | "coordinator";
+  | "coordinator"
+  | "planning";
 
 type AutonomyLevel = 0 | 1 | 2 | 3 | 4 | 5;
 ```
@@ -104,7 +105,7 @@ Agents fall into two lifecycle categories:
 
 **Ephemeral agents** are spawned on demand for a specific task and terminate when the task completes. They're lightweight, stateless between invocations, and can run in parallel.
 
-## The Six Agent Types
+## The Seven Agent Types
 
 | Agent | Type | Lifecycle | Description |
 |-------|------|-----------|-------------|
@@ -114,6 +115,7 @@ Agents fall into two lifecycle categories:
 | [Deploy Agent](/docs/agents/deploy-agent) | `deploy` | **Ephemeral** | Orchestrates deployments — manages approval quorum, triggers deploys, monitors health. |
 | [Incident Agent](/docs/agents/incident-agent) | `incident` | **Ephemeral** | Investigates production failures — correlates errors with changes, suggests fixes. |
 | [Coordinator Agent](/docs/agents/coordinator-agent) | `coordinator` | **Persistent** | Cross-project orchestration — aggregates status, cascading deploys, routes commands. |
+| [Planning Agent](/docs/agents/planning-agent) | `planning` | **Ephemeral** | Decomposes features into 3-8 sequential sub-tasks for structured execution. |
 
 ### Agent Relationships
 
@@ -219,3 +221,4 @@ These actions always require explicit human approval, even at L5.
 - [Deploy Agent](/docs/agents/deploy-agent) — approval flows and deployment orchestration
 - [Incident Agent](/docs/agents/incident-agent) — failure investigation and root cause analysis
 - [Coordinator Agent](/docs/agents/coordinator-agent) — cross-project orchestration
+- [Planning Agent](/docs/agents/planning-agent) — feature decomposition into sub-tasks

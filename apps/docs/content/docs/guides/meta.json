@@ -17,6 +17,9 @@
     "streaming",
     "scheduled-tasks",
     "image-vision",
-    "waitlist"
+    "waitlist",
+    "parallel-tasks",
+    "refactoring",
+    "enterprise-integrations"
   ]
 }

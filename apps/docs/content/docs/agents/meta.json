@@ -8,6 +8,7 @@
     "review-agent",
     "deploy-agent",
     "incident-agent",
-    "coordinator-agent"
+    "coordinator-agent",
+    "planning-agent"
   ]
 }
