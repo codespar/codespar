@@ -101,6 +101,11 @@ const PATTERNS: PatternRule[] = [
     pattern: /^merge(?:\s+PR\s*#?\s*(\d+))?(?:\s+(squash|rebase))?$/i,
     paramExtractor: (m) => ({ prNumber: m[1] || "", mergeMethod: m[2] || "merge" }),
   },
+  {
+    type: "plan",
+    pattern: /^plan\s+(.+)$/i,
+    paramExtractor: (m) => ({ instruction: m[1] }),
+  },
 ];
 
 /** Synchronous regex-only parser (used internally). */

@@ -27,11 +27,12 @@ Classify the user's message into ONE of these intents:
 - context: asking about agent memory, context, or learned patterns
 - prs: asking about pull requests (how many PRs, list PRs, open PRs)
 - merge: asking to merge a pull request
+- plan: asking to plan or break down a large feature into sub-tasks
 - unknown: cannot determine intent
 
 Respond with ONLY a JSON object: {"intent":"<type>","params":{},"confidence":0.95}
 
-For instruct/fix, extract the task description into params.instruction or params.issue.
+For instruct/fix/plan, extract the task description into params.instruction or params.issue.
 For deploy/rollback, extract environment into params.environment.
 For review, extract PR number into params.prNumber.
 For autonomy, extract level into params.level.`;

@@ -57,6 +57,14 @@ export class ProjectAgent implements Agent {
   private taskAgentCounter: number = 0;
   private reviewAgentCounter: number = 0;
   private incidentAgentCounter: number = 0;
+  private taskQueue: Array<{
+    id: string;
+    instruction: string;
+    message: NormalizedMessage;
+    intent: ParsedIntent;
+  }> = [];
+  private activeTaskCount = 0;
+  private readonly maxConcurrentTasks = 3;
   private storage: StorageProvider | null;
   private vectorStore: VectorStore | null;
   private identityStore: IdentityStore | null = null;
@@ -711,12 +719,35 @@ export class ProjectAgent implements Agent {
 
   /**
    * Spawns an ephemeral Task Agent to handle instruct/fix commands.
-   * The Task Agent runs the task and is discarded after completion.
+   * Supports concurrent execution up to maxConcurrentTasks. Excess tasks
+   * are queued and executed automatically when a slot opens.
    */
   private async delegateToTaskAgent(
     message: NormalizedMessage,
-    intent: ParsedIntent
+    intent: ParsedIntent,
   ): Promise<ChannelResponse> {
+    const instruction = intent.params.instruction || intent.params.issue || intent.rawText;
+
+    if (this.activeTaskCount >= this.maxConcurrentTasks) {
+      this.taskQueue.push({
+        id: `queued-${Date.now()}`,
+        instruction,
+        message,
+        intent,
+      });
+      return {
+        text: `[${this.config.id}] Task queued (${this.taskQueue.length} waiting, ${this.activeTaskCount} running). Will execute when a slot opens.`,
+      };
+    }
+
+    return this.executeTask(message, intent);
+  }
+
+  private async executeTask(
+    message: NormalizedMessage,
+    intent: ParsedIntent,
+  ): Promise<ChannelResponse> {
+    this.activeTaskCount++;
     this.taskAgentCounter++;
     const taskAgentId = `${this.config.id}-task-${this.taskAgentCounter}`;
 
@@ -730,11 +761,29 @@ export class ProjectAgent implements Agent {
       this.storage ?? undefined,
     );
 
-    await taskAgent.initialize();
-    const result = await taskAgent.handleMessage(message, intent);
-    await taskAgent.shutdown();
+    try {
+      await taskAgent.initialize();
+      const result = await taskAgent.handleMessage(message, intent);
+      await taskAgent.shutdown();
+      return result;
+    } finally {
+      this.activeTaskCount--;
+      this.processQueue();
+    }
+  }
 
-    return result;
+  private processQueue(): void {
+    while (this.taskQueue.length > 0 && this.activeTaskCount < this.maxConcurrentTasks) {
+      const next = this.taskQueue.shift();
+      if (next) {
+        // Execute in background without awaiting so we can process more from the queue
+        this.executeTask(next.message, next.intent).then((response) => {
+          console.log(
+            `[${this.config.id}] Queued task completed: ${next.instruction.slice(0, 50)}`,
+          );
+        });
+      }
+    }
   }
 
   /**

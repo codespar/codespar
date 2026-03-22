@@ -22,6 +22,7 @@ export type IntentType =
   | "register"
   | "prs"
   | "merge"
+  | "plan"
   | "unknown";
 
 export type RiskLevel = "low" | "medium" | "high" | "critical";
@@ -60,6 +61,7 @@ export const INTENT_RISK: Record<IntentType, RiskLevel> = {
   register: "low",
   prs: "low",
   merge: "medium",
+  plan: "medium",
   deploy: "high",
   rollback: "critical",
   kill: "critical",
