@@ -1774,6 +1774,7 @@ export class WebhookServer {
             branch: event.branch,
             title: event.details.title,
             sha: event.details.sha,
+            detail: `${event.repo}: ${event.details.title || event.type}${event.branch ? ` (${event.branch})` : ""}`,
             source: "github",
             orgId,
           },
@@ -1847,6 +1848,12 @@ export class WebhookServer {
             branch,
             commitMessage: commitMessage.slice(0, 100),
             errorMessage: errorMessage.slice(0, 200),
+            detail:
+              state === "READY" || state === "succeeded"
+                ? `${name}: ${commitMessage || branch || "deployed"}${url ? ` (${url})` : ""}`
+                : state === "ERROR" || state === "error"
+                  ? `${name}: ${errorMessage || "build failed"}`
+                  : `${name}: deploying${branch ? ` (${branch})` : ""}${commitMessage ? ` - ${commitMessage.slice(0, 60)}` : ""}`,
             source: "vercel",
             orgId,
           },
@@ -1919,6 +1926,12 @@ export class WebhookServer {
             url: body.url,
             error: body.error,
             message: body.message,
+            detail:
+              status === "success"
+                ? `${project}: deployed${body.url ? ` (${body.url})` : ""}`
+                : status === "failure"
+                  ? `${project}: ${body.error || "deploy failed"}`
+                  : `${project}: deploying${body.message ? ` - ${body.message.slice(0, 60)}` : ""}`,
             source,
             orgId,
           },
