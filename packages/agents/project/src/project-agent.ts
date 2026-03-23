@@ -761,47 +761,192 @@ export class ProjectAgent implements Agent {
    * use the enterprise @codespar-enterprise/mcp-generator package.
    */
   private async handleDemo(intent: ParsedIntent): Promise<ChannelResponse> {
-    const demoName = intent.params.demoName || "mcp-generator";
+    const demoParam = (intent.params.demoName || "").trim();
 
-    if (demoName !== "mcp-generator") {
-      return { text: `[${this.config.id}] Available demos: mcp-generator` };
+    // "demo mcp-generator" - initial scan and tool generation
+    if (demoParam === "mcp-generator" || demoParam === "") {
+      const lines = [
+        `[Lens] MCP Generator Demo`,
+        "",
+        "Scanning demo API (3 files)...",
+        "",
+        "\u2022 src/routes/users.ts (5 endpoints)",
+        "\u2022 src/routes/orders.ts (3 endpoints)",
+        "\u2022 src/routes/health.ts (1 endpoint)",
+        "",
+        "Endpoints found:",
+        "  GET    /api/users          \u2192 listUsers(page, limit)",
+        "  GET    /api/users/:id      \u2192 getUsersById(id)",
+        "  POST   /api/users          \u2192 createUsers(name, email, role)",
+        "  PUT    /api/users/:id      \u2192 updateUsersById(id, name, email)",
+        "  DELETE /api/users/:id      \u2192 deleteUsersById(id)",
+        "  GET    /api/orders         \u2192 listOrders(status, customerId)",
+        "  GET    /api/orders/:id     \u2192 getOrdersById(id)",
+        "  POST   /api/orders         \u2192 createOrders(customerId, items, total)",
+        "  GET    /api/health         \u2192 getHealth()",
+        "",
+        "\u2705 MCP Server generated: 9 tools ready",
+        "",
+        "Now try querying the demo API. Examples:",
+        '  demo query how many users do we have?',
+        '  demo query create a user named Ana with email ana@test.com',
+        '  demo query show me pending orders',
+        '  demo query what is the system health?',
+      ];
+      return { text: lines.join("\n") };
     }
 
-    // Simulate the MCP Generator demo with inline data
-    // (In production this would use the enterprise package)
-    const demoFiles = [
-      { method: "GET", path: "/api/users", tool: "listUsers", params: "page, limit" },
-      { method: "GET", path: "/api/users/:id", tool: "getUsersById", params: "id" },
-      { method: "POST", path: "/api/users", tool: "createUsers", params: "name, email, role" },
-      { method: "PUT", path: "/api/users/:id", tool: "updateUsersById", params: "id, name, email" },
-      { method: "DELETE", path: "/api/users/:id", tool: "deleteUsersById", params: "id" },
-      { method: "GET", path: "/api/orders", tool: "listOrders", params: "status, customerId" },
-      { method: "GET", path: "/api/orders/:id", tool: "getOrdersById", params: "id" },
-      { method: "POST", path: "/api/orders", tool: "createOrders", params: "customerId, items, total" },
-      { method: "GET", path: "/api/health", tool: "getHealth", params: "" },
-    ];
+    // "demo query <question>" - simulate an agent using the MCP tools
+    if (demoParam.startsWith("query ")) {
+      const question = demoParam.slice(6).trim().toLowerCase();
+      return this.handleDemoQuery(question);
+    }
+
+    return { text: `[${this.config.id}] Available demos:\n  demo mcp-generator    Generate MCP server from demo API\n  demo query <question>  Query the demo API using generated tools` };
+  }
+
+  private handleDemoQuery(question: string): ChannelResponse {
+    // Simulate tool selection and execution based on the question
+    interface DemoResponse {
+      toolName: string;
+      method: string;
+      path: string;
+      params?: Record<string, string>;
+      response: unknown;
+      answer: string;
+    }
+
+    let result: DemoResponse;
+
+    if (question.includes("how many") && question.includes("user") || question.includes("list user") || question.includes("all user")) {
+      result = {
+        toolName: "listUsers",
+        method: "GET",
+        path: "/api/users",
+        response: {
+          users: [
+            { id: 1, name: "Ana Silva", email: "ana@company.com", role: "admin" },
+            { id: 2, name: "Pedro Santos", email: "pedro@company.com", role: "developer" },
+            { id: 3, name: "Maria Costa", email: "maria@company.com", role: "developer" },
+          ],
+          total: 47,
+        },
+        answer: "You have 47 registered users. Here are the first 3:\n  1. Ana Silva (admin)\n  2. Pedro Santos (developer)\n  3. Maria Costa (developer)",
+      };
+    } else if (question.includes("create") && question.includes("user")) {
+      // Extract name and email from question
+      const nameMatch = question.match(/named?\s+(\w+)/i) || question.match(/user\s+(\w+)/i);
+      const emailMatch = question.match(/email\s+(\S+@\S+)/i);
+      const name = nameMatch ? nameMatch[1] : "New User";
+      const email = emailMatch ? emailMatch[1] : `${name.toLowerCase()}@test.com`;
+
+      result = {
+        toolName: "createUsers",
+        method: "POST",
+        path: "/api/users",
+        params: { name, email, role: "developer" },
+        response: { id: 48, name, email, role: "developer", createdAt: new Date().toISOString() },
+        answer: `User "${name}" created successfully (ID: 48, email: ${email}).`,
+      };
+    } else if (question.includes("pending") && question.includes("order") || question.includes("order") && question.includes("status")) {
+      result = {
+        toolName: "listOrders",
+        method: "GET",
+        path: "/api/orders?status=pending",
+        params: { status: "pending" },
+        response: {
+          orders: [
+            { id: "ORD-101", customerId: "C-003", total: 249.99, status: "pending", items: 3 },
+            { id: "ORD-108", customerId: "C-017", total: 1299.00, status: "pending", items: 1 },
+          ],
+        },
+        answer: "You have 2 pending orders:\n  \u2022 ORD-101: $249.99 (3 items)\n  \u2022 ORD-108: $1,299.00 (1 item)\n  Total pending: $1,548.99",
+      };
+    } else if (question.includes("order") && (question.includes("detail") || question.match(/order\s+\d+/) || question.includes("ord-"))) {
+      result = {
+        toolName: "getOrdersById",
+        method: "GET",
+        path: "/api/orders/ORD-101",
+        params: { id: "ORD-101" },
+        response: { id: "ORD-101", customerId: "C-003", customer: "Maria Costa", total: 249.99, status: "pending", items: [{ product: "Widget A", qty: 2, price: 99.99 }, { product: "Widget B", qty: 1, price: 50.01 }] },
+        answer: "Order ORD-101:\n  Customer: Maria Costa\n  Status: pending\n  Items:\n    \u2022 Widget A x2 ($99.99 each)\n    \u2022 Widget B x1 ($50.01)\n  Total: $249.99",
+      };
+    } else if (question.includes("health") || question.includes("status") && !question.includes("order")) {
+      result = {
+        toolName: "getHealth",
+        method: "GET",
+        path: "/api/health",
+        response: { status: "ok", uptime: 86420, timestamp: new Date().toISOString() },
+        answer: "System is healthy. Uptime: 24 hours. All services operational.",
+      };
+    } else if (question.includes("delete") && question.includes("user")) {
+      const idMatch = question.match(/(?:id\s+)?(\d+)/);
+      const id = idMatch ? idMatch[1] : "48";
+      result = {
+        toolName: "deleteUsersById",
+        method: "DELETE",
+        path: `/api/users/${id}`,
+        params: { id },
+        response: { deleted: true },
+        answer: `User ${id} has been deleted.`,
+      };
+    } else if (question.includes("update") && question.includes("user")) {
+      const nameMatch = question.match(/named?\s+(\w+)/i);
+      const name = nameMatch ? nameMatch[1] : "Updated";
+      result = {
+        toolName: "updateUsersById",
+        method: "PUT",
+        path: "/api/users/1",
+        params: { id: "1", name },
+        response: { id: 1, name, email: "ana@company.com", role: "admin", updatedAt: new Date().toISOString() },
+        answer: `User 1 updated. Name changed to "${name}".`,
+      };
+    } else if (question.includes("create") && question.includes("order")) {
+      result = {
+        toolName: "createOrders",
+        method: "POST",
+        path: "/api/orders",
+        params: { customerId: "C-003", items: "2", total: "199.98" },
+        response: { id: "ORD-115", customerId: "C-003", total: 199.98, status: "pending", createdAt: new Date().toISOString() },
+        answer: "Order ORD-115 created. Total: $199.98. Status: pending.",
+      };
+    } else {
+      // Unknown query - suggest options
+      return {
+        text: [
+          `[MCP Demo] I can answer questions about users, orders, and system health.`,
+          "",
+          "Try:",
+          '  demo query how many users do we have?',
+          '  demo query create a user named Jo\u00e3o',
+          '  demo query show pending orders',
+          '  demo query order details ORD-101',
+          '  demo query check system health',
+          '  demo query delete user 48',
+        ].join("\n"),
+      };
+    }
+
+    // Format the response showing tool execution
+    const paramsStr = result.params
+      ? Object.entries(result.params).map(([k, v]) => `${k}: "${v}"`).join(", ")
+      : "";
 
     const lines = [
-      `[${this.config.id}] MCP Generator Demo`,
+      `[MCP Demo] Processing: "${question}"`,
       "",
-      "Scanning demo API (3 files)...",
+      `\u25CB Selecting tool: ${result.toolName}`,
+      `\u25CB Calling: ${result.method} ${result.path}`,
+      paramsStr ? `  Body: { ${paramsStr} }` : "",
+      `\u25CB Response:`,
+      "```",
+      JSON.stringify(result.response, null, 2),
+      "```",
       "",
-      "Endpoints found:",
-      ...demoFiles.map(f => `  ${f.method.padEnd(7)} ${f.path}`),
+      result.answer,
       "",
-      "Generated MCP tools:",
-      ...demoFiles.map(f => `  ${f.tool}(${f.params})`),
-      "",
-      "MCP Server generated: 9 tools ready to run",
-      "",
-      "Example usage by an AI agent:",
-      '  Agent receives: "How many users do we have?"',
-      "  Agent calls: listUsers()",
-      '  Agent responds: "You have 47 registered users."',
-      "",
-      "To generate an MCP server for your own codebase:",
-      "  instruct generate mcp-server for the payments API",
-    ];
+      "Try another query or type: demo mcp-generator",
+    ].filter(Boolean);
 
     return { text: lines.join("\n") };
   }
