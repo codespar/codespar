@@ -15,7 +15,7 @@ import type {
   ParsedIntent,
   StorageProvider,
 } from "@codespar/core";
-import { ClaudeBridge, GitHubClient, type ExecutionResult } from "@codespar/core";
+import { ClaudeBridge, GitHubClient, type ExecutionResult, type ExecutionRequest } from "@codespar/core";
 
 export interface TaskResult {
   taskId: string;
@@ -72,18 +72,23 @@ export class TaskAgent implements Agent {
       ?.filter((a) => a.type === "image" && a.url)
       .map((a) => ({ url: a.url, mimeType: a.mimeType }));
 
+    // Extract progress callback from message metadata (web chat SSE)
+    const onProgress = (message.metadata?.onProgress as ((e: unknown) => void)) || undefined;
+
     switch (intent.type) {
       case "instruct":
         return this.executeTask(
           intent.params.instruction || intent.rawText,
           "instruct",
           imageUrls,
+          onProgress,
         );
       case "fix":
         return this.executeTask(
           `Fix: ${intent.params.issue || intent.rawText}`,
           "fix",
           imageUrls,
+          onProgress,
         );
       default:
         return {
@@ -96,6 +101,7 @@ export class TaskAgent implements Agent {
     instruction: string,
     type: "instruct" | "fix",
     imageUrls?: Array<{ url: string; mimeType?: string }>,
+    onProgress?: (event: unknown) => void,
   ): Promise<ChannelResponse> {
     const taskId = generateTaskId();
     const task: TaskResult = { taskId, instruction, status: "queued" };
@@ -146,6 +152,7 @@ export class TaskAgent implements Agent {
           githubToken,
           timeout: 120_000,
           imageUrls,
+          onProgress: onProgress as ExecutionRequest["onProgress"],
         });
       } else {
         result = await this.bridge.execute({
@@ -155,6 +162,7 @@ export class TaskAgent implements Agent {
           projectContext: this.config.projectId || undefined,
           timeout: 120_000,
           imageUrls,
+          onProgress: onProgress as ExecutionRequest["onProgress"],
         });
       }
 
