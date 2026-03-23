@@ -109,7 +109,7 @@ coordinator.registerProject("default", projectId, agentId);
 coordinator.setProjectAgent("default", agent);
 await supervisor.spawnAgent("_coordinator", coordinator);
 
-// 5. Restore saved projects (and register each with the coordinator)
+// 5. Restore saved projects from default storage
 const savedProjects = await storage.getProjectsList();
 for (const proj of savedProjects) {
   if (proj.agentId === agentId) continue; // skip default
@@ -128,6 +128,46 @@ for (const proj of savedProjects) {
   } catch (err) {
     console.error(`[server] Failed to restore ${proj.repo}:`, err.message);
   }
+}
+
+// 5b. Restore saved projects from all org storages
+import * as fs from "node:fs";
+import * as path from "node:path";
+const orgsDir = path.join(storageDir, "orgs");
+try {
+  if (fs.existsSync(orgsDir)) {
+    const orgDirs = fs.readdirSync(orgsDir);
+    for (const orgId of orgDirs) {
+      try {
+        const orgStorage = new FileStorage(storageDir, orgId);
+        const orgProjects = await orgStorage.getProjectsList();
+        for (const proj of orgProjects) {
+          if (proj.agentId === agentId) continue;
+          // Skip if already spawned
+          if (supervisor.getAgentById(proj.agentId)) continue;
+          try {
+            const restoredAgent = new ProjectAgent(
+              { id: proj.agentId, type: "project", projectId: proj.id, autonomyLevel: 1 },
+              orgStorage,
+              approvalManager,
+              vectorStore
+            );
+            restoredAgent.setIdentityStore(identityStore);
+            await supervisor.spawnAgent(proj.id, restoredAgent);
+            coordinator.registerProject(proj.id, proj.id, proj.agentId);
+            coordinator.setProjectAgent(proj.id, restoredAgent);
+            console.log(`[server] Restored org project: ${proj.repo} → ${proj.agentId} (org: ${orgId})`);
+          } catch (err) {
+            console.error(`[server] Failed to restore org project ${proj.repo}:`, err.message);
+          }
+        }
+      } catch {
+        // Skip orgs with no projects
+      }
+    }
+  }
+} catch (err) {
+  console.error(`[server] Failed to scan org storages:`, err.message);
 }
 
 // 6. Start supervisor
