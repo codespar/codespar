@@ -23,6 +23,8 @@
     "mcp-generator",
     "enterprise-integrations",
     "agentgate-payments",
-    "agentgate-governance"
+    "agentgate-governance",
+    "web-chat",
+    "demo"
   ]
 }

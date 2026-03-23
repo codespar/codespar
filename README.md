@@ -227,6 +227,8 @@ Enable channels by setting their env vars. All channels are optional. Enable onl
 | `@codespar plan <feature>` | Breaks feature into 3-8 sequential sub-tasks |
 | `@codespar merge PR #<n> [squash\|rebase]` | Merges a pull request (default, squash, or rebase) |
 | `@codespar lens <question>` | Queries data, generates SQL, returns insights and visualization suggestions |
+| `@codespar demo [name]` | Show interactive demos (MCP Generator) |
+| `@codespar kill` | Emergency kill switch, stops all agent activity |
 | `@codespar help` | Shows all available commands |
 | Natural language | Works in any language (Portuguese, Spanish, etc.) |
 

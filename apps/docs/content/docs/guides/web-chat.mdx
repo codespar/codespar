@@ -1,0 +1,67 @@
+---
+title: Web Chat
+description: Chat directly with your CodeSpar agent from the dashboard browser interface.
+---
+
+# Web Chat
+
+The Web Chat interface at `/dashboard/chat` lets you interact with your CodeSpar agent directly from the browser. No Slack, WhatsApp, or Discord setup required.
+
+## Overview
+
+Web Chat provides the same agent capabilities available in messaging channels, wrapped in a browser-based interface. Every command that works in Slack or WhatsApp works identically in Web Chat.
+
+## Features
+
+### Streaming with Progress
+
+Messages from the agent stream in real time using Server-Sent Events (SSE). You see the response as it is generated, with progress indicators for multi-step operations like code generation and PR creation.
+
+### Image Drag-and-Drop
+
+Drag and drop screenshots or images directly into the chat input. The agent analyzes the image using vision capabilities, the same way it handles image attachments in Slack or Discord.
+
+### Deploy Alerts in Chat
+
+When a deploy is triggered or a build fails, alerts appear directly in the chat timeline. You can approve or reject deploy requests without leaving the browser.
+
+### Same Commands as All Channels
+
+Web Chat normalizes messages through the same `NormalizedMessage` interface used by every channel adapter. All 21 commands work identically:
+
+```
+status build
+instruct add input validation to the signup endpoint
+review PR #42
+deploy staging
+plan add user onboarding flow
+lens how many users signed up this week
+demo mcp-generator
+```
+
+## Getting Started
+
+1. Log in to the dashboard at `codespar.dev/dashboard`
+2. Click **Chat** in the sidebar navigation
+3. Type a command or natural language message
+4. The agent responds in the same thread with streaming updates
+
+## When to Use Web Chat
+
+- **Quick checks** when you are already in the dashboard
+- **First-time setup** before configuring messaging channels
+- **Image-based debugging** when you need to share a screenshot with the agent
+- **Deploy approvals** when you want to review and approve from the browser
+
+## Comparison with Messaging Channels
+
+| Feature | Web Chat | Slack / WhatsApp / Discord / Telegram |
+|---------|----------|---------------------------------------|
+| Setup required | None (login only) | Channel adapter configuration |
+| Streaming responses | Yes (SSE) | Yes (progressive message updates) |
+| Image support | Drag-and-drop | Attach in message |
+| Thread context | Single conversation | Per-thread in channels |
+| Mobile access | Browser | Native app |
+| Notifications | In-browser only | Push notifications via channel app |
+
+Web Chat is not a replacement for messaging channels. It is a convenience interface for teams that want browser-based access alongside their existing channel setup.

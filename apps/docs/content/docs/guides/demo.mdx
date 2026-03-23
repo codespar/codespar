@@ -1,0 +1,90 @@
+---
+title: Interactive Demo
+description: Try the MCP Server Generator demo and query generated tools interactively.
+---
+
+# Interactive Demo
+
+The `demo` command lets you explore CodeSpar features through guided, interactive walkthroughs without needing a live project or API keys.
+
+## Commands
+
+### demo mcp-generator
+
+Runs a progressive scan demo that shows how the MCP Server Generator analyzes a codebase and generates tool definitions.
+
+```
+@codespar demo mcp-generator
+```
+
+**What happens:**
+
+1. The demo simulates scanning a sample codebase (file discovery, symbol extraction, dependency graph)
+2. Each scan phase displays progress with realistic timing
+3. The generated MCP server output shows tool definitions, parameter schemas, and endpoint mappings
+4. The demo highlights how CodeSpar converts REST endpoints into MCP-compatible tools
+
+**Example output:**
+
+```
+🔍 Scanning codebase...
+  ├── 47 files discovered
+  ├── 12 API endpoints found
+  ├── 8 data models extracted
+  └── Dependency graph built (3 layers)
+
+🛠 Generating MCP Server...
+  ├── Tool: getUserById (GET /api/users/:id)
+  ├── Tool: createUser (POST /api/users)
+  ├── Tool: listOrders (GET /api/orders)
+  └── 12 tools generated
+
+✅ MCP Server ready
+   Output: .codespar/mcp-server.json
+```
+
+### demo query
+
+Simulates an agent using the generated MCP tools to answer a natural language question. This demonstrates how agents compose tool calls to fulfill requests.
+
+```
+@codespar demo query how many active users signed up this week
+```
+
+**What happens:**
+
+1. The agent parses the question and identifies which tools to call
+2. It shows the tool invocation chain (which MCP tools, in what order)
+3. Each tool call displays its input parameters and response
+4. The final answer is synthesized from the tool responses
+
+**Example output:**
+
+```
+🧠 Planning tool calls...
+  1. listUsers(filter: { status: "active", createdAfter: "2026-03-16" })
+  2. countResults(dataset: users)
+
+📊 Results:
+  → listUsers returned 34 records
+  → countResults: 34
+
+💬 Answer: 34 active users signed up this week (March 16-23, 2026).
+```
+
+## Enterprise Page Animated Demo
+
+The enterprise page at `codespar.dev/enterprise` includes an animated version of the MCP Generator demo. This browser-based animation shows the progressive scan and tool generation flow without requiring any backend connection. It runs automatically when the section scrolls into view.
+
+## Use Cases
+
+- **Evaluating CodeSpar** before connecting a real project
+- **Team onboarding** to show what agents can do
+- **Sales demos** for enterprise prospects
+- **Testing channel setup** to confirm message routing works
+
+## Notes
+
+- The `demo` command works in all channels (Slack, WhatsApp, Discord, Telegram, CLI, Web Chat)
+- Demo output uses simulated data; no real API calls or code changes are made
+- The MCP Generator demo reflects the same scan pipeline used in production (enterprise feature)
