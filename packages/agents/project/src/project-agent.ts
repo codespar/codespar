@@ -653,7 +653,7 @@ export class ProjectAgent implements Agent {
       }
 
       case "demo": {
-        response = await this.handleDemo(intent);
+        response = await this.handleDemo(message, intent);
         break;
       }
 
@@ -760,52 +760,112 @@ export class ProjectAgent implements Agent {
    * Currently supports "mcp-generator". In production this would
    * use the enterprise @codespar-enterprise/mcp-generator package.
    */
-  private async handleDemo(intent: ParsedIntent): Promise<ChannelResponse> {
+  private async handleDemo(
+    message: NormalizedMessage,
+    intent: ParsedIntent,
+  ): Promise<ChannelResponse> {
     const demoParam = (intent.params.demoName || "").trim();
+    const onProgress = message.metadata?.onProgress as ((event: { type: string; message: string; code?: string }) => void) | undefined;
 
-    // "demo mcp-generator" - initial scan and tool generation
-    if (demoParam === "mcp-generator" || demoParam === "") {
-      const lines = [
-        `[Lens] MCP Generator Demo`,
-        "",
-        "Scanning demo API (3 files)...",
-        "",
-        "\u2022 src/routes/users.ts (5 endpoints)",
-        "\u2022 src/routes/orders.ts (3 endpoints)",
-        "\u2022 src/routes/health.ts (1 endpoint)",
-        "",
-        "Endpoints found:",
-        "  GET    /api/users          \u2192 listUsers(page, limit)",
-        "  GET    /api/users/:id      \u2192 getUsersById(id)",
-        "  POST   /api/users          \u2192 createUsers(name, email, role)",
-        "  PUT    /api/users/:id      \u2192 updateUsersById(id, name, email)",
-        "  DELETE /api/users/:id      \u2192 deleteUsersById(id)",
-        "  GET    /api/orders         \u2192 listOrders(status, customerId)",
-        "  GET    /api/orders/:id     \u2192 getOrdersById(id)",
-        "  POST   /api/orders         \u2192 createOrders(customerId, items, total)",
-        "  GET    /api/health         \u2192 getHealth()",
-        "",
-        "\u2705 MCP Server generated: 9 tools ready",
-        "",
-        "Now try querying the demo API. Examples:",
-        '  demo query how many users do we have?',
-        '  demo query create a user named Ana with email ana@test.com',
-        '  demo query show me pending orders',
-        '  demo query what is the system health?',
-      ];
-      return { text: lines.join("\n") };
-    }
-
-    // "demo query <question>" - simulate an agent using the MCP tools
+    // "demo query <question>" - simulate agent using tools
     if (demoParam.startsWith("query ")) {
-      const question = demoParam.slice(6).trim().toLowerCase();
-      return this.handleDemoQuery(question);
+      return this.handleDemoQuery(demoParam.slice(6).trim().toLowerCase(), onProgress);
     }
 
-    return { text: `[${this.config.id}] Available demos:\n  demo mcp-generator    Generate MCP server from demo API\n  demo query <question>  Query the demo API using generated tools` };
+    // "demo mcp-generator" or "demo" - progressive scan and generation
+    if (demoParam !== "mcp-generator" && demoParam !== "") {
+      return { text: `[${this.config.id}] Available demos:\n  demo mcp-generator\n  demo query <question>` };
+    }
+
+    // If we have onProgress (web chat with streaming), show progressively
+    if (onProgress) {
+      const delay = (ms: number) => new Promise(r => setTimeout(r, ms));
+
+      onProgress({ type: "status", message: "Scanning demo API..." });
+      await delay(600);
+
+      onProgress({ type: "status", message: "Found: src/routes/users.ts (5 endpoints)" });
+      await delay(400);
+      onProgress({ type: "status", message: "Found: src/routes/orders.ts (3 endpoints)" });
+      await delay(400);
+      onProgress({ type: "status", message: "Found: src/routes/health.ts (1 endpoint)" });
+      await delay(300);
+      onProgress({ type: "status", message: "9 endpoints discovered" });
+      await delay(600);
+
+      onProgress({ type: "status", message: "Generating MCP tools..." });
+      await delay(400);
+
+      const tools = [
+        "listUsers(page, limit)",
+        "getUsersById(id)",
+        "createUsers(name, email, role)",
+        "updateUsersById(id, name, email)",
+        "deleteUsersById(id)",
+        "listOrders(status, customerId)",
+        "getOrdersById(id)",
+        "createOrders(customerId, items, total)",
+        "getHealth()",
+      ];
+
+      for (const tool of tools) {
+        onProgress({ type: "code", message: "", code: `  \u2192 ${tool}\n` });
+        await delay(150);
+      }
+
+      await delay(400);
+      onProgress({ type: "status", message: "\u2705 MCP Server generated: 9 tools ready" });
+
+      // Return the final response with query suggestions
+      return {
+        text: [
+          "MCP Server ready. Now try querying the demo API:",
+          "",
+          "  demo query how many users do we have?",
+          "  demo query create a user named Ana",
+          "  demo query show me pending orders",
+          "  demo query check system health",
+        ].join("\n"),
+      };
+    }
+
+    // Fallback for non-streaming channels (Slack, WhatsApp): return full text
+    const lines = [
+      `[${this.config.id}] MCP Generator Demo`,
+      "",
+      "Scanning demo API (3 files)...",
+      "",
+      "\u2022 src/routes/users.ts (5 endpoints)",
+      "\u2022 src/routes/orders.ts (3 endpoints)",
+      "\u2022 src/routes/health.ts (1 endpoint)",
+      "",
+      "Generating MCP tools...",
+      "",
+      "  GET    /api/users          \u2192 listUsers(page, limit)",
+      "  GET    /api/users/:id      \u2192 getUsersById(id)",
+      "  POST   /api/users          \u2192 createUsers(name, email, role)",
+      "  PUT    /api/users/:id      \u2192 updateUsersById(id, name, email)",
+      "  DELETE /api/users/:id      \u2192 deleteUsersById(id)",
+      "  GET    /api/orders         \u2192 listOrders(status, customerId)",
+      "  GET    /api/orders/:id     \u2192 getOrdersById(id)",
+      "  POST   /api/orders         \u2192 createOrders(customerId, items, total)",
+      "  GET    /api/health         \u2192 getHealth()",
+      "",
+      "\u2705 MCP Server generated: 9 tools ready",
+      "",
+      "Now try querying the demo API:",
+      "  demo query how many users do we have?",
+      "  demo query create a user named Ana with email ana@test.com",
+      "  demo query show me pending orders",
+      "  demo query check system health",
+    ];
+    return { text: lines.join("\n") };
   }
 
-  private handleDemoQuery(question: string): ChannelResponse {
+  private async handleDemoQuery(
+    question: string,
+    onProgress?: (event: { type: string; message: string; code?: string }) => void,
+  ): Promise<ChannelResponse> {
     // Simulate tool selection and execution based on the question
     interface DemoResponse {
       toolName: string;
@@ -927,7 +987,31 @@ export class ProjectAgent implements Agent {
       };
     }
 
-    // Format the response showing tool execution
+    // If we have onProgress (web chat with streaming), show steps progressively
+    if (onProgress) {
+      const delay = (ms: number) => new Promise(r => setTimeout(r, ms));
+
+      onProgress({ type: "status", message: `Processing: "${question}"` });
+      await delay(500);
+      onProgress({ type: "status", message: `Selecting tool: ${result.toolName}` });
+      await delay(400);
+      onProgress({ type: "status", message: `Calling: ${result.method} ${result.path}` });
+      await delay(600);
+      onProgress({ type: "status", message: "Response received" });
+      await delay(300);
+      onProgress({ type: "code", message: "", code: JSON.stringify(result.response, null, 2) });
+      await delay(400);
+
+      return {
+        text: [
+          result.answer,
+          "",
+          "Try another query or type: demo mcp-generator",
+        ].join("\n"),
+      };
+    }
+
+    // Fallback for non-streaming channels: return full text
     const paramsStr = result.params
       ? Object.entries(result.params).map(([k, v]) => `${k}: "${v}"`).join(", ")
       : "";
