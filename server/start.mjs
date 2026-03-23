@@ -170,6 +170,11 @@ webhookServer.setApprovalManager(approvalManager);
 webhookServer.setIdentityStore(identityStore);
 webhookServer.setVectorStore(vectorStore);
 
+// Wire web chat messages through the same message router as channel adapters
+webhookServer.setChatHandler(async (message) => {
+  return router.route(message);
+});
+
 // Give webhook server ability to dynamically create agents
 webhookServer.setAgentFactory({
   async createAgent(newProjectId, newAgentId, repo) {

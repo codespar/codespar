@@ -13,7 +13,7 @@
 
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { createHmac, timingSafeEqual } from "node:crypto";
+import { createHmac, randomUUID, timingSafeEqual } from "node:crypto";
 import Fastify, { type FastifyInstance, type FastifyReply } from "fastify";
 import cors from "@fastify/cors";
 import { parseGitHubWebhook, type CIEvent } from "../webhooks/github-handler.js";
@@ -32,7 +32,8 @@ import { FileStorage } from "../storage/file-storage.js";
 import type { ApprovalManager } from "../approval/approval-manager.js";
 import type { IdentityStore } from "../auth/identity-store.js";
 import type { VectorStore } from "../memory/vector-store.js";
-import type { ChannelType } from "../types/normalized-message.js";
+import type { ChannelType, NormalizedMessage } from "../types/normalized-message.js";
+import { parseIntent } from "../router/intent-parser.js";
 
 export interface WebhookServerConfig {
   port?: number;
@@ -152,6 +153,7 @@ export class WebhookServer {
   private vectorStore: VectorStore | null = null;
   private storageBaseDir: string = ".codespar";
   private orgStorageCache: Map<string, StorageProvider> = new Map();
+  private chatHandler: ((message: import("../types/normalized-message.js").NormalizedMessage) => Promise<import("../types/channel-adapter.js").ChannelResponse | null>) | null = null;
 
   constructor(config?: WebhookServerConfig) {
     this.port = config?.port ?? parseInt(process.env["PORT"] ?? "3000", 10);
@@ -194,6 +196,11 @@ export class WebhookServer {
   /** Set the vector store for memory stats endpoint */
   setVectorStore(store: VectorStore): void {
     this.vectorStore = store;
+  }
+
+  /** Set a handler for web chat messages routed through the message router */
+  setChatHandler(handler: (message: import("../types/normalized-message.js").NormalizedMessage) => Promise<import("../types/channel-adapter.js").ChannelResponse | null>): void {
+    this.chatHandler = handler;
   }
 
   /** Set the base directory used for org-scoped file storage */
@@ -368,6 +375,81 @@ export class WebhookServer {
         agents: this.agentCount,
         metrics: metrics.toJSON(),
       };
+    });
+
+    // ── Web Chat endpoint ─────────────────────────────────────────
+    route("post", "/api/chat", async (request: any, reply: any) => {
+      const body = request.body as {
+        text?: string;
+        agentId?: string;
+        imageUrls?: Array<{ url: string; mimeType?: string }>;
+      };
+      const text = String(body.text || "").trim();
+      if (!text) {
+        reply.code(400).send({ error: "Message text is required" });
+        return;
+      }
+
+      const orgId = this.getOrgId(request);
+      const agentId = body.agentId || "agent-default";
+
+      // Build a normalized message from the web chat request
+      const message: NormalizedMessage = {
+        id: randomUUID(),
+        channelType: "web",
+        channelId: `web-${orgId}`,
+        channelUserId: `web-user-${orgId}`,
+        isDM: true,
+        isMentioningBot: true,
+        text,
+        timestamp: new Date(),
+        attachments: body.imageUrls?.map((img) => ({
+          type: "image" as const,
+          url: img.url,
+          mimeType: img.mimeType,
+        })),
+      };
+
+      const intent = await parseIntent(text);
+
+      let responseText = `[${agentId}] No agent available to handle this message.`;
+
+      try {
+        if (this.chatHandler) {
+          const response = await this.chatHandler(message);
+          responseText = response?.text || responseText;
+        }
+      } catch (err) {
+        responseText = `Error: ${err instanceof Error ? err.message : "Unknown error"}`;
+      }
+
+      // Audit log
+      const storage = this.getOrgStorage(orgId);
+      if (storage) {
+        try {
+          await storage.appendAudit({
+            actorType: "user",
+            actorId: message.channelUserId,
+            action: intent.type === "unknown" ? "chat.message" : `${intent.type}.executed`,
+            result: "success",
+            metadata: {
+              agentId,
+              channel: "web",
+              detail: text.slice(0, 100),
+              orgId,
+            },
+          });
+        } catch {
+          // Audit logging is best-effort
+        }
+      }
+
+      reply.send({
+        text: responseText,
+        intent: intent.type,
+        confidence: intent.confidence,
+        timestamp: new Date().toISOString(),
+      });
     });
 
     // ── Dashboard API endpoints ──────────────────────────────────
