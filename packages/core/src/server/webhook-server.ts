@@ -1766,6 +1766,12 @@ export class WebhookServer {
         return reply.status(200).send({ received: true, processed: false });
       }
 
+      // Skip intermediate workflow_run states -- only log the final result
+      // (a single push generates queued, in_progress, and completed events)
+      if (event.type === "workflow_run" && (event.status === "in_progress" || event.status === "queued")) {
+        return reply.status(200).send({ received: true, processed: false, reason: "intermediate_state" });
+      }
+
       // Log to audit with org-scoped storage
       const ghStorage = this.getOrgStorage(orgId);
       await ghStorage.appendAudit({
@@ -1857,6 +1863,12 @@ export class WebhookServer {
       const errorMessage = String(deployment.errorMessage || deployment.buildError || "");
 
       log.info("Vercel webhook event", { type, project: name, state });
+
+      // Skip intermediate deploy states -- only log the final result
+      // (deployment.created is always followed by succeeded or error)
+      if (type === "deployment.created" || state === "BUILDING" || state === "INITIALIZING") {
+        return reply.send({ received: true, processed: false, reason: "intermediate_state" });
+      }
 
       // Log to audit with org-scoped storage
       const vercelStorage = this.getOrgStorage(orgId);
