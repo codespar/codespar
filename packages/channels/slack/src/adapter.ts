@@ -238,6 +238,69 @@ export class SlackAdapter implements ChannelAdapter {
   private registerEventHandlers(): void {
     if (!this.app) return;
 
+    // Interactive button clicks -- approve, reject, merge, investigate, etc.
+    // The regex matches all action_id prefixes used by the formatter's button builders.
+    this.app.action(
+      /^(approve_|reject_|review_pr_|merge_pr_|approve_merge_pr_|investigate_failure|view_logs|request_changes_)/,
+      async ({ action, ack, body, client }) => {
+        await ack();
+
+        const buttonAction = action as {
+          action_id: string;
+          value: string;
+        };
+        const actionId = buttonAction.action_id;
+        const value = buttonAction.value;
+        const userId = body.user?.id || "unknown";
+        const channelId =
+          (body as Record<string, any>).channel?.id ||
+          (body as Record<string, any>).container?.channel_id ||
+          "";
+
+        let command = "";
+
+        if (actionId.startsWith("approve_merge_pr_")) {
+          command = `merge PR #${value}`;
+        } else if (actionId.startsWith("merge_pr_")) {
+          command = `merge PR #${value}`;
+        } else if (actionId.startsWith("review_pr_")) {
+          command = `review PR #${value}`;
+        } else if (actionId.startsWith("approve_")) {
+          command = `approve ${value}`;
+        } else if (actionId.startsWith("reject_")) {
+          command = `reject ${value}`;
+        } else if (actionId === "investigate_failure") {
+          command = "logs 5";
+        } else if (actionId === "view_logs") {
+          command = "logs 10";
+        } else if (actionId.startsWith("request_changes_")) {
+          if (channelId) {
+            await client.chat.postMessage({
+              channel: channelId,
+              text: `Changes requested on PR #${value} by <@${userId}>`,
+            });
+          }
+          return;
+        }
+
+        if (command && this.messageHandler) {
+          const normalized: NormalizedMessage = {
+            id: randomUUID(),
+            channelType: "slack",
+            channelId,
+            channelUserId: userId,
+            isDM: false,
+            isMentioningBot: true,
+            text: command,
+            timestamp: new Date(),
+            metadata: { channelId },
+          };
+
+          await this.messageHandler(normalized);
+        }
+      }
+    );
+
     // DMs only -- handle direct messages to the bot
     this.app.message(async ({ message, say }) => {
       const msg = message as SlackMessageEvent;

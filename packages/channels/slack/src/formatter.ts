@@ -22,7 +22,21 @@ interface DividerBlock {
   type: "divider";
 }
 
-type SlackBlock = SectionBlock | DividerBlock;
+interface ButtonElement {
+  type: "button";
+  text: { type: "plain_text"; text: string };
+  action_id: string;
+  value?: string;
+  style?: "primary" | "danger";
+  url?: string;
+}
+
+interface ActionsBlock {
+  type: "actions";
+  elements: ButtonElement[];
+}
+
+type SlackBlock = SectionBlock | DividerBlock | ActionsBlock;
 
 /**
  * Detect whether a text block contains approval-related content.
@@ -113,17 +127,205 @@ function formatApprovalBlocks(text: string): SlackBlock[] {
   return blocks;
 }
 
+// ---------------------------------------------------------------------------
+// Interactive button builders for specific message patterns
+// ---------------------------------------------------------------------------
+
+/**
+ * Build approval blocks with Approve/Reject action buttons.
+ * Extracts the approval token from the message text so button clicks
+ * can route to the correct approval flow.
+ */
+function buildApprovalButtons(text: string): SlackBlock[] {
+  const tokenMatch = text.match(/(?:Token|token|approve)\s*:?\s*([a-z]{2}-[a-zA-Z0-9]+)/);
+  const token = tokenMatch ? tokenMatch[1] : "";
+
+  const blocks: SlackBlock[] = [
+    {
+      type: "section",
+      text: { type: "mrkdwn", text },
+    },
+  ];
+
+  if (token) {
+    blocks.push({
+      type: "actions",
+      elements: [
+        {
+          type: "button",
+          text: { type: "plain_text", text: "\u2713 Approve" },
+          style: "primary",
+          action_id: `approve_${token}`,
+          value: token,
+        },
+        {
+          type: "button",
+          text: { type: "plain_text", text: "Reject" },
+          style: "danger",
+          action_id: `reject_${token}`,
+          value: token,
+        },
+      ],
+    });
+  }
+
+  return blocks;
+}
+
+/**
+ * Build blocks for PR-created messages with Review, Merge, and
+ * (optionally) a "View on GitHub" link button.
+ */
+function buildPRCreatedBlocks(text: string): SlackBlock[] {
+  const prMatch = text.match(/PR #(\d+)/);
+  const prNumber = prMatch ? prMatch[1] : "";
+  const urlMatch = text.match(/(https:\/\/github\.com\/[^\s]+)/);
+  const prUrl = urlMatch ? urlMatch[1] : "";
+
+  const elements: ButtonElement[] = [
+    {
+      type: "button",
+      text: { type: "plain_text", text: "\uD83D\uDCDD Review PR" },
+      action_id: `review_pr_${prNumber}`,
+      value: prNumber,
+    },
+    {
+      type: "button",
+      text: { type: "plain_text", text: "\u2713 Merge" },
+      style: "primary",
+      action_id: `merge_pr_${prNumber}`,
+      value: prNumber,
+    },
+  ];
+
+  if (prUrl) {
+    elements.push({
+      type: "button",
+      text: { type: "plain_text", text: "View on GitHub" },
+      url: prUrl,
+      action_id: `view_pr_${prNumber}`,
+    });
+  }
+
+  return [
+    { type: "section", text: { type: "mrkdwn", text } },
+    { type: "actions", elements },
+  ];
+}
+
+/**
+ * Build blocks for build-failure messages with Investigate and View Logs buttons.
+ */
+function buildBuildFailureBlocks(text: string): SlackBlock[] {
+  return [
+    { type: "section", text: { type: "mrkdwn", text } },
+    {
+      type: "actions",
+      elements: [
+        {
+          type: "button",
+          text: { type: "plain_text", text: "\uD83D\uDD0D Investigate" },
+          action_id: "investigate_failure",
+          value: "investigate",
+        },
+        {
+          type: "button",
+          text: { type: "plain_text", text: "\uD83D\uDCCB View Logs" },
+          action_id: "view_logs",
+          value: "logs",
+        },
+      ],
+    },
+  ];
+}
+
+/**
+ * Build blocks for PR review results (with Risk level) with
+ * Approve & Merge and Request Changes buttons.
+ */
+function buildPRReviewBlocks(text: string): SlackBlock[] {
+  const prMatch = text.match(/PR #(\d+)/);
+  const prNumber = prMatch ? prMatch[1] : "";
+
+  return [
+    { type: "section", text: { type: "mrkdwn", text } },
+    {
+      type: "actions",
+      elements: [
+        {
+          type: "button",
+          text: { type: "plain_text", text: "\u2713 Approve & Merge" },
+          style: "primary",
+          action_id: `approve_merge_pr_${prNumber}`,
+          value: prNumber,
+        },
+        {
+          type: "button",
+          text: { type: "plain_text", text: "Request Changes" },
+          action_id: `request_changes_pr_${prNumber}`,
+          value: prNumber,
+        },
+      ],
+    },
+  ];
+}
+
+/**
+ * Detect whether the message text matches a pattern that should
+ * include interactive action buttons.
+ *
+ * Returns the appropriate Block Kit blocks with buttons, or null
+ * if no interactive pattern is detected.
+ */
+function detectInteractiveBlocks(text: string): SlackBlock[] | null {
+  // Deploy approval requests
+  if (
+    (text.includes("Deploy") && text.includes("approval")) ||
+    text.includes("Waiting approval")
+  ) {
+    return buildApprovalButtons(text);
+  }
+
+  // PR creation notifications
+  if (text.includes("PR #") && text.includes("created")) {
+    return buildPRCreatedBlocks(text);
+  }
+
+  // Build failure alerts
+  if (
+    text.includes("Build") &&
+    (text.includes("failed") || text.includes("broken") || text.includes("failure"))
+  ) {
+    return buildBuildFailureBlocks(text);
+  }
+
+  // PR review results with risk assessment
+  if (text.includes("Review") && text.includes("Risk:")) {
+    return buildPRReviewBlocks(text);
+  }
+
+  return null;
+}
+
 /**
  * Formats a plain text response into Slack Block Kit blocks.
  *
  * Recognizes these patterns:
+ * - Interactive messages: deploy approvals, PR created, build failures,
+ *   PR reviews -- formatted with action buttons
  * - Approval messages: detected by approval keywords, formatted as rich cards
  * - Code blocks: lines indented with spaces or containing pipe characters
  * - Status lines: lines starting with check/cross marks
  * - Regular text: everything else, rendered as mrkdwn sections
  */
 export function formatSlackBlocks(text: string): SlackBlock[] {
-  // Check for approval messages first — they get special formatting
+  // Check for interactive message patterns (buttons for approve/reject/merge etc.)
+  const interactiveBlocks = detectInteractiveBlocks(text);
+  if (interactiveBlocks) {
+    return interactiveBlocks;
+  }
+
+  // Check for approval messages first -- they get special formatting
   if (isApprovalMessage(text)) {
     const approvalBlocks = formatApprovalBlocks(text);
 
