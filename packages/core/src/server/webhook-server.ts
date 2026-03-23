@@ -1544,17 +1544,20 @@ export class WebhookServer {
     const SLACK_OAUTH_SCOPES = "app_mentions:read,chat:write,channels:read,files:read,users:read";
 
     // Initiate Slack OAuth flow by redirecting to the Slack authorization page
-    route("get", "/api/slack/install", async (_request: any, reply: any) => {
+    route("get", "/api/slack/install", async (request: any, reply: any) => {
       const clientId = process.env.SLACK_CLIENT_ID;
       if (!clientId) {
         return reply.status(500).send({ error: "SLACK_CLIENT_ID is not configured" });
       }
 
+      // Accept orgId from query param (browser redirects can't send custom headers)
+      const orgId = (request.query as Record<string, string>)?.orgId || this.getOrgId(request);
       const redirectUri = process.env.SLACK_OAUTH_REDIRECT_URI || "";
       const params = new URLSearchParams({
         client_id: clientId,
         scope: SLACK_OAUTH_SCOPES,
         redirect_uri: redirectUri,
+        state: orgId, // Pass orgId so callback knows which org to save to
       });
 
       const authorizeUrl = `https://slack.com/oauth/v2/authorize?${params.toString()}`;
@@ -1563,7 +1566,8 @@ export class WebhookServer {
 
     // Handle OAuth callback from Slack, exchange code for bot token, and save installation
     route("get", "/api/slack/callback", async (request: any, reply: any) => {
-      const { code, error: oauthError } = request.query as { code?: string; error?: string };
+      const { code, error: oauthError, state } = request.query as { code?: string; error?: string; state?: string };
+      const orgId = state || "default";
 
       if (oauthError) {
         log.warn("Slack OAuth denied", { error: oauthError });
@@ -1619,10 +1623,19 @@ export class WebhookServer {
           scopes: tokenData.scope?.split(",") ?? [],
         };
 
-        const storage = this.storageProvider ?? new FileStorage(this.storageBaseDir);
-        await storage.saveSlackInstallation(installation);
+        // Save to org-scoped storage so the channels endpoint shows "connected" for this org
+        const installStorage = orgId !== "default"
+          ? this.getOrgStorage(orgId)
+          : (this.storageProvider ?? new FileStorage(this.storageBaseDir));
+        await installStorage.saveSlackInstallation(installation);
 
-        log.info("Slack installation saved", { teamId: installation.teamId, teamName: installation.teamName });
+        // Also save to default storage for the Slack adapter to find the token
+        if (orgId !== "default") {
+          const defaultStorage = this.storageProvider ?? new FileStorage(this.storageBaseDir);
+          await defaultStorage.saveSlackInstallation(installation);
+        }
+
+        log.info("Slack installation saved", { teamId: installation.teamId, teamName: installation.teamName, orgId });
         const dashboardUrl = process.env.DASHBOARD_URL || "https://codespar.dev";
         return reply.redirect(`${dashboardUrl}/dashboard/setup?slack=connected`);
       } catch (err) {
