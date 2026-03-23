@@ -1623,10 +1623,12 @@ export class WebhookServer {
         await storage.saveSlackInstallation(installation);
 
         log.info("Slack installation saved", { teamId: installation.teamId, teamName: installation.teamName });
-        return reply.redirect("/?slack=success");
+        const dashboardUrl = process.env.DASHBOARD_URL || "https://codespar.dev";
+        return reply.redirect(`${dashboardUrl}/dashboard/setup?slack=connected`);
       } catch (err) {
         log.error("Slack OAuth callback error", { error: err instanceof Error ? err.message : String(err) });
-        return reply.redirect("/?slack=error&reason=internal");
+        const dashboardUrl = process.env.DASHBOARD_URL || "https://codespar.dev";
+        return reply.redirect(`${dashboardUrl}/dashboard/setup?slack=error`);
       }
     });
 
