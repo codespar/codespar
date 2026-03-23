@@ -35,7 +35,7 @@ export class MessageRouter {
   }
 
   /** Route a message to the appropriate agent */
-  async route(message: NormalizedMessage): Promise<ChannelResponse | null> {
+  async route(message: NormalizedMessage, orgId?: string): Promise<ChannelResponse | null> {
     // Only process messages that mention the bot or are DMs
     if (!message.isMentioningBot && !message.isDM) {
       return null;
@@ -62,7 +62,7 @@ export class MessageRouter {
     const words = message.text.trim().split(/\s+/);
     const firstWord = words[0]?.toLowerCase();
 
-    // "all <command>" → route to coordinator for cross-project aggregation
+    // "all <command>" -> route to coordinator for cross-project aggregation
     if (firstWord === "all") {
       const coordinator = this.findCoordinator();
       if (coordinator) {
@@ -72,11 +72,11 @@ export class MessageRouter {
     }
 
     // Check if first word matches a project alias or partial project ID
-    const agentByAlias = this.findAgentByAlias(firstWord);
+    const agentByAlias = this.findAgentByAlias(firstWord, orgId);
     if (agentByAlias) {
       const subText = words.slice(1).join(" ");
       if (!subText) {
-        // Bare alias with no command — treat as status
+        // Bare alias with no command -- treat as status
         const subIntent = await parseIntent("status");
         return agentByAlias.handleMessage(
           { ...message, text: "status" },
@@ -90,21 +90,19 @@ export class MessageRouter {
       );
     }
 
-    // Single project → route directly (skip coordinator)
-    const projectAgents = this.getProjectAgents();
+    // Single project -> route directly (skip coordinator)
+    const projectAgents = this.getProjectAgents(orgId);
     if (projectAgents.length === 1) {
       return projectAgents[0].handleMessage(message, intent);
     }
 
-    // Multiple projects, no alias specified → ask for clarification
+    // Multiple projects, no alias specified -> ask for clarification
     if (projectAgents.length > 1) {
-      const aliases = Array.from(this.agents.entries())
-        .filter(([key]) => key !== "_coordinator")
-        .map(([key]) => key)
+      const aliases = this.getProjectAgents(orgId)
+        .map((a) => a.config.projectId ?? a.config.id)
         .join(" | ");
-      const exampleAlias = Array.from(this.agents.keys()).find(
-        (k) => k !== "_coordinator",
-      );
+      const exampleAlias = this.getProjectAgents(orgId)[0]?.config.projectId
+        ?? this.getProjectAgents(orgId)[0]?.config.id;
       return {
         text: `[codespar] Multiple projects registered. Specify which one:\n  ${aliases}\n\nExample: @codespar ${exampleAlias} status`,
       };
@@ -127,12 +125,17 @@ export class MessageRouter {
   ]);
 
   /** Find a project agent by alias, partial project ID, or repo name fragment */
-  private findAgentByAlias(alias: string | undefined): Agent | undefined {
+  private findAgentByAlias(alias: string | undefined, orgId?: string): Agent | undefined {
     if (!alias) return undefined;
 
     // Exact match on registration key (but not reserved commands or coordinator)
     if (alias !== "_coordinator" && this.agents.has(alias)) {
-      return this.agents.get(alias);
+      const agent = this.agents.get(alias)!;
+      // If orgId specified, verify the agent belongs to this org (or has no org)
+      if (orgId && agent.config.orgId && agent.config.orgId !== orgId) {
+        return undefined;
+      }
+      return agent;
     }
 
     // Never treat known command words as partial project aliases
@@ -141,6 +144,8 @@ export class MessageRouter {
     // Partial match: alias is a substring of the project key or agent ID
     for (const [key, agent] of this.agents) {
       if (key === "_coordinator") continue;
+      // If orgId specified, only match agents for that org (or agents with no org)
+      if (orgId && agent.config.orgId && agent.config.orgId !== orgId) continue;
       if (key.includes(alias) || agent.config.id.includes(alias)) {
         return agent;
       }
@@ -149,12 +154,17 @@ export class MessageRouter {
     return undefined;
   }
 
-  /** Get only project-type agents (excludes coordinator) */
-  private getProjectAgents(): Agent[] {
-    return Array.from(this.agents.entries())
-      .filter(([key]) => key !== "_coordinator")
-      .map(([, agent]) => agent)
-      .filter((a) => a.config.type === "project");
+  /** Get only project-type agents (excludes coordinator), optionally filtered by org */
+  private getProjectAgents(orgId?: string): Agent[] {
+    const agents: Agent[] = [];
+    for (const [key, agent] of this.agents) {
+      if (key === "_coordinator") continue;
+      if (agent.config.type !== "project") continue;
+      // If orgId specified, only return agents for that org (or agents with no org = default)
+      if (orgId && agent.config.orgId && agent.config.orgId !== orgId) continue;
+      agents.push(agent);
+    }
+    return agents;
   }
 
   /** Get all registered agents */

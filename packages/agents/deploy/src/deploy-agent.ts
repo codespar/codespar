@@ -308,6 +308,7 @@ export class DeployAgent implements Agent {
       state: this._state,
       autonomyLevel: this.config.autonomyLevel,
       projectId: this.config.projectId,
+      orgId: this.config.orgId,
       lastActiveAt: new Date(),
       uptimeMs: Date.now() - this.startedAt.getTime(),
       tasksHandled: this.tasksHandled,

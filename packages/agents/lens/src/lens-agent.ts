@@ -201,6 +201,7 @@ Be concise. Focus on actionable insights, not generic descriptions.`;
       state: this._state,
       autonomyLevel: this.config.autonomyLevel,
       projectId: this.config.projectId,
+      orgId: this.config.orgId,
       lastActiveAt: new Date(),
       uptimeMs: 0,
       tasksHandled: this.queryHistory.length,

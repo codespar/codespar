@@ -413,6 +413,7 @@ export class CoordinatorAgent implements Agent {
       state: this._state,
       autonomyLevel: this.config.autonomyLevel,
       projectId: undefined,
+      orgId: this.config.orgId,
       lastActiveAt: new Date(),
       uptimeMs: Date.now() - this.startedAt.getTime(),
       tasksHandled: this.tasksHandled,
