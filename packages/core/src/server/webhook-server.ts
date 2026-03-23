@@ -1092,10 +1092,12 @@ export class WebhookServer {
     );
 
     // ── List connected channels ──
-    route("get", "/api/channels", async (_request: any, _reply: any) => {
+    route("get", "/api/channels", async (request: any, _reply: any) => {
+      const orgId = this.getOrgId(request);
       const adapters = this.agentSupervisor?.getAdapters?.() ?? [];
 
-      const channels = await Promise.all(
+      // Build global adapter status from health checks
+      const globalChannels = await Promise.all(
         adapters.map(async (adapter) => {
           let healthy = false;
           try {
@@ -1112,22 +1114,56 @@ export class WebhookServer {
         })
       );
 
-      // If no adapters are registered, return env-based channel info
-      if (channels.length === 0) {
-        const envChannels = [];
-        for (const name of ["whatsapp", "slack", "telegram", "discord"]) {
+      // If no adapters are registered, build from env vars
+      if (globalChannels.length === 0) {
+        for (const name of ["whatsapp", "slack", "telegram", "discord"] as const) {
           const envKey = `ENABLE_${name.toUpperCase()}`;
-          envChannels.push({
+          globalChannels.push({
             name,
             platform: name,
             connected: process.env[envKey] === "true",
-            capabilities: null,
+            capabilities: null as unknown as ReturnType<ChannelAdapter["getCapabilities"]>,
           });
         }
-        return { channels: envChannels };
       }
 
-      return { channels };
+      // For the default org, global adapter/env status is sufficient
+      if (orgId === "default") {
+        return { channels: globalChannels };
+      }
+
+      // For non-default orgs, check org-specific channel installations.
+      // A channel is only "connected" for this org if it has a stored
+      // config (via saveChannelConfig) or a Slack installation.
+      const orgStorage = this.getOrgStorage(orgId);
+      const orgChannels = await Promise.all(
+        globalChannels.map(async (ch) => {
+          let orgConnected = false;
+
+          try {
+            // Check org-specific channel config first
+            const config = await orgStorage.getChannelConfig(ch.platform);
+            if (config) {
+              orgConnected = true;
+            }
+
+            // For Slack, also check org-specific Slack installations
+            if (!orgConnected && ch.platform === "slack") {
+              const installations = await orgStorage.getAllSlackInstallations();
+              orgConnected = installations.length > 0;
+            }
+          } catch {
+            // Storage read failed; treat as not connected
+          }
+
+          return {
+            ...ch,
+            connected: orgConnected,
+          };
+        })
+      );
+
+      return { channels: orgChannels };
     });
 
     // ── Reconnect a channel (placeholder) ──
