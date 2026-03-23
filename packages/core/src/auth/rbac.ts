@@ -149,6 +149,7 @@ const INTENT_PERMISSION: Record<IntentType, Permission | null> = {
   merge: "approve_pr",
   plan: "instruct_agent",
   lens: "view_status",
+  demo: null, // always allowed -- demos are read-only
   unknown: null, // always allowed -- agent will respond with help text
 };
 

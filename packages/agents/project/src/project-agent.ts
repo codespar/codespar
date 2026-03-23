@@ -30,7 +30,7 @@ import { DeployAgent } from "@codespar/agent-deploy";
 import { ReviewAgent } from "@codespar/agent-review";
 import { IncidentAgent } from "@codespar/agent-incident";
 
-const COMMANDS_HELP = `Available commands (20):
+const COMMANDS_HELP = `Available commands (21):
 
   Code & Tasks:
     instruct <task>           Execute a coding task (creates PR)
@@ -59,6 +59,7 @@ const COMMANDS_HELP = `Available commands (20):
     whoami                    Show your identity
     register <name>           Register your display name
     memory                    Show agent memory stats
+    demo [name]               Show a feature demo
     help                      Show this help`;
 
 export class ProjectAgent implements Agent {
@@ -651,6 +652,11 @@ export class ProjectAgent implements Agent {
         break;
       }
 
+      case "demo": {
+        response = await this.handleDemo(intent);
+        break;
+      }
+
       case "kill":
         response = {
           text: `[${this.config.id}] Kill switch requires emergency_admin role.\n  (Kill switch coming in Phase 3)`,
@@ -747,6 +753,57 @@ export class ProjectAgent implements Agent {
       default:
         return false;
     }
+  }
+
+  /**
+   * Run a named demo and return the output as a channel message.
+   * Currently supports "mcp-generator". In production this would
+   * use the enterprise @codespar-enterprise/mcp-generator package.
+   */
+  private async handleDemo(intent: ParsedIntent): Promise<ChannelResponse> {
+    const demoName = intent.params.demoName || "mcp-generator";
+
+    if (demoName !== "mcp-generator") {
+      return { text: `[${this.config.id}] Available demos: mcp-generator` };
+    }
+
+    // Simulate the MCP Generator demo with inline data
+    // (In production this would use the enterprise package)
+    const demoFiles = [
+      { method: "GET", path: "/api/users", tool: "listUsers", params: "page, limit" },
+      { method: "GET", path: "/api/users/:id", tool: "getUsersById", params: "id" },
+      { method: "POST", path: "/api/users", tool: "createUsers", params: "name, email, role" },
+      { method: "PUT", path: "/api/users/:id", tool: "updateUsersById", params: "id, name, email" },
+      { method: "DELETE", path: "/api/users/:id", tool: "deleteUsersById", params: "id" },
+      { method: "GET", path: "/api/orders", tool: "listOrders", params: "status, customerId" },
+      { method: "GET", path: "/api/orders/:id", tool: "getOrdersById", params: "id" },
+      { method: "POST", path: "/api/orders", tool: "createOrders", params: "customerId, items, total" },
+      { method: "GET", path: "/api/health", tool: "getHealth", params: "" },
+    ];
+
+    const lines = [
+      `[${this.config.id}] MCP Generator Demo`,
+      "",
+      "Scanning demo API (3 files)...",
+      "",
+      "Endpoints found:",
+      ...demoFiles.map(f => `  ${f.method.padEnd(7)} ${f.path}`),
+      "",
+      "Generated MCP tools:",
+      ...demoFiles.map(f => `  ${f.tool}(${f.params})`),
+      "",
+      "MCP Server generated: 9 tools ready to run",
+      "",
+      "Example usage by an AI agent:",
+      '  Agent receives: "How many users do we have?"',
+      "  Agent calls: listUsers()",
+      '  Agent responds: "You have 47 registered users."',
+      "",
+      "To generate an MCP server for your own codebase:",
+      "  instruct generate mcp-server for the payments API",
+    ];
+
+    return { text: lines.join("\n") };
   }
 
   /**

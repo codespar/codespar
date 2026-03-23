@@ -29,6 +29,7 @@ Classify the user's message into ONE of these intents:
 - merge: asking to merge a pull request
 - plan: asking to plan or break down a large feature into sub-tasks
 - lens: asking about data, analytics, database queries, metrics, charts, reports
+- demo: asking to see a feature demo or demonstration
 - unknown: cannot determine intent
 
 Respond with ONLY a JSON object: {"intent":"<type>","params":{},"confidence":0.95}
