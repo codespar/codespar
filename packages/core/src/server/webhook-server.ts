@@ -3,6 +3,8 @@
  *
  * Endpoints:
  * - POST /webhooks/github — receives and parses GitHub webhook payloads
+ * - POST /webhooks/vercel — receives Vercel deploy event webhooks
+ * - POST /webhooks/deploy — generic deploy webhook for any CI/CD service
  * - GET /health — returns server and agent health info
  *
  * Usage:
@@ -154,6 +156,7 @@ export class WebhookServer {
   private storageBaseDir: string = ".codespar";
   private orgStorageCache: Map<string, StorageProvider> = new Map();
   private chatHandler: ((message: import("../types/normalized-message.js").NormalizedMessage) => Promise<import("../types/channel-adapter.js").ChannelResponse | null>) | null = null;
+  private alertHandler: ((message: string, type: string) => Promise<void>) | null = null;
 
   constructor(config?: WebhookServerConfig) {
     this.port = config?.port ?? parseInt(process.env["PORT"] ?? "3000", 10);
@@ -196,6 +199,11 @@ export class WebhookServer {
   /** Set the vector store for memory stats endpoint */
   setVectorStore(store: VectorStore): void {
     this.vectorStore = store;
+  }
+
+  /** Set a handler for broadcasting deploy alerts to connected channels */
+  setAlertHandler(handler: (message: string, type: string) => Promise<void>): void {
+    this.alertHandler = handler;
   }
 
   /** Set a handler for web chat messages routed through the message router */
@@ -1775,6 +1783,139 @@ export class WebhookServer {
       }
 
       return reply.status(200).send({ received: true, processed: true });
+    });
+
+    // ── Vercel deploy webhook ──────────────────────────────────────
+    route("post", "/webhooks/vercel", async (request: any, reply: any) => {
+      const payload = request.body as Record<string, unknown>;
+
+      // Vercel sends different event types
+      // Docs: https://vercel.com/docs/webhooks
+      const type = String(payload.type || ""); // "deployment.created", "deployment.succeeded", "deployment.error", "deployment.canceled"
+      const deployment = (payload.payload as Record<string, unknown>) || payload;
+
+      const name = String(
+        deployment.name ||
+        (deployment.project as Record<string, unknown> | undefined)?.name ||
+        "unknown"
+      );
+      const url = String(deployment.url || "");
+      const state = String(deployment.state || deployment.readyState || type.split(".")[1] || "unknown");
+      const meta = deployment.meta as Record<string, unknown> | undefined;
+      const commitMessage = String(meta?.githubCommitMessage || meta?.gitlabCommitMessage || "");
+      const branch = String(meta?.githubCommitRef || meta?.gitlabCommitRef || "main");
+      const errorMessage = String(deployment.errorMessage || deployment.buildError || "");
+
+      log.info("Vercel webhook event", { type, project: name, state });
+
+      // Log to audit
+      if (this.storageProvider) {
+        await this.storageProvider.appendAudit({
+          actorType: "system",
+          actorId: "vercel",
+          action: `deploy.${state}`,
+          result: state === "ERROR" || state === "error" ? "error" : state === "READY" || state === "succeeded" ? "success" : "pending",
+          metadata: {
+            project: name,
+            url,
+            branch,
+            commitMessage: commitMessage.slice(0, 100),
+            errorMessage: errorMessage.slice(0, 200),
+            source: "vercel",
+          },
+        });
+      }
+
+      // Broadcast to SSE clients
+      broadcastEvent({
+        type: "deploy.status",
+        data: { project: name, state, url, error: errorMessage || undefined },
+      });
+
+      // For failures, notify connected channels
+      if (state === "ERROR" || state === "error" || type === "deployment.error") {
+        const alertMessage = [
+          `Deploy failed: ${name}`,
+          `  Branch: ${branch}`,
+          commitMessage ? `  Commit: ${commitMessage.slice(0, 80)}` : "",
+          errorMessage ? `  Error: ${errorMessage.slice(0, 200)}` : "",
+          url ? `  URL: https://${url}` : "",
+        ].filter(Boolean).join("\n");
+
+        if (this.alertHandler) {
+          await this.alertHandler(alertMessage, "deploy-failure");
+        }
+      }
+
+      // For successes, also notify (shorter message)
+      if (state === "READY" || state === "succeeded" || type === "deployment.succeeded") {
+        const successMessage = [
+          `Deploy succeeded: ${name}`,
+          commitMessage ? `  ${commitMessage.slice(0, 80)}` : "",
+          url ? `  https://${url}` : "",
+        ].filter(Boolean).join("\n");
+
+        if (this.alertHandler) {
+          await this.alertHandler(successMessage, "deploy-success");
+        }
+      }
+
+      reply.send({ received: true, type, state });
+    });
+
+    // ── Generic deploy webhook ─────────────────────────────────────
+    route("post", "/webhooks/deploy", async (request: any, reply: any) => {
+      const body = request.body as {
+        project?: string;
+        status: "success" | "failure" | "pending";
+        message?: string;
+        url?: string;
+        error?: string;
+        source?: string;
+      };
+
+      const project = body.project || "unknown";
+      const status = body.status || "pending";
+      const source = body.source || "generic";
+
+      log.info("Deploy webhook event", { project, status, source });
+
+      if (this.storageProvider) {
+        await this.storageProvider.appendAudit({
+          actorType: "system",
+          actorId: source,
+          action: `deploy.${status}`,
+          result: status === "failure" ? "error" : status === "success" ? "success" : "pending",
+          metadata: {
+            project,
+            url: body.url,
+            error: body.error,
+            message: body.message,
+            source,
+          },
+        });
+      }
+
+      broadcastEvent({ type: "deploy.status", data: { project, status, source } });
+
+      if (status === "failure" && this.alertHandler) {
+        const alert = [
+          `Deploy failed: ${project}`,
+          body.error ? `  Error: ${body.error.slice(0, 200)}` : "",
+          body.message ? `  ${body.message.slice(0, 100)}` : "",
+          body.url ? `  ${body.url}` : "",
+        ].filter(Boolean).join("\n");
+        await this.alertHandler(alert, "deploy-failure");
+      }
+
+      if (status === "success" && this.alertHandler) {
+        await this.alertHandler(
+          `Deploy succeeded: ${project}${body.url ? ` (${body.url})` : ""}`,
+          "deploy-success",
+        );
+      }
+
+      reply.send({ received: true, status });
     });
   }
 }
