@@ -1729,6 +1729,7 @@ export class WebhookServer {
     // GitHub webhook receiver
     route("post", "/webhooks/github", async (request: any, reply: any) => {
       metrics.increment("webhook.received");
+      const orgId = (request.query as Record<string, string>).orgId || (request.headers["x-org-id"] as string) || "default";
       const headers: Record<string, string> = {};
       for (const [key, value] of Object.entries(request.headers)) {
         if (typeof value === "string") {
@@ -1761,6 +1762,30 @@ export class WebhookServer {
         return reply.status(200).send({ received: true, processed: false });
       }
 
+      // Log to audit with org scope
+      if (this.storageProvider) {
+        await this.storageProvider.appendAudit({
+          actorType: "system",
+          actorId: "github",
+          action: `ci.${event.type}`,
+          result: event.status === "failure" ? "error" : event.status === "success" ? "success" : "pending",
+          metadata: {
+            repo: event.repo,
+            branch: event.branch,
+            title: event.details.title,
+            sha: event.details.sha,
+            source: "github",
+            orgId,
+          },
+        });
+      }
+
+      // Broadcast to SSE clients scoped to org
+      broadcastEvent({
+        type: "ci.event",
+        data: { repo: event.repo, type: event.type, status: event.status, branch: event.branch, orgId },
+      }, orgId);
+
       // Dispatch to all registered handlers
       const errors: Error[] = [];
       for (const handler of this.eventHandlers) {
@@ -1787,6 +1812,7 @@ export class WebhookServer {
 
     // ── Vercel deploy webhook ──────────────────────────────────────
     route("post", "/webhooks/vercel", async (request: any, reply: any) => {
+      const orgId = (request.query as Record<string, string>).orgId || (request.headers["x-org-id"] as string) || "default";
       const payload = request.body as Record<string, unknown>;
 
       // Vercel sends different event types
@@ -1822,15 +1848,16 @@ export class WebhookServer {
             commitMessage: commitMessage.slice(0, 100),
             errorMessage: errorMessage.slice(0, 200),
             source: "vercel",
+            orgId,
           },
         });
       }
 
-      // Broadcast to SSE clients
+      // Broadcast to SSE clients scoped to org
       broadcastEvent({
         type: "deploy.status",
-        data: { project: name, state, url, error: errorMessage || undefined },
-      });
+        data: { project: name, state, url, error: errorMessage || undefined, orgId },
+      }, orgId);
 
       // For failures, notify connected channels
       if (state === "ERROR" || state === "error" || type === "deployment.error") {
@@ -1865,6 +1892,7 @@ export class WebhookServer {
 
     // ── Generic deploy webhook ─────────────────────────────────────
     route("post", "/webhooks/deploy", async (request: any, reply: any) => {
+      const orgId = (request.query as Record<string, string>).orgId || (request.headers["x-org-id"] as string) || "default";
       const body = request.body as {
         project?: string;
         status: "success" | "failure" | "pending";
@@ -1892,11 +1920,12 @@ export class WebhookServer {
             error: body.error,
             message: body.message,
             source,
+            orgId,
           },
         });
       }
 
-      broadcastEvent({ type: "deploy.status", data: { project, status, source } });
+      broadcastEvent({ type: "deploy.status", data: { project, status, source, orgId } }, orgId);
 
       if (status === "failure" && this.alertHandler) {
         const alert = [
@@ -1916,6 +1945,23 @@ export class WebhookServer {
       }
 
       reply.send({ received: true, status });
+    });
+
+    // ── Webhook URL generator (org-scoped) ────────────────────────
+    route("get", "/api/webhooks/url", async (request: any, reply: any) => {
+      const orgId = (request.headers["x-org-id"] as string) || "default";
+      const baseUrl = process.env.WEBHOOK_BASE_URL || "https://codespar-production.up.railway.app";
+
+      reply.send({
+        vercel: `${baseUrl}/webhooks/vercel?orgId=${orgId}`,
+        github: `${baseUrl}/webhooks/github?orgId=${orgId}`,
+        deploy: `${baseUrl}/webhooks/deploy?orgId=${orgId}`,
+        instructions: {
+          vercel: "Add this URL in Vercel > Settings > Webhooks. Select: Deployment Created, Succeeded, Error.",
+          github: "Add this URL in GitHub > Repo > Settings > Webhooks. Select: push, pull_request, workflow_run.",
+          deploy: "POST to this URL with { project, status, message, error, url, source }.",
+        },
+      });
     });
   }
 }
