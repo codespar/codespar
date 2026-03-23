@@ -30,25 +30,36 @@ import { DeployAgent } from "@codespar/agent-deploy";
 import { ReviewAgent } from "@codespar/agent-review";
 import { IncidentAgent } from "@codespar/agent-incident";
 
-const COMMANDS_HELP = `Available commands:
-  status [build|agent|all]  — Query current status
-  help                      — Show this help
-  logs [n]                  — Show recent activity
-  link <repo-url>           — Link a GitHub repo
-  unlink                    — Remove current project link
-  instruct [task]           — Execute a coding task
-  fix [issue]               — Investigate and propose fix
-  review PR #<number>       — Review a pull request
-  deploy [env]              — Trigger deployment
-  rollback [env]            — Rollback last deploy
-  approve [token]           — Approve pending action
-  autonomy [L0-L5]          — Set autonomy level
-  prs [open|closed|all]     — List pull requests
-  merge PR #<number>        — Merge a pull request
-  lens [question]            — Query data and get insights
-  memory                    — Show agent memory stats
-  whoami                    — Show your identity and linked channels
-  register <name>           — Register your display name`;
+const COMMANDS_HELP = `Available commands (20):
+
+  Code & Tasks:
+    instruct <task>           Execute a coding task (creates PR)
+    fix <issue>               Investigate and propose fix
+    plan <feature>            Break down a feature into sub-tasks
+    lens <question>           Query data and get insights
+
+  Pull Requests:
+    review PR #<number>       Review a pull request
+    merge PR #<number>        Merge a pull request (squash/rebase)
+    prs [open|closed|all]     List pull requests
+
+  DevOps:
+    deploy [env]              Trigger deployment
+    rollback [env]            Rollback last deploy
+    approve [token]           Approve pending action
+
+  Project:
+    status [build|agent|all]  Query current status
+    link <repo-url>           Link a GitHub repo
+    unlink                    Remove current project link
+    logs [n]                  Show recent activity
+    autonomy [L0-L5]          Set autonomy level
+
+  Identity:
+    whoami                    Show your identity
+    register <name>           Register your display name
+    memory                    Show agent memory stats
+    help                      Show this help`;
 
 export class ProjectAgent implements Agent {
   readonly config: AgentConfig;
@@ -1310,15 +1321,38 @@ export class ProjectAgent implements Agent {
       `Tasks handled: ${this.tasksHandled}`,
     ].join("\n  ");
 
+    // Recent audit activity
+    let recentActivity = "";
+    if (this.storage) {
+      const { entries } = await this.storage.queryAudit("", 3);
+      if (entries.length > 0) {
+        const lines = entries.map((e) => {
+          const action = e.metadata?.detail || e.action;
+          return `  - ${e.result === "success" ? "\u2705" : "\u26A0\uFE0F"} ${action}`;
+        });
+        recentActivity = `\n\nRecent Activity:\n${lines.join("\n")}`;
+      }
+    }
+
+    const availableActions = `\n\nAvailable Actions:
+  instruct <task>     Create code and open PRs
+  fix <issue>         Investigate and fix bugs
+  review PR #N        Review pull requests
+  merge PR #N         Merge pull requests
+  prs                 List open PRs
+  plan <feature>      Break down large features
+  lens <question>     Query and analyze data
+  deploy [env]        Trigger deployments
+  help                Show all 20 commands`;
+
     if (target === "agent" || target === "all") {
       return {
-        text: `\u2713 [${this.config.id}] Status:\n  ${agentInfo}`,
+        text: `[${this.config.id}] ## Project Status\n  ${agentInfo}${recentActivity}${availableActions}`,
       };
     }
 
-    // Build status (placeholder for CI/CD integration)
     return {
-      text: `\u2713 [${this.config.id}] Build status:\n  (CI/CD integration coming in Phase 2)`,
+      text: `[${this.config.id}] Build status:\n  (CI/CD webhook integration active)`,
     };
   }
 
