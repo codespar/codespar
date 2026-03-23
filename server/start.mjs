@@ -175,6 +175,12 @@ webhookServer.setChatHandler(async (message) => {
   return router.route(message);
 });
 
+// Wire deploy alert handler -- logs alerts and broadcasts via SSE.
+// Channel delivery (Slack/WhatsApp/etc.) can be configured per-org later.
+webhookServer.setAlertHandler(async (message, type) => {
+  console.log(`[alert] ${type}: ${message.split("\n")[0]}`);
+});
+
 // Give webhook server ability to dynamically create agents
 webhookServer.setAgentFactory({
   async createAgent(newProjectId, newAgentId, repo) {
