@@ -8,7 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 - Lens Agent: ephemeral data analyst agent that queries databases, writes SQL, and generates insights from any messaging channel
-- 20 commands (was 19), 8 agent types (was 7)
+- 21 commands (was 19), 8 agent types (was 7)
 - Lens Agent docs page: `agents/lens-agent.mdx`
 
 ## [0.3.0] - 2026-03-22
@@ -59,7 +59,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Deploy Agent: approval workflows with quorum (1 staging, 2 production), cross-channel voting
 - Incident Agent: CI failure investigation, error correlation, root cause analysis
 - Coordinator Agent: cross-project orchestration, cascading deploys, status aggregation
-- 20 commands with regex parser + Claude Haiku NLU fallback (includes merge PR, plan, lens)
+- 21 commands with regex parser + Claude Haiku NLU fallback (includes merge PR, plan, lens, demo, kill)
 - Smart responses via Claude Sonnet for open-ended questions (multilingual)
 - Graduated autonomy L0-L5 with safety guardrails
 - RBAC: 6 roles (owner, maintainer, operator, reviewer, read-only, emergency_admin), 15 permissions

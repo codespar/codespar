@@ -33,12 +33,14 @@ codespar/
   server/                  # Fastify HTTP server, entry point
   packages/
     core/                  # Types, storage, auth, approval, webhooks, observability
-    agents/                # Agent implementations
+    agents/                # Agent implementations (8 agent types)
       project/             # Persistent, monitors repo + CI/CD
       task/                # Ephemeral, executes coding tasks
       review/              # Ephemeral, PR analysis + risk classification
       deploy/              # Ephemeral, deploy orchestration + approvals
       incident/            # Ephemeral, CI failure investigation
+      planning/            # Ephemeral, feature decomposition into sub-tasks
+      lens/                # Ephemeral, data analysis, SQL queries, visualizations
       coordinator/         # Persistent, cross-project orchestration
     channels/
       cli/                 # Terminal adapter (dev/debug)
