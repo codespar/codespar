@@ -91,7 +91,7 @@ if (process.env.ENABLE_DISCORD === "true") {
 
 // 3. Spawn Project Agent (registered first so the router defaults to it)
 const agent = new ProjectAgent(
-  { id: agentId, type: "project", projectId, autonomyLevel: 1 },
+  { id: agentId, type: "project", projectId, autonomyLevel: 1, orgId: "default" },
   storage,
   approvalManager,
   vectorStore
@@ -147,7 +147,7 @@ try {
           if (supervisor.getAgentById(proj.agentId)) continue;
           try {
             const restoredAgent = new ProjectAgent(
-              { id: proj.agentId, type: "project", projectId: proj.id, autonomyLevel: 1 },
+              { id: proj.agentId, type: "project", projectId: proj.id, autonomyLevel: 1, orgId: orgId },
               orgStorage,
               approvalManager,
               vectorStore
@@ -211,8 +211,8 @@ webhookServer.setIdentityStore(identityStore);
 webhookServer.setVectorStore(vectorStore);
 
 // Wire web chat messages through the same message router as channel adapters
-webhookServer.setChatHandler(async (message) => {
-  return router.route(message);
+webhookServer.setChatHandler(async (message, orgId) => {
+  return router.route(message, orgId);
 });
 
 // Wire deploy alert handler -- logs alerts and broadcasts via SSE.
@@ -223,9 +223,9 @@ webhookServer.setAlertHandler(async (message, type) => {
 
 // Give webhook server ability to dynamically create agents
 webhookServer.setAgentFactory({
-  async createAgent(newProjectId, newAgentId, repo) {
+  async createAgent(newProjectId, newAgentId, repo, orgId) {
     const newAgent = new ProjectAgent(
-      { id: newAgentId, type: "project", projectId: newProjectId, autonomyLevel: 1 },
+      { id: newAgentId, type: "project", projectId: newProjectId, autonomyLevel: 1, orgId: orgId || "default" },
       storage,
       approvalManager,
       vectorStore

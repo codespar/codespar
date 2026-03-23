@@ -35,6 +35,8 @@ export interface AgentStatus {
   state: AgentState;
   autonomyLevel: AutonomyLevel;
   projectId?: string;
+  /** Organization ID this agent belongs to */
+  orgId?: string;
   lastActiveAt?: Date;
   uptimeMs: number;
   tasksHandled: number;
@@ -45,6 +47,8 @@ export interface AgentConfig {
   type: AgentType;
   projectId?: string;
   autonomyLevel: AutonomyLevel;
+  /** Organization ID this agent belongs to */
+  orgId?: string;
 }
 
 export interface Agent {

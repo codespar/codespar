@@ -55,7 +55,7 @@ export interface AgentStatusProvider {
 
 /** Interface for dynamically creating and removing agents */
 export interface AgentFactory {
-  createAgent(projectId: string, agentId: string, repo: string): Promise<void>;
+  createAgent(projectId: string, agentId: string, repo: string, orgId?: string): Promise<void>;
 }
 
 // ── In-memory rate limiter (sliding window) ─────────────────────────
@@ -155,7 +155,7 @@ export class WebhookServer {
   private vectorStore: VectorStore | null = null;
   private storageBaseDir: string = ".codespar";
   private orgStorageCache: Map<string, StorageProvider> = new Map();
-  private chatHandler: ((message: import("../types/normalized-message.js").NormalizedMessage) => Promise<import("../types/channel-adapter.js").ChannelResponse | null>) | null = null;
+  private chatHandler: ((message: import("../types/normalized-message.js").NormalizedMessage, orgId?: string) => Promise<import("../types/channel-adapter.js").ChannelResponse | null>) | null = null;
   private alertHandler: ((message: string, type: string) => Promise<void>) | null = null;
 
   constructor(config?: WebhookServerConfig) {
@@ -207,7 +207,7 @@ export class WebhookServer {
   }
 
   /** Set a handler for web chat messages routed through the message router */
-  setChatHandler(handler: (message: import("../types/normalized-message.js").NormalizedMessage) => Promise<import("../types/channel-adapter.js").ChannelResponse | null>): void {
+  setChatHandler(handler: (message: import("../types/normalized-message.js").NormalizedMessage, orgId?: string) => Promise<import("../types/channel-adapter.js").ChannelResponse | null>): void {
     this.chatHandler = handler;
   }
 
@@ -424,7 +424,7 @@ export class WebhookServer {
 
       try {
         if (this.chatHandler) {
-          const response = await this.chatHandler(message);
+          const response = await this.chatHandler(message, orgId);
           responseText = response?.text || responseText;
         }
       } catch (err) {
@@ -552,7 +552,7 @@ export class WebhookServer {
       try {
         let responseText = "No agent available.";
         if (this.chatHandler) {
-          const response = await this.chatHandler(message);
+          const response = await this.chatHandler(message, orgId);
           responseText = response?.text || responseText;
         }
 
@@ -596,17 +596,29 @@ export class WebhookServer {
       return { types: getRegisteredTypes() };
     });
 
-    // List all agents with status
-    route("get", "/api/agents", async (_request: any, _reply: any) => {
+    // List all agents with status (filtered by org)
+    route("get", "/api/agents", async (request: any, _reply: any) => {
+      const orgId = this.getOrgId(request);
       const statuses = this.agentSupervisor?.getAgentStatuses() ?? [];
+
+      // Filter agents by org
+      const filtered = orgId === "default"
+        ? statuses // Default org sees all agents without orgId (backward compatible)
+        : statuses.filter((s) => {
+            // Include agents for this org, plus agents with no org (shared/default)
+            const agentOrgId = s.orgId || "default";
+            return agentOrgId === orgId || agentOrgId === "default";
+          });
+
       return {
-        agents: statuses.map((s) => ({
+        agents: filtered.map((s) => ({
           id: s.id,
           name: s.id,
           project: s.projectId ?? "unknown",
           status: s.state,
           autonomy: s.autonomyLevel,
           type: s.type,
+          orgId: s.orgId,
           tasksHandled: s.tasksHandled,
           uptimeMs: s.uptimeMs,
           lastActive: s.lastActiveAt?.toISOString() ?? null,
@@ -797,9 +809,9 @@ export class WebhookServer {
       }
     );
 
-    // Get current project config
+    // Get current project config (org-scoped)
     route("get", "/api/project",
-      async (request: any, _reply: any) => {
+      async (request: any, reply: any) => {
         if (!this.storageProvider) {
           return { linked: false, config: null };
         }
@@ -807,6 +819,19 @@ export class WebhookServer {
         const agentId = request.query.agentId ?? "";
         if (!agentId) {
           return { linked: false, config: null, error: "agentId query param required" };
+        }
+
+        const orgId = this.getOrgId(request);
+
+        // Verify the agent belongs to this org
+        if (orgId !== "default") {
+          const orgStorage = this.getOrgStorage(orgId);
+          const orgProjects = await orgStorage.getProjectsList();
+          const belongsToOrg = orgProjects.some((p) => p.agentId === agentId);
+          if (!belongsToOrg) {
+            reply.code(404).send({ error: "Agent not found in this organization" });
+            return;
+          }
         }
 
         const config = await this.storageProvider.getProjectConfig(agentId);
@@ -879,7 +904,7 @@ export class WebhookServer {
         }
 
         try {
-          await this.agentFactory.createAgent(projectId, agentId, repo);
+          await this.agentFactory.createAgent(projectId, agentId, repo, orgId);
           await storage.addProject({ id: projectId, agentId, repo });
 
           // Auto-configure GitHub webhook
