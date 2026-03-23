@@ -1737,8 +1737,12 @@ export class WebhookServer {
         }
       }
 
-      // Verify GitHub webhook signature when secret is configured
-      const webhookSecret = process.env["GITHUB_WEBHOOK_SECRET"];
+      // Verify GitHub webhook signature when secret is configured.
+      // Prefer org-specific secret (GITHUB_WEBHOOK_SECRET_<ORGID>), fall back to global.
+      const orgSpecificSecret = orgId !== "default"
+        ? process.env[`GITHUB_WEBHOOK_SECRET_${orgId.toUpperCase().replace(/-/g, "_")}`]
+        : undefined;
+      const webhookSecret = orgSpecificSecret || process.env["GITHUB_WEBHOOK_SECRET"];
       if (webhookSecret) {
         const signature = headers["x-hub-signature-256"];
         if (!signature) {
@@ -1762,24 +1766,23 @@ export class WebhookServer {
         return reply.status(200).send({ received: true, processed: false });
       }
 
-      // Log to audit with org scope
-      if (this.storageProvider) {
-        await this.storageProvider.appendAudit({
-          actorType: "system",
-          actorId: "github",
-          action: `ci.${event.type}`,
-          result: event.status === "failure" ? "error" : event.status === "success" ? "success" : "pending",
-          metadata: {
-            repo: event.repo,
-            branch: event.branch,
-            title: event.details.title,
-            sha: event.details.sha,
-            detail: `${event.repo}: ${event.details.title || event.type}${event.branch ? ` (${event.branch})` : ""}`,
-            source: "github",
-            orgId,
-          },
-        });
-      }
+      // Log to audit with org-scoped storage
+      const ghStorage = this.getOrgStorage(orgId);
+      await ghStorage.appendAudit({
+        actorType: "system",
+        actorId: "github",
+        action: `ci.${event.type}`,
+        result: event.status === "failure" ? "error" : event.status === "success" ? "success" : "pending",
+        metadata: {
+          repo: event.repo,
+          branch: event.branch,
+          title: event.details.title,
+          sha: event.details.sha,
+          detail: `${event.repo}: ${event.details.title || event.type}${event.branch ? ` (${event.branch})` : ""}`,
+          source: "github",
+          orgId,
+        },
+      });
 
       // Broadcast to SSE clients scoped to org
       broadcastEvent({
@@ -1814,6 +1817,26 @@ export class WebhookServer {
     // ── Vercel deploy webhook ──────────────────────────────────────
     route("post", "/webhooks/vercel", async (request: any, reply: any) => {
       const orgId = (request.query as Record<string, string>).orgId || (request.headers["x-org-id"] as string) || "default";
+
+      // Verify Vercel webhook signature if secret is configured
+      const vercelSecret = process.env.VERCEL_WEBHOOK_SECRET;
+      if (vercelSecret) {
+        const signature = request.headers["x-vercel-signature"] as string;
+        if (!signature) {
+          reply.code(401).send({ error: "Missing x-vercel-signature header" });
+          return;
+        }
+        const rawBody = typeof request.body === "string"
+          ? request.body
+          : JSON.stringify(request.body);
+        const expected = createHmac("sha1", vercelSecret).update(rawBody).digest("hex");
+        if (signature !== expected) {
+          log.warn("Vercel signature mismatch");
+          reply.code(401).send({ error: "Invalid signature" });
+          return;
+        }
+      }
+
       const payload = request.body as Record<string, unknown>;
 
       // Vercel sends different event types
@@ -1835,30 +1858,29 @@ export class WebhookServer {
 
       log.info("Vercel webhook event", { type, project: name, state });
 
-      // Log to audit
-      if (this.storageProvider) {
-        await this.storageProvider.appendAudit({
-          actorType: "system",
-          actorId: "vercel",
-          action: `deploy.${state}`,
-          result: state === "ERROR" || state === "error" ? "error" : state === "READY" || state === "succeeded" ? "success" : "pending",
-          metadata: {
-            project: name,
-            url,
-            branch,
-            commitMessage: commitMessage.slice(0, 100),
-            errorMessage: errorMessage.slice(0, 200),
-            detail:
-              state === "READY" || state === "succeeded"
-                ? `${name}: ${commitMessage || branch || "deployed"}${url ? ` (${url})` : ""}`
-                : state === "ERROR" || state === "error"
-                  ? `${name}: ${errorMessage || "build failed"}`
-                  : `${name}: deploying${branch ? ` (${branch})` : ""}${commitMessage ? ` - ${commitMessage.slice(0, 60)}` : ""}`,
-            source: "vercel",
-            orgId,
-          },
-        });
-      }
+      // Log to audit with org-scoped storage
+      const vercelStorage = this.getOrgStorage(orgId);
+      await vercelStorage.appendAudit({
+        actorType: "system",
+        actorId: "vercel",
+        action: `deploy.${state}`,
+        result: state === "ERROR" || state === "error" ? "error" : state === "READY" || state === "succeeded" ? "success" : "pending",
+        metadata: {
+          project: name,
+          url,
+          branch,
+          commitMessage: commitMessage.slice(0, 100),
+          errorMessage: errorMessage.slice(0, 200),
+          detail:
+            state === "READY" || state === "succeeded"
+              ? `${name}: ${commitMessage || branch || "deployed"}${url ? ` (${url})` : ""}`
+              : state === "ERROR" || state === "error"
+                ? `${name}: ${errorMessage || "build failed"}`
+                : `${name}: deploying${branch ? ` (${branch})` : ""}${commitMessage ? ` - ${commitMessage.slice(0, 60)}` : ""}`,
+          source: "vercel",
+          orgId,
+        },
+      });
 
       // Broadcast to SSE clients scoped to org
       broadcastEvent({
@@ -1915,28 +1937,27 @@ export class WebhookServer {
 
       log.info("Deploy webhook event", { project, status, source });
 
-      if (this.storageProvider) {
-        await this.storageProvider.appendAudit({
-          actorType: "system",
-          actorId: source,
-          action: `deploy.${status}`,
-          result: status === "failure" ? "error" : status === "success" ? "success" : "pending",
-          metadata: {
-            project,
-            url: body.url,
-            error: body.error,
-            message: body.message,
-            detail:
-              status === "success"
-                ? `${project}: deployed${body.url ? ` (${body.url})` : ""}`
-                : status === "failure"
-                  ? `${project}: ${body.error || "deploy failed"}`
-                  : `${project}: deploying${body.message ? ` - ${body.message.slice(0, 60)}` : ""}`,
-            source,
-            orgId,
-          },
-        });
-      }
+      const deployStorage = this.getOrgStorage(orgId);
+      await deployStorage.appendAudit({
+        actorType: "system",
+        actorId: source,
+        action: `deploy.${status}`,
+        result: status === "failure" ? "error" : status === "success" ? "success" : "pending",
+        metadata: {
+          project,
+          url: body.url,
+          error: body.error,
+          message: body.message,
+          detail:
+            status === "success"
+              ? `${project}: deployed${body.url ? ` (${body.url})` : ""}`
+              : status === "failure"
+                ? `${project}: ${body.error || "deploy failed"}`
+                : `${project}: deploying${body.message ? ` - ${body.message.slice(0, 60)}` : ""}`,
+          source,
+          orgId,
+        },
+      });
 
       broadcastEvent({ type: "deploy.status", data: { project, status, source, orgId } }, orgId);
 
