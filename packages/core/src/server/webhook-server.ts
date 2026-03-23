@@ -452,6 +452,100 @@ export class WebhookServer {
       });
     });
 
+    // ── Streaming Web Chat endpoint (SSE) ─────────────────────────
+    route("post", "/api/chat/stream", async (request: any, reply: any) => {
+      const body = request.body as {
+        text?: string;
+        imageUrls?: Array<{ url: string; mimeType?: string }>;
+      };
+      const text = String(body.text || "").trim();
+      if (!text) {
+        reply.code(400).send({ error: "Message text is required" });
+        return;
+      }
+
+      const orgId = this.getOrgId(request);
+
+      // Set SSE headers
+      reply.raw.writeHead(200, {
+        "Content-Type": "text/event-stream",
+        "Cache-Control": "no-cache",
+        Connection: "keep-alive",
+        "Access-Control-Allow-Origin": "*",
+      });
+
+      // Send progress events as the agent works
+      function sendEvent(type: string, data: unknown) {
+        reply.raw.write(
+          `data: ${JSON.stringify({ type, ...(data as object) })}\n\n`
+        );
+      }
+
+      sendEvent("progress", { message: "Parsing command..." });
+
+      // Parse intent
+      const intent = await parseIntent(text);
+
+      sendEvent("progress", {
+        message: `Understood: ${intent.type} (${(intent.confidence * 100).toFixed(0)}% confidence)`,
+      });
+
+      // Build normalized message
+      const message: NormalizedMessage = {
+        id: randomUUID(),
+        channelType: "web" as ChannelType,
+        channelId: `web-${orgId}`,
+        channelUserId: `web-user-${orgId}`,
+        isDM: true,
+        isMentioningBot: true,
+        text,
+        timestamp: new Date(),
+        attachments: body.imageUrls?.map((img) => ({
+          type: "image" as const,
+          url: img.url,
+          mimeType: img.mimeType,
+        })),
+      };
+
+      // Send intent-specific progress messages
+      if (intent.type === "instruct" || intent.type === "fix") {
+        sendEvent("progress", {
+          message: "Searching codebase for relevant files...",
+        });
+      } else if (intent.type === "review") {
+        sendEvent("progress", {
+          message: "Fetching PR data from GitHub...",
+        });
+      } else if (intent.type === "lens") {
+        sendEvent("progress", {
+          message: "Analyzing your data question...",
+        });
+      } else if (intent.type === "plan") {
+        sendEvent("progress", {
+          message: "Breaking down the feature into tasks...",
+        });
+      }
+
+      try {
+        let responseText = "No agent available.";
+        if (this.chatHandler) {
+          const response = await this.chatHandler(message);
+          responseText = response?.text || responseText;
+        }
+
+        // Send the final response
+        sendEvent("response", { text: responseText, intent: intent.type });
+      } catch (err) {
+        sendEvent("error", {
+          message: err instanceof Error ? err.message : "Unknown error",
+        });
+      }
+
+      // Close the stream
+      sendEvent("done", {});
+      reply.raw.end();
+    });
+
     // ── Dashboard API endpoints ──────────────────────────────────
 
     // System status overview
