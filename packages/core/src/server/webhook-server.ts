@@ -474,19 +474,26 @@ export class WebhookServer {
 
       const orgId = this.getOrgId(request);
 
-      // Set SSE headers
+      // Set SSE headers (disable buffering for real-time streaming)
       reply.raw.writeHead(200, {
         "Content-Type": "text/event-stream",
         "Cache-Control": "no-cache",
         Connection: "keep-alive",
         "Access-Control-Allow-Origin": "*",
+        "X-Accel-Buffering": "no", // Disable nginx/proxy buffering
       });
+      // Disable Node.js socket buffering for immediate delivery
+      reply.raw.socket?.setNoDelay(true);
 
       // Send progress events as the agent works
       function sendEvent(type: string, data: unknown) {
         reply.raw.write(
           `data: ${JSON.stringify({ type, ...(data as object) })}\n\n`
         );
+        // Force flush
+        if (typeof (reply.raw as any).flush === "function") {
+          (reply.raw as any).flush();
+        }
       }
 
       sendEvent("progress", { message: "Parsing command..." });
