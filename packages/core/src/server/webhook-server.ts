@@ -895,7 +895,7 @@ export class WebhookServer {
         }
 
         const [owner, repoName] = repo.split("/");
-        const projectId = name ?? `${owner}-${repoName}`;
+        const projectId = name ?? repoName;
         const agentId = `agent-${projectId}`;
 
         // Check if project already exists within this org
