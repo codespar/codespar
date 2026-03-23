@@ -4,7 +4,7 @@
  * channel is being used.
  */
 
-export type ChannelType = "whatsapp" | "slack" | "telegram" | "discord" | "cli";
+export type ChannelType = "whatsapp" | "slack" | "telegram" | "discord" | "cli" | "web";
 
 export interface Attachment {
   type: "image" | "file" | "audio" | "video";
