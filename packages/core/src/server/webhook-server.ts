@@ -6,6 +6,7 @@
  * - POST /webhooks/vercel — receives Vercel deploy event webhooks
  * - POST /webhooks/deploy — generic deploy webhook for any CI/CD service
  * - GET /health — returns server and agent health info
+ * - GET /api/webhooks/status — returns which webhook secrets are configured
  *
  * Usage:
  *   const server = new WebhookServer({ port: 3000 });
@@ -2106,6 +2107,20 @@ export class WebhookServer {
     });
 
     // ── Webhook URL generator (org-scoped) ────────────────────────
+    route("get", "/api/webhooks/status", async (request: any, reply: any) => {
+      const orgId = this.getOrgId(request);
+      const orgStorage = this.getOrgStorage(orgId);
+
+      // Check which services have secrets configured
+      const vercelConfig = await orgStorage.getChannelConfig("vercel");
+      const githubConfig = await orgStorage.getChannelConfig("github");
+
+      reply.send({
+        vercel: { secretConfigured: !!vercelConfig?.webhookSecret },
+        github: { secretConfigured: !!githubConfig?.webhookSecret },
+      });
+    });
+
     route("get", "/api/webhooks/url", async (request: any, reply: any) => {
       const orgId = (request.headers["x-org-id"] as string) || "default";
       const baseUrl = process.env.WEBHOOK_BASE_URL || "https://codespar-production.up.railway.app";
