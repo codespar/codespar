@@ -11,6 +11,15 @@
 
 import { GitHubClient } from "../github/index.js";
 
+export interface ProgressEvent {
+  type: "status" | "code" | "file-selected" | "file-read" | "generating" | "branch" | "commit" | "pr";
+  message: string;
+  /** Code chunk being generated (for type "code") */
+  code?: string;
+  /** File path (for file operations) */
+  filePath?: string;
+}
+
 export interface ExecutionRequest {
   taskId: string;
   instruction: string;
@@ -21,6 +30,8 @@ export interface ExecutionRequest {
   blockedPatterns?: string[];
   /** Image URLs to include as visual context (screenshots, diagrams) */
   imageUrls?: Array<{ url: string; mimeType?: string }>;
+  /** Progress callback for real-time updates */
+  onProgress?: (event: ProgressEvent) => void;
 }
 
 export interface RepoExecutionRequest extends ExecutionRequest {
@@ -503,17 +514,23 @@ Respond with ONLY the file paths, one per line. No explanations, no markdown, no
       );
 
       console.log(`[claude-bridge] File tree: ${srcFiles.length} source files in ${repoOwner}/${repoName}`);
+      request.onProgress?.({ type: "status", message: `Scanning codebase... (${srcFiles.length} files)` });
 
       // 2. Ask Claude which files are relevant to the instruction
+      request.onProgress?.({ type: "status", message: "Selecting relevant files..." });
       const relevantPaths = await this.pickRelevantFiles(
         apiKey, instruction, srcFiles, request.imageUrls,
       );
 
       console.log(`[claude-bridge] Claude picked ${relevantPaths.length} files: ${relevantPaths.join(", ")}`);
+      for (const p of relevantPaths) {
+        request.onProgress?.({ type: "file-selected", message: `Selected: ${p}`, filePath: p });
+      }
 
       // 3. Read the selected files
       const fileContents: Array<{ path: string; content: string; sha: string }> = [];
       for (const filePath of relevantPaths.slice(0, 15)) {
+        request.onProgress?.({ type: "file-read", message: `Reading: ${filePath}`, filePath });
         const file = await github.readFile(repoOwner, repoName, filePath);
         if (file && file.content.length < 30_000) {
           fileContents.push({
@@ -592,6 +609,8 @@ Be precise and production-ready.`;
 
       let fullOutput = "";
 
+      request.onProgress?.({ type: "generating", message: "Generating changes..." });
+
       // Allow up to 2 turns (initial + 1 continuation)
       for (let turn = 0; turn < 2; turn++) {
         const res = await fetch("https://api.anthropic.com/v1/messages", {
@@ -604,6 +623,7 @@ Be precise and production-ready.`;
           body: JSON.stringify({
             model,
             max_tokens: 8192,
+            stream: true,
             system: systemPrompt,
             messages,
           }),
@@ -622,15 +642,40 @@ Be precise and production-ready.`;
           };
         }
 
-        const data = (await res.json()) as {
-          content?: Array<{ text?: string }>;
-          stop_reason?: string;
-        };
-        const turnOutput = data.content?.[0]?.text || "";
+        let turnOutput = "";
+        let stopReason = "";
+        const reader = res.body?.getReader();
+        const decoder = new TextDecoder();
+        let sseBuffer = "";
+
+        if (reader) {
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            sseBuffer += decoder.decode(value, { stream: true });
+            const sseLines = sseBuffer.split("\n");
+            sseBuffer = sseLines.pop() || "";
+            for (const sseLine of sseLines) {
+              if (!sseLine.startsWith("data: ")) continue;
+              const sseData = sseLine.slice(6).trim();
+              if (sseData === "[DONE]") continue;
+              try {
+                const sseEvent = JSON.parse(sseData);
+                if (sseEvent.type === "content_block_delta" && sseEvent.delta?.text) {
+                  turnOutput += sseEvent.delta.text;
+                  request.onProgress?.({ type: "code", message: "", code: sseEvent.delta.text });
+                } else if (sseEvent.type === "message_delta" && sseEvent.delta?.stop_reason) {
+                  stopReason = sseEvent.delta.stop_reason;
+                }
+              } catch { /* skip malformed JSON */ }
+            }
+          }
+        }
+
         fullOutput += turnOutput;
 
         // If Claude finished naturally, we're done
-        if (data.stop_reason !== "max_tokens") break;
+        if (stopReason !== "max_tokens") break;
 
         // If truncated, ask to continue
         console.log(`[claude-bridge] Response truncated at turn ${turn + 1}, requesting continuation`);
@@ -646,6 +691,8 @@ Be precise and production-ready.`;
         fileChanges = parseFileChanges(fullOutput);
       }
 
+      request.onProgress?.({ type: "status", message: `Parsed ${fileChanges.length} file change(s)` });
+
       if (fileChanges.length === 0) {
         // Claude gave advice but no file changes
         return {
@@ -660,6 +707,7 @@ Be precise and production-ready.`;
 
       // 5. Create branch and commit changes
       const branchName = `codespar/${request.taskId.slice(0, 12)}`;
+      request.onProgress?.({ type: "branch", message: `Creating branch: ${branchName}` });
       const defaultBranch = await github.getDefaultBranch(repoOwner, repoName);
       const branchCreated = await github.createBranch(
         repoOwner,
@@ -680,6 +728,7 @@ Be precise and production-ready.`;
       }
 
       for (const change of fileChanges) {
+        request.onProgress?.({ type: "commit", message: `Committing: ${change.path}`, filePath: change.path });
         // Find existing file SHA for updates (required by GitHub API)
         const existing = fileContents.find((f) => f.path === change.path);
         await github.updateFile(
@@ -694,6 +743,7 @@ Be precise and production-ready.`;
       }
 
       // 6. Create PR
+      request.onProgress?.({ type: "pr", message: "Opening pull request..." });
       const pr = await github.createPR(
         repoOwner,
         repoName,
@@ -703,6 +753,9 @@ Be precise and production-ready.`;
         defaultBranch,
       );
 
+      if (pr) {
+        request.onProgress?.({ type: "pr", message: `PR #${pr.number} created: ${pr.url}` });
+      }
       const prInfo = pr
         ? `\n\nPR #${pr.number} created: ${pr.url}`
         : "\n\n(PR creation failed)";

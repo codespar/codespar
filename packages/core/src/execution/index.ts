@@ -1,5 +1,6 @@
 export { ClaudeBridge } from "./claude-bridge.js";
 export type {
+  ProgressEvent,
   ExecutionRequest,
   RepoExecutionRequest,
   ExecutionResult,

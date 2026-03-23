@@ -490,7 +490,7 @@ export class WebhookServer {
         message: `Understood: ${intent.type} (${(intent.confidence * 100).toFixed(0)}% confidence)`,
       });
 
-      // Build normalized message
+      // Build normalized message with progress callback in metadata
       const message: NormalizedMessage = {
         id: randomUUID(),
         channelType: "web" as ChannelType,
@@ -505,6 +505,11 @@ export class WebhookServer {
           url: img.url,
           mimeType: img.mimeType,
         })),
+        metadata: {
+          onProgress: (event: unknown) => {
+            sendEvent("progress", event);
+          },
+        },
       };
 
       // Send intent-specific progress messages

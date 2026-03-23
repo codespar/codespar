@@ -89,6 +89,7 @@ export type { AgentFactory as AgentPluginFactory } from "./agents/index.js";
 // Execution
 export { ClaudeBridge } from "./execution/index.js";
 export type {
+  ProgressEvent,
   ExecutionRequest,
   RepoExecutionRequest,
   ExecutionResult,
