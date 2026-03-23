@@ -133,13 +133,13 @@ for (const proj of savedProjects) {
 // 5b. Restore saved projects from all org storages
 import * as fs from "node:fs";
 import * as path from "node:path";
-const orgsDir = path.join(storageDir, "orgs");
+const orgsDir = path.join(".codespar", "orgs");
 try {
   if (fs.existsSync(orgsDir)) {
     const orgDirs = fs.readdirSync(orgsDir);
     for (const orgId of orgDirs) {
       try {
-        const orgStorage = new FileStorage(storageDir, orgId);
+        const orgStorage = new FileStorage(".codespar", orgId);
         const orgProjects = await orgStorage.getProjectsList();
         for (const proj of orgProjects) {
           if (proj.agentId === agentId) continue;
