@@ -1222,7 +1222,7 @@ export class WebhookServer {
           config?: Record<string, string>;
         };
 
-        const validChannels = ["telegram", "whatsapp", "discord", "slack"];
+        const validChannels = ["telegram", "whatsapp", "discord", "slack", "vercel", "github"];
         if (!channel || !validChannels.includes(channel)) {
           return reply.status(400).send({
             error: `channel must be one of: ${validChannels.join(", ")}`,
