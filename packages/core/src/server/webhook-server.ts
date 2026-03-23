@@ -1784,11 +1784,25 @@ export class WebhookServer {
       }
 
       // Verify GitHub webhook signature when secret is configured.
-      // Prefer org-specific secret (GITHUB_WEBHOOK_SECRET_<ORGID>), fall back to global.
-      const orgSpecificSecret = orgId !== "default"
-        ? process.env[`GITHUB_WEBHOOK_SECRET_${orgId.toUpperCase().replace(/-/g, "_")}`]
-        : undefined;
-      const webhookSecret = orgSpecificSecret || process.env["GITHUB_WEBHOOK_SECRET"];
+      // Priority: org storage secret > env GITHUB_WEBHOOK_SECRET_<ORGID> > env GITHUB_WEBHOOK_SECRET.
+      let webhookSecret: string | undefined;
+      if (this.storageProvider && orgId !== "default") {
+        try {
+          const orgStorage = this.getOrgStorage(orgId);
+          const ghConfig = await orgStorage.getChannelConfig("github");
+          if (ghConfig?.webhookSecret) {
+            webhookSecret = ghConfig.webhookSecret;
+          }
+        } catch (err) {
+          log.warn("Failed to load org GitHub webhook secret, using env fallback", { orgId, error: String(err) });
+        }
+      }
+      if (!webhookSecret) {
+        const orgSpecificSecret = orgId !== "default"
+          ? process.env[`GITHUB_WEBHOOK_SECRET_${orgId.toUpperCase().replace(/-/g, "_")}`]
+          : undefined;
+        webhookSecret = orgSpecificSecret || process.env["GITHUB_WEBHOOK_SECRET"];
+      }
       if (webhookSecret) {
         const signature = headers["x-hub-signature-256"];
         if (!signature) {
@@ -1870,8 +1884,20 @@ export class WebhookServer {
     route("post", "/webhooks/vercel", async (request: any, reply: any) => {
       const orgId = (request.query as Record<string, string>).orgId || (request.headers["x-org-id"] as string) || "default";
 
-      // Verify Vercel webhook signature if secret is configured
-      const vercelSecret = process.env.VERCEL_WEBHOOK_SECRET;
+      // Verify Vercel webhook signature if secret is configured.
+      // Prefer org-specific secret from storage, fall back to env var.
+      let vercelSecret = process.env.VERCEL_WEBHOOK_SECRET;
+      if (this.storageProvider && orgId !== "default") {
+        try {
+          const orgStorage = this.getOrgStorage(orgId);
+          const vercelConfig = await orgStorage.getChannelConfig("vercel");
+          if (vercelConfig?.webhookSecret) {
+            vercelSecret = vercelConfig.webhookSecret;
+          }
+        } catch (err) {
+          log.warn("Failed to load org Vercel webhook secret, using global", { orgId, error: String(err) });
+        }
+      }
       if (vercelSecret) {
         const signature = request.headers["x-vercel-signature"] as string;
         if (!signature) {
