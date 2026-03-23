@@ -522,7 +522,10 @@ export class WebhookServer {
         })),
         metadata: {
           onProgress: (event: unknown) => {
-            sendEvent("progress", event);
+            const e = event as Record<string, unknown>;
+            // Wrap the progress event, preserving message and code fields
+            // but setting type to "progress" so the frontend handles it
+            sendEvent("progress", { message: e.message, code: e.code });
           },
         },
       };
