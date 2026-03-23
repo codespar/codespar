@@ -111,6 +111,11 @@ const PATTERNS: PatternRule[] = [
     pattern: /^lens\s+(.+)$/i,
     paramExtractor: (m) => ({ question: m[1] }),
   },
+  {
+    type: "demo",
+    pattern: /^demo(?:\s+(.+))?$/i,
+    paramExtractor: (m) => ({ demoName: m[1] || "mcp-generator" }),
+  },
 ];
 
 /** Synchronous regex-only parser (used internally). */
