@@ -1974,16 +1974,30 @@ export class WebhookServer {
       // Vercel sends different event types
       // Docs: https://vercel.com/docs/webhooks
       const type = String(payload.type || ""); // "deployment.created", "deployment.succeeded", "deployment.error", "deployment.canceled"
-      const deployment = (payload.payload as Record<string, unknown>) || payload;
+      const innerPayload = (payload.payload as Record<string, unknown>) || payload;
+
+      // Vercel nests deployment data under payload.deployment or directly in payload
+      const deployment = (innerPayload.deployment as Record<string, unknown>) || innerPayload;
+
+      // Log raw structure for debugging (first 2000 chars)
+      log.info("Vercel webhook raw payload keys", {
+        topKeys: Object.keys(payload),
+        innerKeys: Object.keys(innerPayload),
+        deploymentKeys: Object.keys(deployment),
+        hasMeta: !!deployment.meta,
+        hasNestedDeployment: !!(innerPayload.deployment),
+      });
 
       const name = String(
+        innerPayload.name ||
         deployment.name ||
+        (innerPayload.project as Record<string, unknown> | undefined)?.name ||
         (deployment.project as Record<string, unknown> | undefined)?.name ||
         "unknown"
       );
-      const url = String(deployment.url || "");
+      const url = String(innerPayload.url || deployment.url || "");
       const state = String(deployment.state || deployment.readyState || type.split(".")[1] || "unknown");
-      const meta = deployment.meta as Record<string, unknown> | undefined;
+      const meta = (deployment.meta || innerPayload.meta) as Record<string, unknown> | undefined;
       const commitMessage = String(meta?.githubCommitMessage || meta?.gitlabCommitMessage || "");
       const branch = String(meta?.githubCommitRef || meta?.gitlabCommitRef || "main");
       const commitSha = String(meta?.githubCommitSha || meta?.gitlabCommitSha || "").slice(0, 7);
@@ -1991,8 +2005,8 @@ export class WebhookServer {
       const prId = String(meta?.githubPrId || "");
       const githubOrg = String(meta?.githubCommitOrg || meta?.githubOrg || "");
       const githubRepo = String(meta?.githubCommitRepo || meta?.githubRepo || "");
-      const errorMessage = String(deployment.errorMessage || deployment.buildError || (deployment as any).errorStep || "");
-      const inspectorUrl = String(deployment.inspectorUrl || "");
+      const errorMessage = String(deployment.errorMessage || deployment.buildError || (deployment as any).errorStep || innerPayload.errorMessage || "");
+      const inspectorUrl = String(deployment.inspectorUrl || innerPayload.inspectorUrl || "");
 
       const deploymentId = String(deployment.id || deployment.uid || "");
       log.info("Vercel webhook event", { type, project: name, state, deploymentId });
