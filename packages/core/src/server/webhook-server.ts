@@ -1422,6 +1422,22 @@ export class WebhookServer {
       }
     );
 
+    // Clear audit log for an org (admin action)
+    route("delete", "/api/audit", async (request: any, reply: any) => {
+      const orgId = this.getOrgId(request);
+      const storage = this.getOrgStorage(orgId);
+      try {
+        // Overwrite audit file with empty array
+        const auditPath = path.join(this.storageBaseDir, orgId === "default" ? "" : `orgs/${orgId}`, "audit.json");
+        await fs.writeFile(auditPath, "[]", "utf-8");
+        log.info("Audit log cleared", { orgId });
+        reply.send({ success: true, message: "Audit log cleared" });
+      } catch (err) {
+        log.warn("Failed to clear audit log", { orgId, error: String(err) });
+        reply.code(500).send({ error: "Failed to clear audit log" });
+      }
+    });
+
     // ── Organization management ──────────────────────────────────
 
     // Create a new organization (creates directory structure)
