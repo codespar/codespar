@@ -380,7 +380,7 @@ export class ProjectAgent implements Agent {
         if (typeof instruction === "string" && instruction.startsWith("investigate-deploy")) {
           // Deep investigation using repo context
           const ctx = await this.buildAgentContext();
-          const imageUrls: string[] = [];
+          const imageUrls: { url: string; mimeType?: string }[] = [];
           const smartResponse = await generateSmartResponse(
             `Investigate this deploy failure in detail. Check the recent commits, error logs, and suggest a specific code fix. Context: ${instruction}`,
             ctx, imageUrls
