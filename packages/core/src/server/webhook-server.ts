@@ -1425,9 +1425,9 @@ export class WebhookServer {
       const orgId = this.getOrgId(request);
       const storage = this.getOrgStorage(orgId);
       try {
-        // Overwrite audit file with empty array
+        // Overwrite audit file with empty structure
         const auditPath = path.join(this.storageBaseDir, orgId === "default" ? "" : `orgs/${orgId}`, "audit.json");
-        await fs.writeFile(auditPath, "[]", "utf-8");
+        await fs.writeFile(auditPath, JSON.stringify({ entries: [] }), "utf-8");
         log.info("Audit log cleared", { orgId });
         reply.send({ success: true, message: "Audit log cleared" });
       } catch (err) {
