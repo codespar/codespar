@@ -603,13 +603,11 @@ export class WebhookServer {
       const orgId = this.getOrgId(request);
       const statuses = this.agentSupervisor?.getAgentStatuses() ?? [];
 
-      // Filter agents by org
+      // Filter agents by org — strict isolation, no cross-org leaking
       const filtered = orgId === "default"
-        ? statuses // Default org sees all agents without orgId (backward compatible)
+        ? statuses.filter((s) => !s.orgId || s.orgId === "default")
         : statuses.filter((s) => {
-            // Include agents for this org, plus agents with no org (shared/default)
-            const agentOrgId = s.orgId || "default";
-            return agentOrgId === orgId || agentOrgId === "default";
+            return s.orgId === orgId;
           });
 
       return {
