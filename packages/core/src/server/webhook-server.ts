@@ -1244,14 +1244,17 @@ export class WebhookServer {
           }
         }
 
-        if (!this.storageProvider) {
+        const orgId = this.getOrgId(request);
+        const storage = this.getOrgStorage(orgId);
+
+        if (!storage) {
           return reply.status(500).send({ error: "Storage not configured" });
         }
 
-        await this.storageProvider.saveChannelConfig(channel, config);
+        await storage.saveChannelConfig(channel, config);
 
         // Log to audit trail
-        await this.storageProvider.appendAudit({
+        await storage.appendAudit({
           actorType: "user",
           actorId: "dashboard",
           action: "channel.configure",
