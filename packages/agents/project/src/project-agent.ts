@@ -255,6 +255,34 @@ export class ProjectAgent implements Agent {
         break;
 
       case "logs": {
+        // If NLU classified as "logs" but the text is a natural language question
+        // (not the literal "logs" command), use smart response instead
+        const isNaturalLanguage = intent.confidence < 1.0 && !/^logs(\s+\d+)?$/i.test(intent.rawText);
+        if (isNaturalLanguage) {
+          const ctx = await this.buildAgentContext();
+          const smartResponse = await generateSmartResponse(intent.rawText, ctx, imageUrls);
+          if (smartResponse) {
+            response = { text: `[${this.config.id}] ${smartResponse}` };
+            if (this.storage) {
+              await this.storage.appendAudit({
+                actorType: "user",
+                actorId: message.channelUserId,
+                action: "query.asked",
+                result: "success",
+                metadata: {
+                  agentId: this.config.id,
+                  project: this.config.projectId || "unknown",
+                  risk: intent.risk,
+                  detail: intent.rawText.slice(0, 200),
+                  channel: message.channelType,
+                  classifiedBy: "sonnet",
+                },
+              });
+            }
+            break;
+          }
+        }
+
         const limit = intent.params.count ? parseInt(intent.params.count, 10) : 10;
         response = await this.handleLogs(intent);
         if (this.storage) {
