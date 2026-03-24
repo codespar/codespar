@@ -74,6 +74,7 @@ export type {
   CIEventHandler,
   AgentStatusProvider,
   AgentFactory,
+  DeployAlert,
 } from "./server/webhook-server.js";
 export { WebhookServer } from "./server/webhook-server.js";
 
@@ -103,9 +104,11 @@ export { DEFAULT_SANDBOX_CONFIG } from "./execution/index.js";
 export { VectorStore } from "./memory/index.js";
 export type { MemoryEntry, SearchResult } from "./memory/index.js";
 
-// AI (Smart Responder)
+// AI (Smart Responder + Smart Alert)
 export { generateSmartResponse, generateSmartResponseStreaming } from "./ai/index.js";
 export type { AgentContext } from "./ai/index.js";
+export { analyzeDeployFailure, formatSmartAlert } from "./ai/index.js";
+export type { SmartAlertResult } from "./ai/index.js";
 
 // GitHub
 export { GitHubClient } from "./github/index.js";
