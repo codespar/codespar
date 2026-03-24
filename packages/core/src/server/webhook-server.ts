@@ -1899,7 +1899,7 @@ export class WebhookServer {
       try {
         // Fetch multiple Vercel API endpoints in parallel
         const [deploymentsRes, projectsRes] = await Promise.all([
-          fetch(`https://api.vercel.com/v6/deployments?limit=20&from=${from}${teamParam}${projectId ? `&projectId=${projectId}` : ""}`, { headers }),
+          fetch(`https://api.vercel.com/v6/deployments?limit=50${teamParam}${projectId ? `&projectId=${projectId}` : ""}`, { headers }),
           fetch(`https://api.vercel.com/v9/projects?limit=20${teamParam}`, { headers }),
         ]);
 
@@ -2008,59 +2008,64 @@ export class WebhookServer {
       const logsOrgId = this.getOrgId(request);
       const logsOrgStorage = this.getOrgStorage(logsOrgId);
 
-      // Try org-specific token first, fall back to global env
+      // Always include audit trail logs as primary source
+      const allLogs: Array<Record<string, unknown>> = [];
+
+      // 1. Audit trail logs (always available)
+      try {
+        const { entries } = await logsOrgStorage.queryAudit("", 50, 0);
+        for (const e of entries) {
+          const meta = (e.metadata || {}) as Record<string, unknown>;
+          allLogs.push({
+            time: e.timestamp.toISOString(),
+            level: e.result === "error" ? "error" : e.result === "pending" ? "warn" : "info",
+            source: e.actorType === "system" ? String(meta.source || "system") : e.actorId,
+            action: e.action,
+            message: String(meta.detail || meta.commitMessage || e.action),
+            detail: String(meta.project || meta.agentId || ""),
+          });
+        }
+      } catch { /* no audit data */ }
+
+      // 2. Vercel deployment events (if token configured)
       let vercelToken = process.env.VERCEL_API_TOKEN;
       let teamId = process.env.VERCEL_TEAM_ID;
       try {
         const integrationConfig = await logsOrgStorage.getChannelConfig("vercel-api");
         if (integrationConfig?.token) vercelToken = integrationConfig.token;
         if (integrationConfig?.teamId) teamId = integrationConfig.teamId;
-      } catch { /* use global fallback */ }
+      } catch { /* use global */ }
 
-      if (!vercelToken) {
-        // Fall back to audit trail logs
-        const orgId = this.getOrgId(request);
-        const storage = this.getOrgStorage(orgId);
-        const { entries } = await storage.queryAudit("", 50, 0);
-
-        const logs = entries.map((e) => ({
-          timestamp: e.timestamp.toISOString(),
-          level: e.result === "error" ? "error" : "info",
-          source: e.actorType === "system" ? String((e.metadata as Record<string, unknown>)?.source || "system") : e.actorType,
-          action: e.action,
-          message: String((e.metadata as Record<string, unknown>)?.detail || e.action),
-          actor: e.actorId,
-          latencyMs: Number((e.metadata as Record<string, unknown>)?.latency_ms || 0),
-        }));
-
-        return reply.send({ logs, source: "audit" });
-      }
-
-      const deploymentId = String((request.query as Record<string, string>).deploymentId || "");
-      const teamParam = teamId ? `?teamId=${teamId}` : "";
-
-      try {
-        if (deploymentId) {
-          // Get specific deployment logs
+      if (vercelToken) {
+        try {
+          const teamParam = teamId ? `&teamId=${teamId}` : "";
           const res = await fetch(
-            `https://api.vercel.com/v3/deployments/${deploymentId}/events${teamParam}`,
+            `https://api.vercel.com/v6/deployments?limit=10${teamParam}`,
             { headers: { Authorization: `Bearer ${vercelToken}` } }
           );
-          const events = res.ok ? await res.json() : [];
-          return reply.send({ logs: events, source: "vercel" });
-        }
-
-        // Get runtime logs (last 100)
-        const res = await fetch(
-          `https://api.vercel.com/v1/runtime-logs${teamParam ? teamParam + "&" : "?"}limit=100`,
-          { headers: { Authorization: `Bearer ${vercelToken}` } }
-        );
-        const logs = (res.ok ? await res.json() : { logs: [] }) as Record<string, unknown>;
-        reply.send({ ...logs, source: "vercel-runtime" });
-      } catch (err) {
-        log.error("Vercel logs proxy error", { error: err instanceof Error ? err.message : String(err) });
-        reply.code(500).send({ error: "Failed to fetch logs" });
+          if (res.ok) {
+            const data = await res.json() as Record<string, unknown>;
+            const deps = (data.deployments || []) as Array<Record<string, unknown>>;
+            for (const d of deps) {
+              const meta = (d.meta || {}) as Record<string, unknown>;
+              const state = String(d.state || d.readyState || "");
+              allLogs.push({
+                time: new Date(Number(d.created || 0)).toISOString(),
+                level: state === "ERROR" ? "error" : state === "READY" ? "info" : "warn",
+                source: "vercel",
+                action: `deploy.${state.toLowerCase()}`,
+                message: `${d.name} — ${String(meta.githubCommitMessage || "").slice(0, 60)}`,
+                detail: String(meta.githubCommitSha || "").slice(0, 7),
+              });
+            }
+          }
+        } catch { /* Vercel API unavailable */ }
       }
+
+      // Sort by time (newest first) and limit
+      allLogs.sort((a, b) => new Date(String(b.time)).getTime() - new Date(String(a.time)).getTime());
+
+      reply.send({ logs: allLogs.slice(0, 50), source: "combined" });
     });
 
     // ── Route metrics ──────────────────────────────
