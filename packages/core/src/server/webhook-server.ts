@@ -2021,12 +2021,11 @@ export class WebhookServer {
       }
 
       // Dedup: two layers — in-memory (fast) + audit log (survives restarts)
-      // In-memory check
       if (!this._vercelDedup) this._vercelDedup = new Map();
       const dedupKey = `${deploymentId || name}-${state}`;
-      const DEDUP_WINDOW_MS = 10 * 60 * 1000; // 10 minutes
+      const MEMORY_DEDUP_MS = 60 * 60 * 1000; // 1 hour in-memory
       const lastSeen = this._vercelDedup.get(dedupKey);
-      if (lastSeen && Date.now() - lastSeen < DEDUP_WINDOW_MS) {
+      if (lastSeen && Date.now() - lastSeen < MEMORY_DEDUP_MS) {
         return reply.send({ received: true, processed: false, reason: "duplicate" });
       }
 
@@ -2034,15 +2033,13 @@ export class WebhookServer {
       const isError = state === "ERROR" || state === "error";
       const isSuccess = state === "READY" || state === "succeeded";
 
-      // Persistent dedup: check recent audit entries for same project+state+commit
+      // Persistent dedup: check ALL recent audit entries (no time window — Vercel
+      // can retry for hours). Match by deploymentId or project+action+commitSha.
       try {
-        const { entries: recent } = await vercelStorage.queryAudit("", 50, 0);
-        const fiveMinAgo = new Date(Date.now() - DEDUP_WINDOW_MS);
+        const { entries: recent } = await vercelStorage.queryAudit("", 200, 0);
         const isDup = recent.some((e) => {
-          if (e.timestamp < fiveMinAgo) return false;
           if (e.actorId !== "vercel") return false;
           const m = e.metadata as Record<string, unknown> | undefined;
-          // Match by deploymentId if available, otherwise by project+state+commitSha
           if (deploymentId && m?.["deploymentId"] === deploymentId && e.action === `deploy.${state}`) return true;
           if (m?.["project"] === name && e.action === `deploy.${state}` && commitSha && m?.["commitSha"] === commitSha) return true;
           return false;
@@ -2057,13 +2054,6 @@ export class WebhookServer {
 
       // Record in memory dedup
       this._vercelDedup.set(dedupKey, Date.now());
-      // Evict stale entries
-      if (this._vercelDedup.size > 200) {
-        const now = Date.now();
-        for (const [id, ts] of this._vercelDedup) {
-          if (now - ts > DEDUP_WINDOW_MS) this._vercelDedup.delete(id);
-        }
-      }
 
       await vercelStorage.appendAudit({
         actorType: "system",
