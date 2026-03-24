@@ -23,7 +23,7 @@ import type {
   CIEvent,
 } from "@codespar/core";
 
-import { ApprovalManager, VectorStore, IdentityStore, GitHubClient, generateSmartResponse } from "@codespar/core";
+import { ApprovalManager, VectorStore, IdentityStore, GitHubClient, generateSmartResponse, metrics } from "@codespar/core";
 import type { AgentContext } from "@codespar/core";
 import { TaskAgent } from "@codespar/agent-task";
 import { DeployAgent } from "@codespar/agent-deploy";
@@ -153,6 +153,7 @@ export class ProjectAgent implements Agent {
     intent: ParsedIntent
   ): Promise<ChannelResponse> {
     this._state = "ACTIVE";
+    const handlerStart = Date.now();
     this.tasksHandled++;
 
     // Detect open-ended questions: long text with "?" classified by NLU (not regex)
@@ -186,6 +187,7 @@ export class ProjectAgent implements Agent {
               channel: message.channelType,
               classifiedBy: "sonnet",
               confidence: 1.0,
+              latency_ms: Date.now() - handlerStart,
             },
           });
         }
@@ -228,6 +230,7 @@ export class ProjectAgent implements Agent {
               risk: intent.risk,
               detail: `Queried ${intent.params.target || "all"} status`,
               channel: message.channelType,
+              latency_ms: Date.now() - handlerStart,
             },
           });
         }
@@ -249,6 +252,7 @@ export class ProjectAgent implements Agent {
               risk: intent.risk,
               detail: "Help menu displayed",
               channel: message.channelType,
+              latency_ms: Date.now() - handlerStart,
             },
           });
         }
@@ -276,6 +280,7 @@ export class ProjectAgent implements Agent {
                   detail: intent.rawText.slice(0, 200),
                   channel: message.channelType,
                   classifiedBy: "sonnet",
+                  latency_ms: Date.now() - handlerStart,
                 },
               });
             }
@@ -297,6 +302,7 @@ export class ProjectAgent implements Agent {
               risk: intent.risk,
               detail: `Viewed ${limit} recent entries`,
               channel: message.channelType,
+              latency_ms: Date.now() - handlerStart,
             },
           });
         }
@@ -320,6 +326,7 @@ export class ProjectAgent implements Agent {
               risk: intent.risk,
               detail: `PR #${prNumber} reviewed`,
               channel: message.channelType,
+              latency_ms: Date.now() - handlerStart,
             },
           });
         }
@@ -414,6 +421,7 @@ export class ProjectAgent implements Agent {
               risk: intent.risk,
               detail: instruction,
               channel: message.channelType,
+              latency_ms: Date.now() - handlerStart,
             },
           });
         }
@@ -434,6 +442,7 @@ export class ProjectAgent implements Agent {
               risk: intent.risk,
               detail: `Linked ${intent.params.repo || "unknown"}`,
               channel: message.channelType,
+              latency_ms: Date.now() - handlerStart,
             },
           });
         }
@@ -453,6 +462,7 @@ export class ProjectAgent implements Agent {
               risk: intent.risk,
               detail: "Project unlinked",
               channel: message.channelType,
+              latency_ms: Date.now() - handlerStart,
             },
           });
         }
@@ -481,6 +491,7 @@ export class ProjectAgent implements Agent {
                 channel: message.channelType,
                 environment: env,
                 autonomyLevel: this.config.autonomyLevel,
+                latency_ms: Date.now() - handlerStart,
               },
             });
           }
@@ -501,6 +512,7 @@ export class ProjectAgent implements Agent {
                 detail: `Deploy to ${env}. Waiting approval.`,
                 channel: message.channelType,
                 environment: env,
+                latency_ms: Date.now() - handlerStart,
               },
             });
           }
@@ -522,6 +534,7 @@ export class ProjectAgent implements Agent {
               risk: intent.risk,
               detail: `Approved via ${message.channelType}. Token: ${intent.params.token || "unknown"}`,
               channel: message.channelType,
+              latency_ms: Date.now() - handlerStart,
             },
           });
         }
@@ -543,6 +556,7 @@ export class ProjectAgent implements Agent {
               detail: `Rollback ${rollbackEnv}. Requires quorum.`,
               channel: message.channelType,
               environment: rollbackEnv,
+              latency_ms: Date.now() - handlerStart,
             },
           });
         }
@@ -593,6 +607,7 @@ export class ProjectAgent implements Agent {
                 risk: intent.risk,
                 detail: `Changed to L${newLevel} (${labels[newLevel]})`,
                 channel: message.channelType,
+                latency_ms: Date.now() - handlerStart,
               },
             });
           }
@@ -653,6 +668,7 @@ export class ProjectAgent implements Agent {
                 risk: intent.risk,
                 detail: `Registered as ${name}`,
                 channel: message.channelType,
+                latency_ms: Date.now() - handlerStart,
               },
             });
           }
@@ -674,6 +690,7 @@ export class ProjectAgent implements Agent {
               risk: intent.risk,
               detail: `Lens query: ${(intent.params.question || "").slice(0, 100)}`,
               channel: message.channelType,
+              latency_ms: Date.now() - handlerStart,
             },
           });
         }
@@ -727,6 +744,7 @@ export class ProjectAgent implements Agent {
               risk: intent.risk,
               detail: intent.rawText,
               channel: message.channelType,
+              latency_ms: Date.now() - handlerStart,
             },
           });
         }
@@ -743,6 +761,9 @@ export class ProjectAgent implements Agent {
         metadata: { intent: intent.type, risk: intent.risk },
       });
     }
+
+    metrics.increment("agent.tool_calls");
+    metrics.observe("agent.tool_latency_ms", Date.now() - handlerStart);
 
     this._state = "IDLE";
     return response;

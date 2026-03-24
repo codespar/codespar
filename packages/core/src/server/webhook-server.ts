@@ -259,6 +259,27 @@ export class WebhookServer {
     this.startedAt = new Date();
     await this.app.listen({ port: this.port, host: this.host });
     log.info("Listening", { host: this.host, port: this.port });
+
+    // Periodic health snapshots for observability (every 5 minutes)
+    const SNAPSHOT_INTERVAL = 5 * 60 * 1000;
+    setInterval(async () => {
+      if (!this.storageProvider) return;
+      const mem = process.memoryUsage();
+      try {
+        await this.storageProvider.appendAudit({
+          actorType: "system",
+          actorId: "system",
+          action: "system.health_snapshot",
+          result: "success",
+          metadata: {
+            heapUsedMB: Math.round(mem.heapUsed / 1024 / 1024),
+            rssMB: Math.round(mem.rss / 1024 / 1024),
+            agentCount: this.agentCount,
+            uptimeMs: Date.now() - this.startedAt.getTime(),
+          },
+        });
+      } catch { /* ignore snapshot failures */ }
+    }, SNAPSHOT_INTERVAL).unref();
   }
 
   /** Graceful shutdown */
@@ -341,10 +362,16 @@ export class WebhookServer {
     // Health check
     route("get", "/health", async (_request: any, _reply: any) => {
       const uptimeMs = Date.now() - this.startedAt.getTime();
+      const mem = process.memoryUsage();
       return {
         status: "ok",
         agents: this.agentCount,
         uptime: uptimeMs,
+        memory: {
+          heapUsedMB: Math.round(mem.heapUsed / 1024 / 1024),
+          heapTotalMB: Math.round(mem.heapTotal / 1024 / 1024),
+          rssMB: Math.round(mem.rss / 1024 / 1024),
+        },
       };
     });
 
@@ -1436,6 +1463,243 @@ export class WebhookServer {
       }
     });
 
+    // ── Observability endpoint ────────────────────────────────────
+
+    route("get", "/api/observability", async (request: any, _reply: any) => {
+      const orgId = this.getOrgId(request);
+      const storage = this.getOrgStorage(orgId);
+      const period = String(
+        (request.query as Record<string, string>).period || "24h"
+      );
+
+      // Calculate time window
+      const periodMs: Record<string, number> = {
+        "1h": 60 * 60 * 1000,
+        "24h": 24 * 60 * 60 * 1000,
+        "7d": 7 * 24 * 60 * 60 * 1000,
+        "30d": 30 * 24 * 60 * 60 * 1000,
+      };
+      const windowMs = periodMs[period] || periodMs["24h"];
+      const since = new Date(Date.now() - windowMs);
+
+      // Query audit entries within the time window
+      const { entries: allEntries } = await storage.queryAudit("", 10000, 0);
+      const entries = allEntries.filter((e) => e.timestamp >= since);
+
+      // Classify entries by action type
+      const apiEntries = entries.filter(
+        (e) => String(e.action) === "api.claude"
+      );
+      const deployEntries = entries.filter((e) =>
+        String(e.action).startsWith("deploy.")
+      );
+      const toolEntries = entries.filter(
+        (e) =>
+          e.metadata?.latency_ms !== undefined && e.actorType !== "system"
+      );
+      const healthEntries = entries.filter(
+        (e) => String(e.action) === "system.health_snapshot"
+      );
+      const errorEntries = entries.filter(
+        (e) => e.result === "error" || e.result === "failure"
+      );
+
+      // ── Summary metrics ──
+      const totalLatencies = apiEntries
+        .map((e) => Number(e.metadata?.latency_ms || 0))
+        .filter(Boolean);
+      const avgLatencyMs =
+        totalLatencies.length > 0
+          ? Math.round(
+              totalLatencies.reduce((a, b) => a + b, 0) /
+                totalLatencies.length
+            )
+          : 0;
+      const totalCostUsd = apiEntries.reduce(
+        (sum, e) => sum + Number(e.metadata?.cost_usd || 0),
+        0
+      );
+      const successfulApi = apiEntries.filter(
+        (e) => e.result === "success"
+      ).length;
+      const successfulTools = toolEntries.filter(
+        (e) => e.result === "success"
+      ).length;
+
+      const deploySuccess = deployEntries.filter(
+        (e) => e.result === "success"
+      ).length;
+      const deployError = deployEntries.filter(
+        (e) => e.result === "error"
+      ).length;
+
+      const totalCalls = apiEntries.length + toolEntries.length;
+
+      // ── Tool stats ──
+      const toolMap = new Map<
+        string,
+        {
+          calls: number;
+          successes: number;
+          latencies: number[];
+          cost: number;
+        }
+      >();
+
+      for (const e of toolEntries) {
+        const name = String(e.action).split(".")[0] || "unknown";
+        const existing = toolMap.get(name) || {
+          calls: 0,
+          successes: 0,
+          latencies: [],
+          cost: 0,
+        };
+        existing.calls++;
+        if (e.result === "success") existing.successes++;
+        const lat = Number(e.metadata?.latency_ms || 0);
+        if (lat > 0) existing.latencies.push(lat);
+        existing.cost += Number(e.metadata?.cost_usd || 0);
+        toolMap.set(name, existing);
+      }
+
+      for (const e of apiEntries) {
+        const name = String(e.metadata?.method || "claude-api");
+        const existing = toolMap.get(name) || {
+          calls: 0,
+          successes: 0,
+          latencies: [],
+          cost: 0,
+        };
+        existing.calls++;
+        if (e.result === "success") existing.successes++;
+        const lat = Number(e.metadata?.latency_ms || 0);
+        if (lat > 0) existing.latencies.push(lat);
+        existing.cost += Number(e.metadata?.cost_usd || 0);
+        toolMap.set(name, existing);
+      }
+
+      const toolStats = Array.from(toolMap.entries())
+        .map(([name, stats]) => {
+          const sorted = [...stats.latencies].sort((a, b) => a - b);
+          const p95Index = Math.floor(sorted.length * 0.95);
+          return {
+            name,
+            calls: stats.calls,
+            successRate:
+              stats.calls > 0
+                ? Math.round((stats.successes / stats.calls) * 1000) / 10
+                : 100,
+            avgLatencyMs:
+              sorted.length > 0
+                ? Math.round(
+                    sorted.reduce((a, b) => a + b, 0) / sorted.length
+                  )
+                : 0,
+            p95LatencyMs:
+              sorted.length > 0
+                ? sorted[p95Index] || sorted[sorted.length - 1]
+                : 0,
+            costUsd: Math.round(stats.cost * 100) / 100,
+            trend: "stable" as const,
+          };
+        })
+        .sort((a, b) => b.calls - a.calls);
+
+      // ── Hallucinations (agent errors) ──
+      const hallucinations = errorEntries
+        .filter(
+          (e) =>
+            e.actorType === "agent" || String(e.action).startsWith("api.")
+        )
+        .slice(0, 20)
+        .map((e) => ({
+          agentId: e.actorId,
+          tool: String(e.action),
+          reason: String(
+            e.metadata?.detail || e.metadata?.errorMessage || e.result
+          ),
+          time: e.timestamp.toISOString(),
+        }));
+
+      // ── Cost by agent ──
+      const costMap = new Map<string, { cost: number; calls: number }>();
+      for (const e of [...apiEntries, ...toolEntries]) {
+        const agent = String(
+          e.metadata?.agentId || e.actorId || "unknown"
+        );
+        const existing = costMap.get(agent) || { cost: 0, calls: 0 };
+        existing.cost += Number(e.metadata?.cost_usd || 0);
+        existing.calls++;
+        costMap.set(agent, existing);
+      }
+      const costByAgent = Array.from(costMap.entries())
+        .map(([agent, stats]) => ({
+          agent,
+          costUsd: Math.round(stats.cost * 100) / 100,
+          calls: stats.calls,
+        }))
+        .sort((a, b) => b.costUsd - a.costUsd);
+
+      // ── Deploy events ──
+      const deployEvents = deployEntries.slice(0, 20).map((e) => ({
+        id: e.id,
+        project: String(e.metadata?.project || "unknown"),
+        status: (e.result === "success" ? "success" : "error") as
+          | "success"
+          | "error",
+        source: String(e.metadata?.source || "unknown"),
+        branch: String(e.metadata?.branch || ""),
+        message: String(
+          e.metadata?.commitMessage || e.metadata?.detail || ""
+        ),
+        time: e.timestamp.toISOString(),
+        url: String(e.metadata?.url || ""),
+        error: String(e.metadata?.errorMessage || ""),
+        buildDurationMs:
+          Number(e.metadata?.buildDurationMs || 0) || undefined,
+        target: String(e.metadata?.target || ""),
+      }));
+
+      // ── Health snapshot ──
+      const latestHealth =
+        healthEntries.length > 0 ? healthEntries[0] : null;
+      const health = latestHealth
+        ? {
+            heapUsedMB: Number(latestHealth.metadata?.heapUsedMB || 0),
+            rssMB: Number(latestHealth.metadata?.rssMB || 0),
+            uptimeMs: Number(latestHealth.metadata?.uptimeMs || 0),
+          }
+        : {
+            heapUsedMB: Math.round(
+              process.memoryUsage().heapUsed / 1024 / 1024
+            ),
+            rssMB: Math.round(process.memoryUsage().rss / 1024 / 1024),
+            uptimeMs: Date.now() - this.startedAt.getTime(),
+          };
+
+      return {
+        summary: {
+          totalApiCalls: totalCalls,
+          avgLatencyMs,
+          successRate:
+            totalCalls > 0
+              ? Math.round(
+                  ((successfulApi + successfulTools) / totalCalls) * 1000
+                ) / 10
+              : 100,
+          totalCostUsd: Math.round(totalCostUsd * 100) / 100,
+          totalDeploys: deployEntries.length,
+          deploySuccessCount: deploySuccess,
+          deployErrorCount: deployError,
+        },
+        toolStats,
+        hallucinations,
+        costByAgent,
+        deployEvents,
+        health,
+      };
+    });
+
     // ── Organization management ──────────────────────────────────
 
     // Create a new organization (creates directory structure)
@@ -2027,6 +2291,11 @@ export class WebhookServer {
       const errorMessage = String(deployment.errorMessage || deployment.buildError || (deployment as any).errorStep || innerPayload.errorMessage || "");
       const inspectorUrl = String(deployment.inspectorUrl || innerPayload.inspectorUrl || "");
 
+      const target = String(innerPayload.target || deployment.target || "");
+      const buildingAt = Number(deployment.buildingAt || 0);
+      const readyAt = Number(deployment.ready || deployment.readyAt || 0);
+      const buildDurationMs = buildingAt && readyAt ? (readyAt - buildingAt) : 0;
+
       const deploymentId = String(deployment.id || deployment.uid || "");
       log.info("Vercel webhook event", { type, project: name, state, deploymentId });
 
@@ -2110,6 +2379,8 @@ export class WebhookServer {
           deploymentId,
           repo: githubOrg && githubRepo ? `${githubOrg}/${githubRepo}` : "",
           source: "vercel",
+          target,
+          buildDurationMs,
           orgId,
         },
       });

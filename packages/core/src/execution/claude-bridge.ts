@@ -10,6 +10,24 @@
  */
 
 import { GitHubClient } from "../github/index.js";
+import { createLogger } from "../observability/logger.js";
+import { metrics } from "../observability/metrics.js";
+
+const log = createLogger("claude-bridge");
+
+/** Compute USD cost based on Anthropic pricing (as of 2025) */
+function computeClaudeCost(model: string, inputTokens: number, outputTokens: number): number {
+  // Pricing per million tokens
+  const PRICING: Record<string, { input: number; output: number }> = {
+    "claude-sonnet-4-20250514": { input: 3, output: 15 },
+    "claude-haiku-4-20250414": { input: 0.80, output: 4 },
+    "claude-opus-4-20250514": { input: 15, output: 75 },
+  };
+  // Match model prefix for flexibility
+  const key = Object.keys(PRICING).find((k) => model.startsWith(k.split("-").slice(0, 3).join("-"))) || "";
+  const price = PRICING[key] || { input: 3, output: 15 }; // default to Sonnet pricing
+  return (inputTokens * price.input + outputTokens * price.output) / 1_000_000;
+}
 
 export interface ProgressEvent {
   type: "status" | "code" | "file-selected" | "file-read" | "generating" | "branch" | "commit" | "pr";
@@ -116,14 +134,25 @@ export class ClaudeBridge {
         };
       }
 
-      const data = (await res.json()) as { content?: Array<{ text?: string }> };
+      const data = (await res.json()) as { content?: Array<{ text?: string }>; usage?: { input_tokens?: number; output_tokens?: number } };
       const output = data.content?.[0]?.text || "(no output)";
+      const usage = data.usage;
+      const inputTokens = usage?.input_tokens ?? 0;
+      const outputTokens = usage?.output_tokens ?? 0;
+      const durationMs = Date.now() - startTime;
+
+      const costUsd = computeClaudeCost(model, inputTokens, outputTokens);
+      log.info("Claude API call", { model, inputTokens, outputTokens, durationMs, costUsd, method: "execute" });
+      metrics.increment("api.claude.calls");
+      metrics.observe("api.claude.latency_ms", durationMs);
+      metrics.observe("api.claude.tokens_in", inputTokens);
+      metrics.observe("api.claude.tokens_out", outputTokens);
 
       return {
         taskId: request.taskId,
         status: "completed",
         output: output.slice(0, 3000), // Limit output size
-        durationMs: Date.now() - startTime,
+        durationMs,
         exitCode: 0,
         simulated: false,
       };
@@ -195,6 +224,8 @@ export class ClaudeBridge {
       const decoder = new TextDecoder();
       let fullOutput = "";
       let buffer = "";
+      let streamInputTokens = 0;
+      let streamOutputTokens = 0;
 
       if (reader) {
         while (true) {
@@ -212,6 +243,10 @@ export class ClaudeBridge {
               if (event.type === "content_block_delta" && event.delta?.text) {
                 fullOutput += event.delta.text;
                 onChunk(event.delta.text);
+              } else if (event.type === "message_start" && event.message?.usage?.input_tokens) {
+                streamInputTokens = event.message.usage.input_tokens;
+              } else if (event.type === "message_delta" && event.usage?.output_tokens) {
+                streamOutputTokens = event.usage.output_tokens;
               }
             } catch {
               /* skip malformed JSON */
@@ -220,11 +255,19 @@ export class ClaudeBridge {
         }
       }
 
+      const durationMs = Date.now() - startTime;
+      const costUsd = computeClaudeCost(model, streamInputTokens, streamOutputTokens);
+      log.info("Claude API call", { model, inputTokens: streamInputTokens, outputTokens: streamOutputTokens, durationMs, costUsd, method: "executeStreaming" });
+      metrics.increment("api.claude.calls");
+      metrics.observe("api.claude.latency_ms", durationMs);
+      metrics.observe("api.claude.tokens_in", streamInputTokens);
+      metrics.observe("api.claude.tokens_out", streamOutputTokens);
+
       return {
         taskId: request.taskId,
         status: "completed",
         output: fullOutput.slice(0, 3000),
-        durationMs: Date.now() - startTime,
+        durationMs,
         exitCode: 0,
         simulated: false,
       };
@@ -427,6 +470,7 @@ Respond with ONLY the file paths, one per line. No explanations, no markdown, no
 
       contentParts.push({ type: "text", text: prompt });
 
+      const pickStart = Date.now();
       const res = await fetch("https://api.anthropic.com/v1/messages", {
         method: "POST",
         headers: {
@@ -444,8 +488,19 @@ Respond with ONLY the file paths, one per line. No explanations, no markdown, no
 
       if (!res.ok) return [];
 
-      const data = (await res.json()) as { content?: Array<{ text?: string }> };
+      const data = (await res.json()) as { content?: Array<{ text?: string }>; usage?: { input_tokens?: number; output_tokens?: number } };
       const text = data.content?.[0]?.text || "";
+
+      const pickUsage = data.usage;
+      const pickInputTokens = pickUsage?.input_tokens ?? 0;
+      const pickOutputTokens = pickUsage?.output_tokens ?? 0;
+      const pickDurationMs = Date.now() - pickStart;
+      const pickCostUsd = computeClaudeCost(model, pickInputTokens, pickOutputTokens);
+      log.info("Claude API call", { model, inputTokens: pickInputTokens, outputTokens: pickOutputTokens, durationMs: pickDurationMs, costUsd: pickCostUsd, method: "pickRelevantFiles" });
+      metrics.increment("api.claude.calls");
+      metrics.observe("api.claude.latency_ms", pickDurationMs);
+      metrics.observe("api.claude.tokens_in", pickInputTokens);
+      metrics.observe("api.claude.tokens_out", pickOutputTokens);
 
       // Parse file paths from response (one per line, filter to paths that exist in our tree)
       const pathSet = new Set(filePaths);
