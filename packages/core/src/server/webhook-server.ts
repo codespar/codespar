@@ -348,9 +348,9 @@ export class WebhookServer {
       };
     });
 
-    // SSE endpoint for real-time updates
+    // SSE endpoint for real-time updates (org-scoped via query param or header)
     route("get", "/api/events", async (request: any, reply: any) => {
-      const orgId = (request.headers["x-org-id"] as string) || "default";
+      const orgId = (request.query as Record<string, string>).orgId || (request.headers["x-org-id"] as string) || "default";
 
       reply.raw.writeHead(200, {
         "Content-Type": "text/event-stream",
@@ -1347,9 +1347,21 @@ export class WebhookServer {
         const orgId = this.getOrgId(request);
         const storage = this.getOrgStorage(orgId);
 
-        // Fetch all entries (unfiltered by risk) so we can apply risk filter on the full set
-        // We request a large limit to get all entries for risk filtering
-        const { entries: allEntries, total: unfilteredTotal } = await storage.queryAudit("", 10000, 0);
+        // Fetch all entries then deduplicate deploy events on read.
+        // This handles historical duplicates from before persistent dedup was added.
+        const { entries: rawEntries } = await storage.queryAudit("", 10000, 0);
+
+        // Deduplicate: for deploy events, keep only the latest per project+action+commitSha
+        const seen = new Set<string>();
+        const allEntries = rawEntries.filter((e) => {
+          if (e.actorId === "vercel" && e.action.startsWith("deploy.")) {
+            const m = e.metadata as Record<string, unknown> | undefined;
+            const key = `${m?.["project"] || ""}-${e.action}-${m?.["commitSha"] || ""}-${m?.["branch"] || ""}`;
+            if (seen.has(key)) return false;
+            seen.add(key);
+          }
+          return true;
+        });
 
         const filtered =
           riskFilter === "all"
