@@ -15,7 +15,7 @@
  *   PROJECT_NAME      — Project identifier (default "default")
  */
 
-import { MessageRouter, WebhookServer, FileStorage, ApprovalManager, VectorStore, IdentityStore } from "@codespar/core";
+import { MessageRouter, WebhookServer, FileStorage, ApprovalManager, VectorStore, IdentityStore, analyzeDeployFailure, formatSmartAlert, parseIntent } from "@codespar/core";
 import { AgentSupervisor } from "@codespar/agent-supervisor";
 import { ProjectAgent } from "@codespar/agent-project";
 import { CoordinatorAgent } from "@codespar/agent-coordinator";
@@ -215,10 +215,93 @@ webhookServer.setChatHandler(async (message, orgId) => {
   return router.route(message, orgId);
 });
 
-// Wire deploy alert handler -- logs alerts and broadcasts via SSE.
-// Channel delivery (Slack/WhatsApp/etc.) can be configured per-org later.
-webhookServer.setAlertHandler(async (message, type) => {
-  console.log(`[alert] ${type}: ${message.split("\n")[0]}`);
+// Wire deploy alert handler -- analyzes failures with Claude, broadcasts to channels,
+// and triggers autonomous healing based on agent autonomy level.
+webhookServer.setAlertHandler(async (alert) => {
+  console.log(`[alert] ${alert.type}: ${alert.project} (${alert.branch})`);
+
+  if (alert.type === "deploy-failure") {
+    // Smart analysis with Claude
+    const analysis = await analyzeDeployFailure(alert);
+
+    if (analysis) {
+      const message = formatSmartAlert(analysis);
+      // Broadcast to all channels
+      await supervisor.broadcastToAllChannels({ text: message });
+      console.log(`[alert] Smart alert sent: ${analysis.severity} severity, ${analysis.confidence} confidence`);
+
+      // Save error pattern to vector store for future reference
+      try {
+        await vectorStore.add({
+          agentId: "system",
+          content: `Error: ${alert.errorMessage}\nRoot cause: ${analysis.rootCause}\nFix: ${analysis.suggestedFix}\nFiles: ${analysis.affectedFiles.join(", ")}`,
+          category: "pattern",
+          metadata: {
+            severity: analysis.severity,
+            project: alert.project,
+            branch: alert.branch,
+          },
+        });
+        console.log("[alert] Saved error pattern to vector store");
+      } catch { /* ignore vector store errors */ }
+    } else {
+      // Fallback: send basic alert
+      const basicMsg = `\u26a0\ufe0f Deploy failed: ${alert.project}\n  Branch: ${alert.branch}\n  Error: ${alert.errorMessage || "Unknown"}`;
+      await supervisor.broadcastToAllChannels({ text: basicMsg });
+    }
+
+    // Phase 3: Autonomous healing based on agent autonomy level
+    const agentStatuses = supervisor.getAgentStatuses();
+    const projectAgent = agentStatuses.find(a => {
+      const projectMatch = a.projectId === alert.project ||
+        a.id.includes(alert.project) ||
+        (alert.repo && a.id.includes(alert.repo.split("/")[1]));
+      return projectMatch;
+    });
+
+    const autonomyLevel = projectAgent?.autonomyLevel ?? 1;
+
+    if (autonomyLevel >= 3 && analysis) {
+      // L3+: auto-investigate (the smart analysis already provides investigation)
+      console.log(`[alert] L${autonomyLevel}: Auto-investigating ${alert.project}`);
+    }
+
+    if (autonomyLevel >= 4 && analysis && analysis.confidence !== "low") {
+      // L4+: auto-create fix PR
+      console.log(`[alert] L${autonomyLevel}: Auto-fixing ${alert.project}`);
+      const fixAgent = [...router.getAgents().values()].find(a =>
+        a.config.projectId === alert.project || a.config.id.includes(alert.project.split("/").pop())
+      );
+      if (fixAgent) {
+        try {
+          const fixMessage = {
+            id: `auto-heal-${Date.now()}`,
+            channelType: "system",
+            channelId: "system",
+            channelUserId: "system",
+            isDM: false,
+            isMentioningBot: true,
+            text: `instruct Fix the deploy failure on ${alert.branch}. Error: ${alert.errorMessage}. Suggested fix: ${analysis.suggestedFix}`,
+            timestamp: new Date(),
+          };
+          const fixIntent = await parseIntent(fixMessage.text);
+          const fixResponse = await fixAgent.handleMessage(fixMessage, fixIntent);
+          if (fixResponse) {
+            await supervisor.broadcastToAllChannels({
+              text: `\uD83D\uDD27 **Auto-fix initiated** for ${alert.project}\n\n${fixResponse.text}`,
+            });
+          }
+        } catch (err) {
+          console.error(`[alert] Auto-fix failed for ${alert.project}:`, err.message);
+        }
+      }
+    }
+  } else if (alert.type === "deploy-success") {
+    const msg = `\u2705 Deploy succeeded: ${alert.project}\n  ${alert.commitMessage ? alert.commitMessage.slice(0, 80) : ""}${alert.url ? `\n  ${alert.url}` : ""}`;
+    // Only broadcast success for production deploys (less noise)
+    // await supervisor.broadcastToAllChannels({ text: msg });
+    console.log(`[alert] Deploy success: ${alert.project}`);
+  }
 });
 
 // Give webhook server ability to dynamically create agents

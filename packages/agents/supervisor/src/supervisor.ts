@@ -28,6 +28,7 @@ export class AgentSupervisor {
   private adapters: ChannelAdapter[] = [];
   private healthCheckInterval: ReturnType<typeof setInterval> | null = null;
   private startedAt: Date;
+  private lastChannelIds: Map<string, string> = new Map();
 
   constructor(router: MessageRouter, config?: SupervisorConfig) {
     this.router = router;
@@ -62,6 +63,9 @@ export class AgentSupervisor {
       // when the adapter starts receiving messages
       adapter.onMessage(async (message: NormalizedMessage) => {
         try {
+          // Track last known channel per adapter type for broadcast
+          this.lastChannelIds.set(adapter.type, message.channelId);
+
           // Parse intent to detect long-running tasks
           const intent = await parseIntent(message.text);
 
@@ -174,6 +178,19 @@ export class AgentSupervisor {
   /** Get all registered channel adapters with connection status */
   getAdapters(): ChannelAdapter[] {
     return this.adapters;
+  }
+
+  /** Broadcast a message to all connected channel adapters */
+  async broadcastToAllChannels(response: ChannelResponse): Promise<void> {
+    for (const adapter of this.adapters) {
+      const channelId = this.lastChannelIds.get(adapter.type);
+      if (!channelId) continue;
+      try {
+        await adapter.sendToChannel(channelId, response);
+      } catch (err) {
+        console.error(`[supervisor] Broadcast to ${adapter.type} failed:`, err instanceof Error ? err.message : err);
+      }
+    }
   }
 
   /** Graceful shutdown */

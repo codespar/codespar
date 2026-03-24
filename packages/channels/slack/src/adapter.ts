@@ -265,7 +265,7 @@ export class SlackAdapter implements ChannelAdapter {
     // Interactive button clicks -- approve, reject, merge, investigate, etc.
     // The regex matches all action_id prefixes used by the formatter's button builders.
     this.app.action(
-      /^(approve_|reject_|review_pr_|merge_pr_|approve_merge_pr_|investigate_failure|view_logs|request_changes_)/,
+      /^(approve_|reject_|review_pr_|merge_pr_|approve_merge_pr_|investigate_failure|view_logs|request_changes_|heal_)/,
       async ({ action, ack, body, client }) => {
         await ack();
 
@@ -302,6 +302,19 @@ export class SlackAdapter implements ChannelAdapter {
             await client.chat.postMessage({
               channel: channelId,
               text: `Changes requested on PR #${value} by <@${userId}>`,
+            });
+          }
+          return;
+        } else if (actionId === "heal_investigate") {
+          command = `fix investigate-deploy ${value}`;
+        } else if (actionId === "heal_autofix") {
+          command = `fix auto-heal ${value}`;
+        } else if (actionId === "heal_ignore") {
+          // Just acknowledge — no further action
+          if (channelId) {
+            await client.chat.postMessage({
+              channel: channelId,
+              text: `\u2713 Alert acknowledged by <@${userId}>. No action taken.`,
             });
           }
           return;

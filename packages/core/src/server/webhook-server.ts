@@ -59,6 +59,22 @@ export interface AgentFactory {
   createAgent(projectId: string, agentId: string, repo: string, orgId?: string): Promise<void>;
 }
 
+/** Structured deploy alert passed to the alert handler */
+export interface DeployAlert {
+  project: string;
+  branch: string;
+  commitSha: string;
+  commitMessage: string;
+  commitAuthor: string;
+  errorMessage: string;
+  url: string;
+  repo: string;
+  type: "deploy-failure" | "deploy-success";
+  orgId: string;
+  inspectorUrl: string;
+  deploymentId: string;
+}
+
 // ── In-memory rate limiter (sliding window) ─────────────────────────
 const rateLimits = new Map<string, { count: number; resetAt: number }>();
 
@@ -157,7 +173,7 @@ export class WebhookServer {
   private storageBaseDir: string = ".codespar";
   private orgStorageCache: Map<string, StorageProvider> = new Map();
   private chatHandler: ((message: import("../types/normalized-message.js").NormalizedMessage, orgId?: string) => Promise<import("../types/channel-adapter.js").ChannelResponse | null>) | null = null;
-  private alertHandler: ((message: string, type: string) => Promise<void>) | null = null;
+  private alertHandler: ((alert: DeployAlert) => Promise<void>) | null = null;
   private _vercelDedup: Map<string, number> = new Map();
 
   constructor(config?: WebhookServerConfig) {
@@ -204,7 +220,7 @@ export class WebhookServer {
   }
 
   /** Set a handler for broadcasting deploy alerts to connected channels */
-  setAlertHandler(handler: (message: string, type: string) => Promise<void>): void {
+  setAlertHandler(handler: (alert: DeployAlert) => Promise<void>): void {
     this.alertHandler = handler;
   }
 
@@ -363,6 +379,12 @@ export class WebhookServer {
     route("get", "/health", async (_request: any, _reply: any) => {
       const uptimeMs = Date.now() - this.startedAt.getTime();
       const mem = process.memoryUsage();
+
+      // Measure event loop lag
+      const lagStart = performance.now();
+      await new Promise(resolve => setImmediate(resolve));
+      const eventLoopLagMs = Math.round(performance.now() - lagStart);
+
       return {
         status: "ok",
         agents: this.agentCount,
@@ -372,6 +394,9 @@ export class WebhookServer {
           heapTotalMB: Math.round(mem.heapTotal / 1024 / 1024),
           rssMB: Math.round(mem.rss / 1024 / 1024),
         },
+        eventLoopLagMs,
+        activeConnections: sseConnections.size,
+        nodeVersion: process.version,
       };
     });
 
@@ -1668,6 +1693,7 @@ export class WebhookServer {
             heapUsedMB: Number(latestHealth.metadata?.heapUsedMB || 0),
             rssMB: Number(latestHealth.metadata?.rssMB || 0),
             uptimeMs: Number(latestHealth.metadata?.uptimeMs || 0),
+            activeConnections: sseConnections.size,
           }
         : {
             heapUsedMB: Math.round(
@@ -1675,7 +1701,15 @@ export class WebhookServer {
             ),
             rssMB: Math.round(process.memoryUsage().rss / 1024 / 1024),
             uptimeMs: Date.now() - this.startedAt.getTime(),
+            activeConnections: sseConnections.size,
           };
+
+      // ── Health trend (last 5 snapshots) ──
+      const healthTrend = healthEntries.slice(0, 5).map((e) => ({
+        time: e.timestamp.toISOString(),
+        heapUsedMB: Number(e.metadata?.heapUsedMB || 0),
+        rssMB: Number(e.metadata?.rssMB || 0),
+      }));
 
       return {
         summary: {
@@ -1697,6 +1731,7 @@ export class WebhookServer {
         costByAgent,
         deployEvents,
         health,
+        healthTrend,
       };
     });
 
@@ -2393,29 +2428,41 @@ export class WebhookServer {
 
       // For failures, notify connected channels
       if (state === "ERROR" || state === "error" || type === "deployment.error") {
-        const alertMessage = [
-          `Deploy failed: ${name}`,
-          `  Branch: ${branch}`,
-          commitMessage ? `  Commit: ${commitMessage.slice(0, 80)}` : "",
-          errorMessage ? `  Error: ${errorMessage.slice(0, 200)}` : "",
-          url ? `  URL: https://${url}` : "",
-        ].filter(Boolean).join("\n");
-
         if (this.alertHandler) {
-          await this.alertHandler(alertMessage, "deploy-failure");
+          await this.alertHandler({
+            project: name,
+            branch,
+            commitSha,
+            commitMessage,
+            commitAuthor,
+            errorMessage,
+            url,
+            repo: githubOrg && githubRepo ? `${githubOrg}/${githubRepo}` : "",
+            type: "deploy-failure",
+            orgId,
+            inspectorUrl,
+            deploymentId,
+          });
         }
       }
 
-      // For successes, also notify (shorter message)
+      // For successes, also notify
       if (state === "READY" || state === "succeeded" || type === "deployment.succeeded") {
-        const successMessage = [
-          `Deploy succeeded: ${name}`,
-          commitMessage ? `  ${commitMessage.slice(0, 80)}` : "",
-          url ? `  https://${url}` : "",
-        ].filter(Boolean).join("\n");
-
         if (this.alertHandler) {
-          await this.alertHandler(successMessage, "deploy-success");
+          await this.alertHandler({
+            project: name,
+            branch,
+            commitSha,
+            commitMessage,
+            commitAuthor,
+            errorMessage: "",
+            url,
+            repo: githubOrg && githubRepo ? `${githubOrg}/${githubRepo}` : "",
+            type: "deploy-success",
+            orgId,
+            inspectorUrl,
+            deploymentId,
+          });
         }
       }
 
@@ -2465,20 +2512,37 @@ export class WebhookServer {
       broadcastEvent({ type: "deploy.status", data: { project, status, source, orgId } }, orgId);
 
       if (status === "failure" && this.alertHandler) {
-        const alert = [
-          `Deploy failed: ${project}`,
-          body.error ? `  Error: ${body.error.slice(0, 200)}` : "",
-          body.message ? `  ${body.message.slice(0, 100)}` : "",
-          body.url ? `  ${body.url}` : "",
-        ].filter(Boolean).join("\n");
-        await this.alertHandler(alert, "deploy-failure");
+        await this.alertHandler({
+          project,
+          branch: "",
+          commitSha: "",
+          commitMessage: body.message || "",
+          commitAuthor: "",
+          errorMessage: body.error || "",
+          url: body.url || "",
+          repo: "",
+          type: "deploy-failure",
+          orgId,
+          inspectorUrl: "",
+          deploymentId: "",
+        });
       }
 
       if (status === "success" && this.alertHandler) {
-        await this.alertHandler(
-          `Deploy succeeded: ${project}${body.url ? ` (${body.url})` : ""}`,
-          "deploy-success",
-        );
+        await this.alertHandler({
+          project,
+          branch: "",
+          commitSha: "",
+          commitMessage: body.message || "",
+          commitAuthor: "",
+          errorMessage: "",
+          url: body.url || "",
+          repo: "",
+          type: "deploy-success",
+          orgId,
+          inspectorUrl: "",
+          deploymentId: "",
+        });
       }
 
       reply.send({ received: true, status });

@@ -371,6 +371,35 @@ export class ProjectAgent implements Agent {
 
       case "instruct":
       case "fix": {
+        const instruction = intent.params.instruction || intent.params.issue || intent.rawText;
+
+        // Self-healing commands from deploy alert buttons
+        if (typeof instruction === "string" && instruction.startsWith("investigate-deploy")) {
+          // Deep investigation using repo context
+          const ctx = await this.buildAgentContext();
+          const imageUrls: string[] = [];
+          const smartResponse = await generateSmartResponse(
+            `Investigate this deploy failure in detail. Check the recent commits, error logs, and suggest a specific code fix. Context: ${instruction}`,
+            ctx, imageUrls
+          );
+          response = {
+            text: `[${this.config.id}] ${smartResponse || "Investigation inconclusive. Manual review recommended."}`,
+          };
+          break;
+        }
+
+        if (typeof instruction === "string" && instruction.startsWith("auto-heal")) {
+          // Auto-fix: delegate to task agent with the fix instruction
+          const healMessage: NormalizedMessage = {
+            ...message,
+            text: `instruct Fix the deploy failure. Apply the suggested fix from the alert analysis.`,
+          };
+          const { parseIntent } = await import("@codespar/core");
+          const healIntent = await parseIntent(healMessage.text);
+          response = await this.delegateToTaskAgent(healMessage, healIntent);
+          break;
+        }
+
         // Search vector memory for similar past tasks
         let similarContext = "";
         if (this.vectorStore) {
@@ -393,8 +422,6 @@ export class ProjectAgent implements Agent {
             similarContext = `\n\nSimilar past tasks found:\n${lines.join("\n")}`;
           }
         }
-
-        const instruction = intent.params.instruction || intent.params.issue || intent.rawText;
 
         if (this.shouldAutoExecute(intent)) {
           // L4+: auto-execute without confirmation, notify after

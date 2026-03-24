@@ -271,6 +271,88 @@ function buildPRReviewBlocks(text: string): SlackBlock[] {
 }
 
 /**
+ * Build blocks for deploy failure analysis (smart alert) with
+ * Investigate, Auto-fix, and Ignore buttons.
+ */
+function buildDeployAlertBlocks(text: string): SlackBlock[] {
+  // Extract project name from "**Project:** <name>" or "Project: <name>"
+  const projectMatch = text.match(/\*?\*?Project:?\*?\*?\s*(\S+)/);
+  const project = projectMatch ? projectMatch[1] : "unknown";
+
+  // Extract root cause
+  const rootCauseMatch = text.match(/\*?\*?Root [Cc]ause:?\*?\*?\s*(.+)/);
+  const rootCause = rootCauseMatch ? rootCauseMatch[1].trim() : "Unknown";
+
+  // Extract branch
+  const branchMatch = text.match(/\*?\*?Branch:?\*?\*?\s*(\S+)/);
+  const branch = branchMatch ? branchMatch[1].trim() : "unknown";
+
+  // Extract commit
+  const commitMatch = text.match(/\*?\*?Commit:?\*?\*?\s*(.+)/);
+  const commit = commitMatch ? commitMatch[1].trim() : "unknown";
+
+  // Extract suggested fix
+  const fixMatch = text.match(/\*?\*?Suggested [Ff]ix:?\*?\*?\s*(.+)/);
+  const suggestedFix = fixMatch ? fixMatch[1].trim() : "Review logs manually";
+
+  const blocks: SlackBlock[] = [
+    {
+      type: "section",
+      text: {
+        type: "mrkdwn",
+        text: `\u{1F6A8} *Deploy Failure Analysis — ${project}*`,
+      },
+    },
+    {
+      type: "section",
+      text: {
+        type: "mrkdwn",
+        text: " ",
+      },
+      fields: [
+        { type: "mrkdwn", text: `*Root Cause:*\n${rootCause}` },
+        { type: "mrkdwn", text: `*Branch:*\n${branch}` },
+        { type: "mrkdwn", text: `*Commit:*\n${commit}` },
+      ],
+    },
+    {
+      type: "section",
+      text: {
+        type: "mrkdwn",
+        text: `*Suggested Fix:*\n${suggestedFix}`,
+      },
+    },
+    { type: "divider" },
+    {
+      type: "actions",
+      elements: [
+        {
+          type: "button",
+          text: { type: "plain_text", text: "\uD83D\uDD0D Investigate" },
+          action_id: "heal_investigate",
+          value: project,
+        },
+        {
+          type: "button",
+          text: { type: "plain_text", text: "\uD83D\uDD27 Auto-fix" },
+          style: "primary",
+          action_id: "heal_autofix",
+          value: project,
+        },
+        {
+          type: "button",
+          text: { type: "plain_text", text: "\u2713 Ignore" },
+          action_id: "heal_ignore",
+          value: project,
+        },
+      ],
+    },
+  ];
+
+  return blocks;
+}
+
+/**
  * Detect whether the message text matches a pattern that should
  * include interactive action buttons.
  *
@@ -278,6 +360,10 @@ function buildPRReviewBlocks(text: string): SlackBlock[] {
  * if no interactive pattern is detected.
  */
 function detectInteractiveBlocks(text: string): SlackBlock[] | null {
+  // Smart deploy failure analysis (self-healing alerts)
+  if (text.includes("Deploy Failure Analysis")) {
+    return buildDeployAlertBlocks(text);
+  }
   // Deploy approval requests
   if (
     (text.includes("Deploy") && text.includes("approval")) ||
