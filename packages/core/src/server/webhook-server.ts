@@ -1397,6 +1397,7 @@ export class WebhookServer {
               inspectorUrl: e.metadata?.["inspectorUrl"] ?? "",
               prId: e.metadata?.["prId"] ?? "",
               url: e.metadata?.["url"] ?? "",
+              repo: e.metadata?.["repo"] ?? "",
               source: e.metadata?.["source"] ?? "",
             };
           }),
@@ -2052,16 +2053,13 @@ export class WebhookServer {
       const isError = state === "ERROR" || state === "error";
       const isSuccess = state === "READY" || state === "succeeded";
 
-      // Use GitHub repo name as project when available, fallback to Vercel project name
-      const projectName = githubRepo || name;
-
       await vercelStorage.appendAudit({
         actorType: "system",
         actorId: "vercel",
         action: `deploy.${state}`,
         result: isError ? "error" : isSuccess ? "success" : "pending",
         metadata: {
-          project: projectName,
+          project: name,
           url,
           branch,
           commitSha,
@@ -2072,12 +2070,11 @@ export class WebhookServer {
           errorMessage: errorMessage.slice(0, 500),
           risk: isError ? "medium" : "low",
           detail: (() => {
-            const repoRef = githubOrg && githubRepo ? `${githubOrg}/${githubRepo}` : name;
-            const parts: string[] = [repoRef];
+            const parts: string[] = [name];
 
             if (isSuccess) {
               parts.push("deployed");
-              if (branch && branch !== "main") parts.push(`${branch}`);
+              if (branch && branch !== "main") parts.push(branch);
               if (commitMessage) parts.push(`"${commitMessage.slice(0, 60)}"`);
               if (commitSha) parts.push(`(${commitSha})`);
               if (commitAuthor) parts.push(`by ${commitAuthor}`);
@@ -2091,8 +2088,9 @@ export class WebhookServer {
               if (errorMessage) parts.push(`· ${errorMessage.slice(0, 150)}`);
               return parts.join(" ");
             }
-            return `${repoRef} deploying ${branch || ""}`.trim();
+            return `${name} deploying ${branch || ""}`.trim();
           })(),
+          repo: githubOrg && githubRepo ? `${githubOrg}/${githubRepo}` : "",
           source: "vercel",
           orgId,
         },
