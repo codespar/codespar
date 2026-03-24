@@ -209,26 +209,49 @@ export class SlackAdapter implements ChannelAdapter {
 
     const appToken = process.env.SLACK_APP_TOKEN;
 
-    this.app = new App({
-      signingSecret: process.env.SLACK_SIGNING_SECRET || "",
-      clientId,
-      clientSecret,
-      stateSecret: process.env.SLACK_STATE_SECRET || "codespar-slack-state",
-      scopes: [
-        "app_mentions:read",
-        "chat:write",
-        "channels:read",
-        "files:read",
-        "users:read",
-      ],
-      installationStore,
-      ...(appToken
-        ? { socketMode: true, appToken }
-        : { port: parseInt(process.env.SLACK_PORT || "3001", 10) }),
-    });
+    if (appToken) {
+      // Socket Mode + OAuth: use authorize callback instead of installationStore
+      // (Bolt's installationStore + socketMode combo can hang on app.start())
+      console.log("[slack] Connecting via Socket Mode + OAuth authorize");
+      this.app = new App({
+        signingSecret: process.env.SLACK_SIGNING_SECRET || "",
+        socketMode: true,
+        appToken,
+        authorize: async ({ teamId }) => {
+          if (!teamId) throw new Error("No teamId in authorize");
+          const stored = await storage.getSlackInstallation(teamId);
+          if (!stored) throw new Error(`No installation for team: ${teamId}`);
+          return {
+            botToken: stored.botToken,
+            botUserId: stored.botUserId,
+            botId: stored.appId,
+            teamId: stored.teamId,
+          };
+        },
+      });
+    } else {
+      // HTTP mode + OAuth: use installationStore for full OAuth flow
+      console.log("[slack] Connecting via HTTP + OAuth installationStore");
+      this.app = new App({
+        signingSecret: process.env.SLACK_SIGNING_SECRET || "",
+        clientId,
+        clientSecret,
+        stateSecret: process.env.SLACK_STATE_SECRET || "codespar-slack-state",
+        scopes: [
+          "app_mentions:read",
+          "chat:write",
+          "channels:read",
+          "files:read",
+          "users:read",
+        ],
+        installationStore,
+        port: parseInt(process.env.SLACK_PORT || "3001", 10),
+      });
+    }
 
     this.registerEventHandlers();
     await this.app.start();
+    console.log("[slack] App started successfully");
   }
 
   // ---------------------------------------------------------------------------
