@@ -158,7 +158,7 @@ export class WebhookServer {
   private orgStorageCache: Map<string, StorageProvider> = new Map();
   private chatHandler: ((message: import("../types/normalized-message.js").NormalizedMessage, orgId?: string) => Promise<import("../types/channel-adapter.js").ChannelResponse | null>) | null = null;
   private alertHandler: ((message: string, type: string) => Promise<void>) | null = null;
-  private _vercelDedup: Set<string> = new Set();
+  private _vercelDedup: Map<string, number> = new Map();
 
   constructor(config?: WebhookServerConfig) {
     this.port = config?.port ?? parseInt(process.env["PORT"] ?? "3000", 10);
@@ -1389,6 +1389,15 @@ export class WebhookServer {
               hash: e.metadata?.["hash"] ?? "",
               classifiedBy: e.metadata?.["classifiedBy"] ?? undefined,
               confidence: e.metadata?.["confidence"] ?? undefined,
+              commitSha: e.metadata?.["commitSha"] ?? "",
+              commitAuthor: e.metadata?.["commitAuthor"] ?? "",
+              commitMessage: e.metadata?.["commitMessage"] ?? "",
+              branch: e.metadata?.["branch"] ?? "",
+              errorMessage: e.metadata?.["errorMessage"] ?? "",
+              inspectorUrl: e.metadata?.["inspectorUrl"] ?? "",
+              prId: e.metadata?.["prId"] ?? "",
+              url: e.metadata?.["url"] ?? "",
+              source: e.metadata?.["source"] ?? "",
             };
           }),
           total,
@@ -1993,27 +2002,39 @@ export class WebhookServer {
         return reply.send({ received: true, processed: false, reason: "intermediate_state" });
       }
 
-      // Dedup: skip if we already logged this deployment ID
+      // Dedup: skip if same deploymentId was processed within the last 5 minutes.
+      // Vercel sends multiple events for different states of the same deployment
+      // (e.g., deployment.error after deployment.created), so we use a time window
+      // instead of a simple "seen" check.
+      const DEDUP_WINDOW_MS = 5 * 60 * 1000;
       if (deploymentId && this._vercelDedup?.has(deploymentId)) {
-        return reply.send({ received: true, processed: false, reason: "duplicate" });
+        const lastSeen = this._vercelDedup.get(deploymentId)!;
+        if (Date.now() - lastSeen < DEDUP_WINDOW_MS) {
+          return reply.send({ received: true, processed: false, reason: "duplicate" });
+        }
       }
       if (deploymentId) {
-        if (!this._vercelDedup) this._vercelDedup = new Set();
-        this._vercelDedup.add(deploymentId);
-        // Keep set small: only track last 100
-        if (this._vercelDedup.size > 100) {
-          const first = this._vercelDedup.values().next().value as string;
-          if (first) this._vercelDedup.delete(first);
+        if (!this._vercelDedup) this._vercelDedup = new Map();
+        this._vercelDedup.set(deploymentId, Date.now());
+        // Evict stale entries older than the dedup window
+        if (this._vercelDedup.size > 200) {
+          const now = Date.now();
+          for (const [id, ts] of this._vercelDedup) {
+            if (now - ts > DEDUP_WINDOW_MS) this._vercelDedup.delete(id);
+          }
         }
       }
 
       // Log to audit with org-scoped storage
       const vercelStorage = this.getOrgStorage(orgId);
+      const isError = state === "ERROR" || state === "error";
+      const isSuccess = state === "READY" || state === "succeeded";
+
       await vercelStorage.appendAudit({
         actorType: "system",
         actorId: "vercel",
         action: `deploy.${state}`,
-        result: state === "ERROR" || state === "error" ? "error" : state === "READY" || state === "succeeded" ? "success" : "pending",
+        result: isError ? "error" : isSuccess ? "success" : "pending",
         metadata: {
           project: name,
           url,
@@ -2024,22 +2045,25 @@ export class WebhookServer {
           inspectorUrl,
           commitMessage: commitMessage.slice(0, 200),
           errorMessage: errorMessage.slice(0, 500),
+          risk: isError ? "medium" : "low",
           detail: (() => {
             const prRef = prId ? `PR #${prId}` : "";
             const commitRef = commitSha ? `(${commitSha})` : "";
             const authorRef = commitAuthor ? `by ${commitAuthor}` : "";
             const repoRef = githubOrg && githubRepo ? `${githubOrg}/${githubRepo}` : name;
+            const branchRef = branch ? `on ${branch}` : "";
 
-            if (state === "READY" || state === "succeeded") {
-              return [repoRef, commitMessage || branch, commitRef, authorRef].filter(Boolean).join(" ");
+            if (isSuccess) {
+              return [repoRef, commitMessage || branch, branchRef, commitRef, authorRef].filter(Boolean).join(" ");
             }
-            if (state === "ERROR" || state === "error") {
+            if (isError) {
               const parts = [repoRef];
+              parts.push(errorMessage ? `Build failed ${branchRef}`.trim() : `Build failed ${branchRef}`.trim());
               if (prRef) parts.push(prRef);
               if (commitMessage) parts.push(commitMessage.slice(0, 80));
               if (commitRef) parts.push(commitRef);
               if (authorRef) parts.push(authorRef);
-              parts.push(errorMessage ? `Error: ${errorMessage.slice(0, 200)}` : "build failed");
+              if (errorMessage) parts.push(`Error: ${errorMessage.slice(0, 200)}`);
               return parts.join(" · ");
             }
             return `${repoRef}: deploying ${branch} ${commitRef}`.trim();
