@@ -30,7 +30,7 @@ import { DeployAgent } from "@codespar/agent-deploy";
 import { ReviewAgent } from "@codespar/agent-review";
 import { IncidentAgent } from "@codespar/agent-incident";
 
-const COMMANDS_HELP = `Available commands (21):
+const COMMANDS_HELP = `Available commands (24):
 
   Code & Tasks:
     instruct <task>           Execute a coding task (creates PR)
@@ -54,6 +54,9 @@ const COMMANDS_HELP = `Available commands (21):
     unlink                    Remove current project link
     logs [n]                  Show recent activity
     autonomy [L0-L5]          Set autonomy level
+    docs [type]               Generate docs (changelog/api/architecture)
+    scan [target]             Tech debt scan (debt/security/quality/all)
+    perf [target]             Performance report (report/bundle/latency)
 
   Identity:
     whoami                    Show your identity
@@ -699,6 +702,144 @@ export class ProjectAgent implements Agent {
 
       case "demo": {
         response = await this.handleDemo(message, intent);
+        break;
+      }
+
+      case "docs": {
+        const docTarget = intent.params.target || "changelog";
+        const ctx = await this.buildAgentContext();
+
+        let docPrompt = "";
+        switch (docTarget) {
+          case "changelog":
+            docPrompt = `Based on the recent activity (deploys, commits, PRs), generate a CHANGELOG entry in Keep a Changelog format:
+
+## [Unreleased] - ${new Date().toISOString().split("T")[0]}
+### Added
+- (new features from recent deploys)
+### Changed
+- (modifications from recent commits)
+### Fixed
+- (bug fixes from recent activity)
+
+Only include entries based on actual activity data. Be specific with descriptions.`;
+            break;
+          case "api":
+            docPrompt = `Based on the project context, generate API documentation in markdown format. List all known endpoints, their methods, parameters, and example responses. Format as a clean API reference.`;
+            break;
+          case "architecture":
+            docPrompt = `Based on the project context, generate an architecture overview. Include: main components, data flow, key technologies, deployment topology. Use markdown with diagrams described in text.`;
+            break;
+          default:
+            docPrompt = `Generate documentation for this project. Include: overview, setup instructions, key features, and architecture summary.`;
+        }
+
+        const smartResponse = await generateSmartResponse(docPrompt, ctx, imageUrls);
+        response = { text: `[${this.config.id}] ${smartResponse || "Documentation generation requires a linked repo. Use: link owner/repo"}` };
+
+        if (this.storage) {
+          await this.storage.appendAudit({
+            actorType: "agent",
+            actorId: this.config.id,
+            action: "docs.generated",
+            result: "success",
+            metadata: {
+              agentId: this.config.id,
+              project: this.config.projectId || "unknown",
+              risk: "low",
+              detail: `Generated ${docTarget} docs`,
+              channel: message.channelType,
+              latency_ms: Date.now() - handlerStart,
+            },
+          });
+        }
+        break;
+      }
+
+      case "scan": {
+        const scanTarget = intent.params.target || "all";
+        const ctx = await this.buildAgentContext();
+        const scanPrompt = `Analyze this project for tech debt. Focus on: ${scanTarget === "all" ? "code quality, unused dependencies, TODO/FIXME comments, duplicated code, security issues" : scanTarget}.
+
+Based on the recent activity and project context, identify the top 5 issues and rate each by severity (low/medium/high/critical).
+
+Format as:
+## Tech Debt Report — {project}
+For each issue:
+- **Issue**: description
+- **Severity**: low/medium/high/critical
+- **File(s)**: affected files
+- **Suggested fix**: how to resolve
+
+End with a **Tech Debt Score**: X/100 (lower is better, 0 = no debt)`;
+
+        const scanResponse = await generateSmartResponse(scanPrompt, ctx, imageUrls);
+        response = { text: `[${this.config.id}] ${scanResponse || "Scan inconclusive. Try linking a repo first."}` };
+        if (this.storage) {
+          await this.storage.appendAudit({
+            actorType: "agent",
+            actorId: this.config.id,
+            action: "scan.completed",
+            result: "success",
+            metadata: {
+              agentId: this.config.id,
+              project: this.config.projectId || "unknown",
+              risk: "low",
+              detail: `Tech debt scan (${scanTarget})`,
+              channel: message.channelType,
+              latency_ms: Date.now() - handlerStart,
+            },
+          });
+        }
+        break;
+      }
+
+      case "perf": {
+        const perfTarget = intent.params.target || "report";
+        let perfData = "";
+        if (this.storage) {
+          const { entries } = await this.storage.queryAudit("", 100, 0);
+          const deploys = entries.filter(e => String(e.action).startsWith("deploy."));
+          const successDeploys = deploys.filter(e => e.result === "success");
+          const failDeploys = deploys.filter(e => e.result === "error");
+          const buildDurations = deploys.map(e => Number((e.metadata as Record<string, unknown>)?.buildDurationMs || 0)).filter(d => d > 0);
+          const avgBuildTime = buildDurations.length > 0 ? Math.round(buildDurations.reduce((a, b) => a + b, 0) / buildDurations.length / 1000) : 0;
+          const apiCalls = entries.filter(e => String(e.action) === "api.claude");
+          const latencies = apiCalls.map(e => Number((e.metadata as Record<string, unknown>)?.latency_ms || 0)).filter(l => l > 0);
+          const avgLat = latencies.length > 0 ? Math.round(latencies.reduce((a, b) => a + b, 0) / latencies.length) : 0;
+          const p95 = latencies.length > 0 ? latencies.sort((a, b) => a - b)[Math.floor(latencies.length * 0.95)] : 0;
+          const totalCost = apiCalls.reduce((sum, e) => sum + Number((e.metadata as Record<string, unknown>)?.cost_usd || 0), 0);
+          perfData = `Deploys: ${deploys.length} (${successDeploys.length} ok, ${failDeploys.length} fail), Avg build: ${avgBuildTime}s, API calls: ${apiCalls.length}, Avg latency: ${avgLat}ms (P95: ${p95}ms), Cost: $${totalCost.toFixed(2)}`;
+        }
+        const ctx = await this.buildAgentContext();
+        const perfPrompt = `Generate a performance report. Metrics: ${perfData || "No data yet"}
+
+Format as:
+## Performance Report — {project}
+### Deploy Health
+### API Performance
+### Cost Analysis
+### Recommendations (3-5 actionable items)
+
+Focus on: ${perfTarget}`;
+        const perfResponse = await generateSmartResponse(perfPrompt, ctx, imageUrls);
+        response = { text: `[${this.config.id}] ${perfResponse || "Performance data insufficient."}` };
+        if (this.storage) {
+          await this.storage.appendAudit({
+            actorType: "agent",
+            actorId: this.config.id,
+            action: "perf.reported",
+            result: "success",
+            metadata: {
+              agentId: this.config.id,
+              project: this.config.projectId || "unknown",
+              risk: "low",
+              detail: `Performance report (${perfTarget})`,
+              channel: message.channelType,
+              latency_ms: Date.now() - handlerStart,
+            },
+          });
+        }
         break;
       }
 

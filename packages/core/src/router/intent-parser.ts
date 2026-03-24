@@ -116,6 +116,21 @@ const PATTERNS: PatternRule[] = [
     pattern: /^demo(?:\s+(.+))?$/i,
     paramExtractor: (m) => ({ demoName: m[1] || "mcp-generator" }),
   },
+  {
+    type: "docs",
+    pattern: /^docs(?:\s+(generate|changelog|api|architecture))?$/i,
+    paramExtractor: (m) => ({ target: m[1] || "changelog" }),
+  },
+  {
+    type: "scan",
+    pattern: /^scan(?:\s+(debt|security|quality|all))?$/i,
+    paramExtractor: (m) => ({ target: m[1] || "all" }),
+  },
+  {
+    type: "perf",
+    pattern: /^perf(?:ormance)?(?:\s+(report|bundle|latency|all))?$/i,
+    paramExtractor: (m) => ({ target: m[1] || "report" }),
+  },
 ];
 
 /** Synchronous regex-only parser (used internally). */
