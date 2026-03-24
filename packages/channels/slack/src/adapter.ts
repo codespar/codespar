@@ -514,6 +514,11 @@ export class SlackAdapter implements ChannelAdapter {
   async healthCheck(): Promise<boolean> {
     if (!this.app) return false;
 
+    // In OAuth mode, app.client has no default token — check if app is running
+    if (this.mode === "oauth") {
+      return true; // App is started and receiving events via Socket Mode
+    }
+
     try {
       const result = await this.app.client.auth.test();
       return result.ok === true;

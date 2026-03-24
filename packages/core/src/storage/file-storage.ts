@@ -375,7 +375,15 @@ export class FileStorage implements StorageProvider {
   private async readAuditFile(): Promise<AuditFile> {
     try {
       const raw = await fs.readFile(this.auditPath, "utf-8");
-      return JSON.parse(raw) as AuditFile;
+      const parsed = JSON.parse(raw);
+      // Handle corrupted format: [] instead of { entries: [] }
+      if (Array.isArray(parsed)) {
+        return { entries: parsed };
+      }
+      if (parsed && Array.isArray(parsed.entries)) {
+        return parsed as AuditFile;
+      }
+      return { entries: [] };
     } catch {
       return { entries: [] };
     }
