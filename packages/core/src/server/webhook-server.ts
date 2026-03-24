@@ -2052,13 +2052,16 @@ export class WebhookServer {
       const isError = state === "ERROR" || state === "error";
       const isSuccess = state === "READY" || state === "succeeded";
 
+      // Use GitHub repo name as project when available, fallback to Vercel project name
+      const projectName = githubRepo || name;
+
       await vercelStorage.appendAudit({
         actorType: "system",
         actorId: "vercel",
         action: `deploy.${state}`,
         result: isError ? "error" : isSuccess ? "success" : "pending",
         metadata: {
-          project: name,
+          project: projectName,
           url,
           branch,
           commitSha,
@@ -2069,26 +2072,26 @@ export class WebhookServer {
           errorMessage: errorMessage.slice(0, 500),
           risk: isError ? "medium" : "low",
           detail: (() => {
-            const prRef = prId ? `PR #${prId}` : "";
-            const commitRef = commitSha ? `(${commitSha})` : "";
-            const authorRef = commitAuthor ? `by ${commitAuthor}` : "";
             const repoRef = githubOrg && githubRepo ? `${githubOrg}/${githubRepo}` : name;
-            const branchRef = branch ? `on ${branch}` : "";
+            const parts: string[] = [repoRef];
 
             if (isSuccess) {
-              return [repoRef, commitMessage || branch, branchRef, commitRef, authorRef].filter(Boolean).join(" ");
+              parts.push("deployed");
+              if (branch && branch !== "main") parts.push(`${branch}`);
+              if (commitMessage) parts.push(`"${commitMessage.slice(0, 60)}"`);
+              if (commitSha) parts.push(`(${commitSha})`);
+              if (commitAuthor) parts.push(`by ${commitAuthor}`);
+              return parts.join(" ");
             }
             if (isError) {
-              const parts = [repoRef];
-              parts.push(errorMessage ? `Build failed ${branchRef}`.trim() : `Build failed ${branchRef}`.trim());
-              if (prRef) parts.push(prRef);
-              if (commitMessage) parts.push(commitMessage.slice(0, 80));
-              if (commitRef) parts.push(commitRef);
-              if (authorRef) parts.push(authorRef);
-              if (errorMessage) parts.push(`Error: ${errorMessage.slice(0, 200)}`);
-              return parts.join(" · ");
+              parts.push("· Build failed");
+              if (branch) parts.push(`on ${branch}`);
+              if (commitSha) parts.push(`(${commitSha})`);
+              if (commitAuthor) parts.push(`by ${commitAuthor}`);
+              if (errorMessage) parts.push(`· ${errorMessage.slice(0, 150)}`);
+              return parts.join(" ");
             }
-            return `${repoRef}: deploying ${branch} ${commitRef}`.trim();
+            return `${repoRef} deploying ${branch || ""}`.trim();
           })(),
           source: "vercel",
           orgId,
