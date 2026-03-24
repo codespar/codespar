@@ -1984,12 +1984,26 @@ export class WebhookServer {
       const errorMessage = String(deployment.errorMessage || deployment.buildError || (deployment as any).errorStep || "");
       const inspectorUrl = String(deployment.inspectorUrl || "");
 
-      log.info("Vercel webhook event", { type, project: name, state });
+      const deploymentId = String(deployment.id || deployment.uid || "");
+      log.info("Vercel webhook event", { type, project: name, state, deploymentId });
 
-      // Skip intermediate deploy states -- only log the final result
-      // (deployment.created is always followed by succeeded or error)
-      if (type === "deployment.created" || state === "BUILDING" || state === "INITIALIZING") {
+      // Skip intermediate deploy states
+      if (type === "deployment.created" || state === "BUILDING" || state === "INITIALIZING" || state === "QUEUED") {
         return reply.send({ received: true, processed: false, reason: "intermediate_state" });
+      }
+
+      // Dedup: skip if we already logged this deployment ID
+      if (deploymentId && this._vercelDedup?.has(deploymentId)) {
+        return reply.send({ received: true, processed: false, reason: "duplicate" });
+      }
+      if (deploymentId) {
+        if (!this._vercelDedup) this._vercelDedup = new Set();
+        this._vercelDedup.add(deploymentId);
+        // Keep set small: only track last 100
+        if (this._vercelDedup.size > 100) {
+          const first = this._vercelDedup.values().next().value;
+          this._vercelDedup.delete(first);
+        }
       }
 
       // Log to audit with org-scoped storage
