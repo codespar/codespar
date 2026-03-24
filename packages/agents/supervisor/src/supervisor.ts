@@ -109,10 +109,17 @@ export class AgentSupervisor {
       });
 
       try {
-        await adapter.connect();
+        // Timeout adapter connection after 15 seconds to prevent blocking other adapters
+        const CONNECT_TIMEOUT = 15_000;
+        await Promise.race([
+          adapter.connect(),
+          new Promise((_, reject) =>
+            setTimeout(() => reject(new Error(`${adapter.type} connect timed out after ${CONNECT_TIMEOUT / 1000}s`)), CONNECT_TIMEOUT)
+          ),
+        ]);
         console.log(`[supervisor] ${adapter.type} adapter connected`);
       } catch (err) {
-        console.error(`[supervisor] ${adapter.type} adapter failed to connect:`, err);
+        console.error(`[supervisor] ${adapter.type} adapter failed to connect:`, err instanceof Error ? err.message : err);
       }
     }
 
