@@ -150,6 +150,9 @@ const INTENT_PERMISSION: Record<IntentType, Permission | null> = {
   plan: "instruct_agent",
   lens: "view_status",
   demo: null, // always allowed -- demos are read-only
+  docs: "view_status",
+  scan: "view_status",
+  perf: "view_status",
   unknown: null, // always allowed -- agent will respond with help text
 };
 

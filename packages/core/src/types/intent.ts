@@ -25,6 +25,9 @@ export type IntentType =
   | "plan"
   | "lens"
   | "demo"
+  | "docs"
+  | "scan"
+  | "perf"
   | "unknown";
 
 export type RiskLevel = "low" | "medium" | "high" | "critical";
@@ -66,6 +69,9 @@ export const INTENT_RISK: Record<IntentType, RiskLevel> = {
   plan: "medium",
   lens: "low",
   demo: "low",
+  docs: "low",
+  scan: "low",
+  perf: "low",
   deploy: "high",
   rollback: "critical",
   kill: "critical",
