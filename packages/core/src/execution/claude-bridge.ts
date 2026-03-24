@@ -727,19 +727,23 @@ Be precise and production-ready.`;
         };
       }
 
+      // Track the latest SHA per file as we commit, so sequential commits to the
+      // same file don't fail with a 409 (GitHub rejects commits with a stale SHA).
+      const latestSha: Record<string, string | undefined> = {};
+      for (const f of fileContents) latestSha[f.path] = f.sha;
+
       for (const change of fileChanges) {
         request.onProgress?.({ type: "commit", message: `Committing: ${change.path}`, filePath: change.path });
-        // Find existing file SHA for updates (required by GitHub API)
-        const existing = fileContents.find((f) => f.path === change.path);
-        await github.updateFile(
+        const updatedSha = await github.updateFileWithSha(
           repoOwner,
           repoName,
           change.path,
           change.content,
           instruction.slice(0, 50),
           branchName,
-          existing?.sha,
+          latestSha[change.path],
         );
+        if (updatedSha) latestSha[change.path] = updatedSha;
       }
 
       // 6. Create PR
