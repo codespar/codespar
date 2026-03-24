@@ -92,6 +92,7 @@ export class SlackAdapter implements ChannelAdapter {
   private botUserId: string | null = null;
   private storage: StorageProvider | null;
   private mode: "legacy" | "oauth" | null = null;
+  private _lastTeamId: string | null = null;
 
   constructor(storage?: StorageProvider) {
     this.storage = storage ?? null;
@@ -361,15 +362,17 @@ export class SlackAdapter implements ChannelAdapter {
 
     // Channel @mentions -- handle @CodeSpar in channels
     this.app.event("app_mention", async ({ event, say }) => {
+      // Track team ID for OAuth token resolution
+      const teamId = (event as unknown as Record<string, unknown>).team as string | undefined;
+      if (teamId) this._lastTeamId = teamId;
+
       if (!this.messageHandler) {
         await say(`[codespar] Agent initializing. Try again in a moment.`);
         return;
       }
 
       // Resolve bot user ID: use cached value (legacy) or look up per workspace (OAuth)
-      const botUserId = await this.resolveBotUserId(
-        (event as unknown as Record<string, unknown>).team as string | undefined
-      );
+      const botUserId = await this.resolveBotUserId(teamId);
 
       const cleanText = botUserId
         ? event.text.replace(new RegExp(`<@${botUserId}>`, "g"), "").trim()
@@ -444,6 +447,21 @@ export class SlackAdapter implements ChannelAdapter {
     this.messageHandler = handler;
   }
 
+  /** Resolve bot token: legacy mode uses built-in token, OAuth looks up per team */
+  private async resolveToken(channelId?: string): Promise<string | undefined> {
+    if (this.mode === "legacy") return undefined; // app.client already has the token
+    // In OAuth mode, look up the first available installation
+    if (this.storage) {
+      // Try to find installation — channelId doesn't give us teamId directly,
+      // so we use the last known team from message context
+      if (this._lastTeamId) {
+        const inst = await this.storage.getSlackInstallation(this._lastTeamId);
+        if (inst) return inst.botToken;
+      }
+    }
+    return undefined;
+  }
+
   async sendToChannel(
     channelId: string,
     response: ChannelResponse
@@ -453,8 +471,10 @@ export class SlackAdapter implements ChannelAdapter {
     }
 
     const blocks = formatSlackBlocks(response.text);
+    const token = await this.resolveToken(channelId);
 
     await this.app.client.chat.postMessage({
+      ...(token ? { token } : {}),
       channel: channelId,
       text: response.text, // Fallback for notifications
       blocks,
@@ -468,8 +488,10 @@ export class SlackAdapter implements ChannelAdapter {
     }
 
     const blocks = formatSlackBlocks(response.text);
+    const token = await this.resolveToken();
 
     await this.app.client.chat.postMessage({
+      ...(token ? { token } : {}),
       channel: userId, // Slack accepts user ID to open/send to DM
       text: response.text,
       blocks,
