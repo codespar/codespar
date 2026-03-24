@@ -158,6 +158,7 @@ export class WebhookServer {
   private orgStorageCache: Map<string, StorageProvider> = new Map();
   private chatHandler: ((message: import("../types/normalized-message.js").NormalizedMessage, orgId?: string) => Promise<import("../types/channel-adapter.js").ChannelResponse | null>) | null = null;
   private alertHandler: ((message: string, type: string) => Promise<void>) | null = null;
+  private _vercelDedup: Set<string> = new Set();
 
   constructor(config?: WebhookServerConfig) {
     this.port = config?.port ?? parseInt(process.env["PORT"] ?? "3000", 10);
@@ -2001,8 +2002,8 @@ export class WebhookServer {
         this._vercelDedup.add(deploymentId);
         // Keep set small: only track last 100
         if (this._vercelDedup.size > 100) {
-          const first = this._vercelDedup.values().next().value;
-          this._vercelDedup.delete(first);
+          const first = this._vercelDedup.values().next().value as string;
+          if (first) this._vercelDedup.delete(first);
         }
       }
 
