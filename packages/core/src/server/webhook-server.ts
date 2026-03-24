@@ -1867,8 +1867,17 @@ export class WebhookServer {
 
     // ── Vercel Analytics proxy ──────────────────────────────
     route("get", "/api/observability/vercel", async (request: any, reply: any) => {
-      const vercelToken = process.env.VERCEL_API_TOKEN;
-      const teamId = process.env.VERCEL_TEAM_ID;
+      const orgId = this.getOrgId(request);
+      const orgStorage = this.getOrgStorage(orgId);
+
+      // Try org-specific token first, fall back to global env
+      let vercelToken = process.env.VERCEL_API_TOKEN;
+      let teamId = process.env.VERCEL_TEAM_ID;
+      try {
+        const integrationConfig = await orgStorage.getChannelConfig("vercel-api");
+        if (integrationConfig?.token) vercelToken = integrationConfig.token;
+        if (integrationConfig?.teamId) teamId = integrationConfig.teamId;
+      } catch { /* use global fallback */ }
 
       if (!vercelToken) {
         return reply.send({ error: "VERCEL_API_TOKEN not configured", data: null });
@@ -1936,7 +1945,15 @@ export class WebhookServer {
 
     // ── Railway Metrics proxy ──────────────────────────────
     route("get", "/api/observability/railway", async (request: any, reply: any) => {
-      const railwayToken = process.env.RAILWAY_API_TOKEN;
+      const orgId = this.getOrgId(request);
+      const orgStorage = this.getOrgStorage(orgId);
+
+      // Try org-specific token first, fall back to global env
+      let railwayToken = process.env.RAILWAY_API_TOKEN;
+      try {
+        const integrationConfig = await orgStorage.getChannelConfig("railway-api");
+        if (integrationConfig?.token) railwayToken = integrationConfig.token;
+      } catch { /* use global fallback */ }
 
       if (!railwayToken) {
         return reply.send({ error: "RAILWAY_API_TOKEN not configured", data: null });
@@ -2015,8 +2032,17 @@ export class WebhookServer {
 
     // ── Vercel deployment logs ──────────────────────────────
     route("get", "/api/observability/logs", async (request: any, reply: any) => {
-      const vercelToken = process.env.VERCEL_API_TOKEN;
-      const teamId = process.env.VERCEL_TEAM_ID;
+      const logsOrgId = this.getOrgId(request);
+      const logsOrgStorage = this.getOrgStorage(logsOrgId);
+
+      // Try org-specific token first, fall back to global env
+      let vercelToken = process.env.VERCEL_API_TOKEN;
+      let teamId = process.env.VERCEL_TEAM_ID;
+      try {
+        const integrationConfig = await logsOrgStorage.getChannelConfig("vercel-api");
+        if (integrationConfig?.token) vercelToken = integrationConfig.token;
+        if (integrationConfig?.teamId) teamId = integrationConfig.teamId;
+      } catch { /* use global fallback */ }
 
       if (!vercelToken) {
         // Fall back to audit trail logs
@@ -2066,8 +2092,17 @@ export class WebhookServer {
 
     // ── Route metrics ──────────────────────────────
     route("get", "/api/observability/routes", async (request: any, reply: any) => {
-      const vercelToken = process.env.VERCEL_API_TOKEN;
-      const teamId = process.env.VERCEL_TEAM_ID;
+      const routesOrgId = this.getOrgId(request);
+      const routesOrgStorage = this.getOrgStorage(routesOrgId);
+
+      // Try org-specific token first, fall back to global env
+      let vercelToken = process.env.VERCEL_API_TOKEN;
+      let teamId = process.env.VERCEL_TEAM_ID;
+      try {
+        const integrationConfig = await routesOrgStorage.getChannelConfig("vercel-api");
+        if (integrationConfig?.token) vercelToken = integrationConfig.token;
+        if (integrationConfig?.teamId) teamId = integrationConfig.teamId;
+      } catch { /* use global fallback */ }
 
       if (!vercelToken) {
         return reply.send({ error: "VERCEL_API_TOKEN not configured", routes: [] });
@@ -2124,6 +2159,70 @@ export class WebhookServer {
         log.error("Routes proxy error", { error: err instanceof Error ? err.message : String(err) });
         reply.code(500).send({ error: "Failed to fetch route metrics" });
       }
+    });
+
+    // ── Integration token management (org-scoped) ──────────────────
+
+    // Save integration token (org-scoped)
+    route("post", "/api/integrations/configure", async (request: any, reply: any) => {
+      const orgId = this.getOrgId(request);
+      const storage = this.getOrgStorage(orgId);
+      const { integration, config } = request.body as { integration?: string; config?: Record<string, string> };
+
+      if (!integration || !config) {
+        return reply.status(400).send({ error: "integration and config required" });
+      }
+
+      const validIntegrations = ["vercel-api", "railway-api", "sentry", "datadog"];
+      if (!validIntegrations.includes(integration)) {
+        return reply.status(400).send({ error: `Invalid integration: ${integration}` });
+      }
+
+      // Validate that all config values are strings
+      for (const [key, value] of Object.entries(config)) {
+        if (typeof value !== "string") {
+          return reply.status(400).send({ error: `config.${key} must be a string` });
+        }
+      }
+
+      await storage.saveChannelConfig(integration, config);
+
+      // Log to audit trail
+      await storage.appendAudit({
+        actorType: "user",
+        actorId: "dashboard",
+        action: "integration.configure",
+        result: "success",
+        metadata: {
+          integration,
+          configKeys: Object.keys(config),
+          detail: `Integration ${integration} configured via dashboard`,
+        },
+      });
+
+      log.info("Integration configured", { integration, configKeys: Object.keys(config) });
+
+      return { success: true, integration };
+    });
+
+    // Get integration status (which are configured)
+    route("get", "/api/integrations/status", async (request: any, reply: any) => {
+      const orgId = this.getOrgId(request);
+      const storage = this.getOrgStorage(orgId);
+
+      const integrations = ["vercel-api", "railway-api", "sentry", "datadog"];
+      const status: Record<string, boolean> = {};
+
+      for (const integration of integrations) {
+        try {
+          const config = await storage.getChannelConfig(integration);
+          status[integration] = !!config?.token;
+        } catch {
+          status[integration] = false;
+        }
+      }
+
+      return { integrations: status };
     });
 
     // ── Organization management ──────────────────────────────────
