@@ -1976,7 +1976,13 @@ export class WebhookServer {
       const meta = deployment.meta as Record<string, unknown> | undefined;
       const commitMessage = String(meta?.githubCommitMessage || meta?.gitlabCommitMessage || "");
       const branch = String(meta?.githubCommitRef || meta?.gitlabCommitRef || "main");
-      const errorMessage = String(deployment.errorMessage || deployment.buildError || "");
+      const commitSha = String(meta?.githubCommitSha || meta?.gitlabCommitSha || "").slice(0, 7);
+      const commitAuthor = String(meta?.githubCommitAuthorName || meta?.gitlabCommitAuthorName || "");
+      const prId = String(meta?.githubPrId || "");
+      const githubOrg = String(meta?.githubCommitOrg || meta?.githubOrg || "");
+      const githubRepo = String(meta?.githubCommitRepo || meta?.githubRepo || "");
+      const errorMessage = String(deployment.errorMessage || deployment.buildError || (deployment as any).errorStep || "");
+      const inspectorUrl = String(deployment.inspectorUrl || "");
 
       log.info("Vercel webhook event", { type, project: name, state });
 
@@ -1997,14 +2003,32 @@ export class WebhookServer {
           project: name,
           url,
           branch,
-          commitMessage: commitMessage.slice(0, 100),
-          errorMessage: errorMessage.slice(0, 200),
-          detail:
-            state === "READY" || state === "succeeded"
-              ? `${name}: ${commitMessage || branch || "deployed"}${url ? ` (${url})` : ""}`
-              : state === "ERROR" || state === "error"
-                ? `${name}: ${errorMessage || "build failed"}`
-                : `${name}: deploying${branch ? ` (${branch})` : ""}${commitMessage ? ` - ${commitMessage.slice(0, 60)}` : ""}`,
+          commitSha,
+          commitAuthor,
+          prId,
+          inspectorUrl,
+          commitMessage: commitMessage.slice(0, 200),
+          errorMessage: errorMessage.slice(0, 500),
+          detail: (() => {
+            const prRef = prId ? `PR #${prId}` : "";
+            const commitRef = commitSha ? `(${commitSha})` : "";
+            const authorRef = commitAuthor ? `by ${commitAuthor}` : "";
+            const repoRef = githubOrg && githubRepo ? `${githubOrg}/${githubRepo}` : name;
+
+            if (state === "READY" || state === "succeeded") {
+              return [repoRef, commitMessage || branch, commitRef, authorRef].filter(Boolean).join(" ");
+            }
+            if (state === "ERROR" || state === "error") {
+              const parts = [repoRef];
+              if (prRef) parts.push(prRef);
+              if (commitMessage) parts.push(commitMessage.slice(0, 80));
+              if (commitRef) parts.push(commitRef);
+              if (authorRef) parts.push(authorRef);
+              parts.push(errorMessage ? `Error: ${errorMessage.slice(0, 200)}` : "build failed");
+              return parts.join(" · ");
+            }
+            return `${repoRef}: deploying ${branch} ${commitRef}`.trim();
+          })(),
           source: "vercel",
           orgId,
         },
