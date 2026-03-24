@@ -1979,14 +1979,22 @@ export class WebhookServer {
       // Vercel nests deployment data under payload.deployment or directly in payload
       const deployment = (innerPayload.deployment as Record<string, unknown>) || innerPayload;
 
-      // Log raw structure for debugging (first 2000 chars)
-      log.info("Vercel webhook raw payload keys", {
+      // Store last raw payload for debug endpoint
+      (this as any)._lastVercelPayload = {
+        receivedAt: new Date().toISOString(),
+        type,
         topKeys: Object.keys(payload),
         innerKeys: Object.keys(innerPayload),
         deploymentKeys: Object.keys(deployment),
         hasMeta: !!deployment.meta,
         hasNestedDeployment: !!(innerPayload.deployment),
-      });
+        metaKeys: deployment.meta ? Object.keys(deployment.meta as Record<string, unknown>) : [],
+        innerMetaKeys: innerPayload.meta ? Object.keys(innerPayload.meta as Record<string, unknown>) : [],
+        sampleMeta: deployment.meta ? JSON.stringify(deployment.meta).slice(0, 1000) : null,
+        sampleInnerMeta: innerPayload.meta ? JSON.stringify(innerPayload.meta).slice(0, 1000) : null,
+        rawSnippet: JSON.stringify(payload).slice(0, 2000),
+      };
+      log.info("Vercel webhook raw payload", (this as any)._lastVercelPayload);
 
       const name = String(
         innerPayload.name ||
@@ -2184,6 +2192,11 @@ export class WebhookServer {
       }
 
       reply.send({ received: true, status });
+    });
+
+    // ── Debug: last Vercel webhook payload (temporary) ─────────────
+    route("get", "/api/debug/vercel-payload", async (_request: any, reply: any) => {
+      reply.send((this as any)._lastVercelPayload || { message: "No Vercel webhook received yet" });
     });
 
     // ── Webhook URL generator (org-scoped) ────────────────────────
