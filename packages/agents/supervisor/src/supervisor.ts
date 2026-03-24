@@ -94,8 +94,9 @@ export class AgentSupervisor {
             }
           }
 
-          // Process the actual command
-          const response = await this.router.route(message);
+          // Process the actual command (pass orgId from channel metadata if available)
+          const orgId = (message.metadata?.orgId as string) || undefined;
+          const response = await this.router.route(message, orgId);
           if (response) {
             if (message.isDM) {
               await adapter.sendDM(message.channelUserId, response);

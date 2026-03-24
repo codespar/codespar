@@ -70,6 +70,7 @@ export interface SlackInstallation {
   installedBy: string;
   installedAt: string;
   scopes: string[];
+  orgId?: string;
 }
 
 export interface StorageProvider {

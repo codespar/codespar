@@ -1687,6 +1687,7 @@ export class WebhookServer {
           installedBy: tokenData.authed_user?.id ?? "",
           installedAt: new Date().toISOString(),
           scopes: tokenData.scope?.split(",") ?? [],
+          orgId,
         };
 
         // Save to org-scoped storage so the channels endpoint shows "connected" for this org

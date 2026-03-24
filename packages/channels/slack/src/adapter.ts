@@ -387,6 +387,13 @@ export class SlackAdapter implements ChannelAdapter {
         | undefined;
       const attachments = extractAttachments(files);
 
+      // Resolve orgId from Slack team installation
+      let orgId: string | undefined;
+      if (teamId && this.storage) {
+        const inst = await this.storage.getSlackInstallation(teamId);
+        orgId = inst?.orgId || undefined;
+      }
+
       const normalized: NormalizedMessage = {
         id: randomUUID(),
         channelType: "slack",
@@ -401,6 +408,7 @@ export class SlackAdapter implements ChannelAdapter {
         metadata: {
           threadTs,
           channelId: event.channel,
+          orgId,
         },
       };
 
