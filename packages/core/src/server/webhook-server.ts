@@ -1950,9 +1950,11 @@ export class WebhookServer {
 
       // Try org-specific token first, fall back to global env
       let railwayToken = process.env.RAILWAY_API_TOKEN;
+      let railwayProjectId = "";
       try {
         const integrationConfig = await orgStorage.getChannelConfig("railway-api");
         if (integrationConfig?.token) railwayToken = integrationConfig.token;
+        if (integrationConfig?.projectId) railwayProjectId = integrationConfig.projectId;
       } catch { /* use global fallback */ }
 
       if (!railwayToken) {
@@ -1960,39 +1962,10 @@ export class WebhookServer {
       }
 
       try {
-        // Railway uses GraphQL API
-        const query = `
-          query {
-            me {
-              projects {
-                edges {
-                  node {
-                    id
-                    name
-                    services {
-                      edges {
-                        node {
-                          id
-                          name
-                          deployments(first: 10) {
-                            edges {
-                              node {
-                                id
-                                status
-                                createdAt
-                                meta
-                              }
-                            }
-                          }
-                        }
-                      }
-                    }
-                  }
-                }
-              }
-            }
-          }
-        `;
+        // Railway uses GraphQL API — filter by projectId if configured
+        const query = railwayProjectId
+          ? `query { project(id: "${railwayProjectId}") { id name services { edges { node { id name deployments(first: 10) { edges { node { id status createdAt meta } } } } } } } }`
+          : `query { me { projects { edges { node { id name services { edges { node { id name deployments(first: 10) { edges { node { id status createdAt meta } } } } } } } } } } }`;
 
         const res = await fetch("https://backboard.railway.app/graphql/v2", {
           method: "POST",
