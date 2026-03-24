@@ -1992,8 +1992,6 @@ export class WebhookServer {
       // Vercel nests deployment data under payload.deployment or directly in payload
       const deployment = (innerPayload.deployment as Record<string, unknown>) || innerPayload;
 
-      log.info("Vercel webhook received", { type, project: name, state, deploymentId, hasMeta: !!meta });
-
       const name = String(
         innerPayload.name ||
         deployment.name ||
