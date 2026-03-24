@@ -1980,22 +1980,7 @@ export class WebhookServer {
       // Vercel nests deployment data under payload.deployment or directly in payload
       const deployment = (innerPayload.deployment as Record<string, unknown>) || innerPayload;
 
-      // Store last raw payload for debug endpoint
-      (this as any)._lastVercelPayload = {
-        receivedAt: new Date().toISOString(),
-        type,
-        topKeys: Object.keys(payload),
-        innerKeys: Object.keys(innerPayload),
-        deploymentKeys: Object.keys(deployment),
-        hasMeta: !!deployment.meta,
-        hasNestedDeployment: !!(innerPayload.deployment),
-        metaKeys: deployment.meta ? Object.keys(deployment.meta as Record<string, unknown>) : [],
-        innerMetaKeys: innerPayload.meta ? Object.keys(innerPayload.meta as Record<string, unknown>) : [],
-        sampleMeta: deployment.meta ? JSON.stringify(deployment.meta).slice(0, 1000) : null,
-        sampleInnerMeta: innerPayload.meta ? JSON.stringify(innerPayload.meta).slice(0, 1000) : null,
-        rawSnippet: JSON.stringify(payload).slice(0, 2000),
-      };
-      log.info("Vercel webhook raw payload", (this as any)._lastVercelPayload);
+      log.info("Vercel webhook received", { type, project: name, state, deploymentId, hasMeta: !!meta });
 
       const name = String(
         innerPayload.name ||
@@ -2025,33 +2010,50 @@ export class WebhookServer {
         return reply.send({ received: true, processed: false, reason: "intermediate_state" });
       }
 
-      // Dedup: skip if same deploymentId was processed within the last 5 minutes.
-      // Vercel sends multiple events for different states of the same deployment
-      // (e.g., deployment.error after deployment.created), so we use a time window
-      // instead of a simple "seen" check.
-      const DEDUP_WINDOW_MS = 5 * 60 * 1000;
-      if (deploymentId && this._vercelDedup?.has(deploymentId)) {
-        const lastSeen = this._vercelDedup.get(deploymentId)!;
-        if (Date.now() - lastSeen < DEDUP_WINDOW_MS) {
-          return reply.send({ received: true, processed: false, reason: "duplicate" });
-        }
-      }
-      if (deploymentId) {
-        if (!this._vercelDedup) this._vercelDedup = new Map();
-        this._vercelDedup.set(deploymentId, Date.now());
-        // Evict stale entries older than the dedup window
-        if (this._vercelDedup.size > 200) {
-          const now = Date.now();
-          for (const [id, ts] of this._vercelDedup) {
-            if (now - ts > DEDUP_WINDOW_MS) this._vercelDedup.delete(id);
-          }
-        }
+      // Dedup: two layers — in-memory (fast) + audit log (survives restarts)
+      // In-memory check
+      if (!this._vercelDedup) this._vercelDedup = new Map();
+      const dedupKey = `${deploymentId || name}-${state}`;
+      const DEDUP_WINDOW_MS = 10 * 60 * 1000; // 10 minutes
+      const lastSeen = this._vercelDedup.get(dedupKey);
+      if (lastSeen && Date.now() - lastSeen < DEDUP_WINDOW_MS) {
+        return reply.send({ received: true, processed: false, reason: "duplicate" });
       }
 
-      // Log to audit with org-scoped storage
       const vercelStorage = this.getOrgStorage(orgId);
       const isError = state === "ERROR" || state === "error";
       const isSuccess = state === "READY" || state === "succeeded";
+
+      // Persistent dedup: check recent audit entries for same project+state+commit
+      try {
+        const { entries: recent } = await vercelStorage.queryAudit("", 50, 0);
+        const fiveMinAgo = new Date(Date.now() - DEDUP_WINDOW_MS);
+        const isDup = recent.some((e) => {
+          if (e.timestamp < fiveMinAgo) return false;
+          if (e.actorId !== "vercel") return false;
+          const m = e.metadata as Record<string, unknown> | undefined;
+          // Match by deploymentId if available, otherwise by project+state+commitSha
+          if (deploymentId && m?.["deploymentId"] === deploymentId && e.action === `deploy.${state}`) return true;
+          if (m?.["project"] === name && e.action === `deploy.${state}` && commitSha && m?.["commitSha"] === commitSha) return true;
+          return false;
+        });
+        if (isDup) {
+          this._vercelDedup.set(dedupKey, Date.now());
+          return reply.send({ received: true, processed: false, reason: "duplicate_persistent" });
+        }
+      } catch (err) {
+        log.warn("Dedup audit check failed, proceeding", { error: String(err) });
+      }
+
+      // Record in memory dedup
+      this._vercelDedup.set(dedupKey, Date.now());
+      // Evict stale entries
+      if (this._vercelDedup.size > 200) {
+        const now = Date.now();
+        for (const [id, ts] of this._vercelDedup) {
+          if (now - ts > DEDUP_WINDOW_MS) this._vercelDedup.delete(id);
+        }
+      }
 
       await vercelStorage.appendAudit({
         actorType: "system",
@@ -2090,6 +2092,7 @@ export class WebhookServer {
             }
             return `${name} deploying ${branch || ""}`.trim();
           })(),
+          deploymentId,
           repo: githubOrg && githubRepo ? `${githubOrg}/${githubRepo}` : "",
           source: "vercel",
           orgId,
@@ -2193,11 +2196,6 @@ export class WebhookServer {
       }
 
       reply.send({ received: true, status });
-    });
-
-    // ── Debug: last Vercel webhook payload (temporary) ─────────────
-    route("get", "/api/debug/vercel-payload", async (_request: any, reply: any) => {
-      reply.send((this as any)._lastVercelPayload || { message: "No Vercel webhook received yet" });
     });
 
     // ── Webhook URL generator (org-scoped) ────────────────────────
