@@ -8,22 +8,18 @@ import { metrics } from "../../observability/metrics.js";
 import { parseIntent } from "../../router/intent-parser.js";
 import type { RouteFn, ServerContext } from "./types.js";
 import type { ChannelType, NormalizedMessage } from "../../types/normalized-message.js";
+import { chatMessageBody, parseBody } from "./schemas.js";
 
 const log = createLogger("routes/chat");
 
 export function registerChatRoutes(route: RouteFn, ctx: ServerContext): void {
     // ── Web Chat endpoint ─────────────────────────────────────────
     route("post", "/api/chat", async (request: any, reply: any) => {
-      const body = request.body as {
-        text?: string;
-        agentId?: string;
-        imageUrls?: Array<{ url: string; mimeType?: string }>;
-      };
-      const text = String(body.text || "").trim();
-      if (!text) {
-        reply.code(400).send({ error: "Message text is required" });
-        return;
+      const { data: body, error } = parseBody(chatMessageBody, request.body);
+      if (!body) {
+        return reply.code(400).send({ error: error || "Invalid request body" });
       }
+      const text = body.text.trim();
 
       const orgId = ctx.getOrgId(request);
       const agentId = body.agentId || "agent-default";
