@@ -2140,6 +2140,62 @@ export class WebhookServer {
       }
     });
 
+    // ── Sentry API proxy — fetch recent issues ──────────────────
+    route("get", "/api/observability/sentry", async (request: any, reply: any) => {
+      const sentryOrgId = this.getOrgId(request);
+      const sentryOrgStorage = this.getOrgStorage(sentryOrgId);
+
+      // Get Sentry config from org storage
+      let authToken = "";
+      let orgSlug = "";
+      let projectSlug = "";
+      try {
+        const config = await sentryOrgStorage.getChannelConfig("sentry");
+        authToken = config?.authToken || config?.token || "";
+        orgSlug = config?.org || "";
+        projectSlug = config?.project || "";
+      } catch { /* no config */ }
+
+      if (!authToken || !orgSlug) {
+        return reply.send({ error: "Sentry not configured", issues: [] });
+      }
+
+      try {
+        const projectFilter = projectSlug ? `&project=${projectSlug}` : "";
+        const res = await fetch(
+          `https://sentry.io/api/0/organizations/${orgSlug}/issues/?query=is:unresolved&sort=date${projectFilter}&limit=20`,
+          { headers: { Authorization: `Bearer ${authToken}` } }
+        );
+
+        if (!res.ok) {
+          return reply.send({ error: `Sentry API returned ${res.status}`, issues: [] });
+        }
+
+        const issues = (await res.json()) as Array<Record<string, unknown>>;
+
+        reply.send({
+          issues: issues.map(issue => ({
+            id: issue.id,
+            title: issue.title,
+            culprit: issue.culprit,
+            level: issue.level,
+            status: issue.status,
+            count: issue.count,
+            userCount: issue.userCount,
+            firstSeen: issue.firstSeen,
+            lastSeen: issue.lastSeen,
+            permalink: issue.permalink,
+            project: (issue.project as Record<string, unknown>)?.name || projectSlug,
+            platform: issue.platform,
+          })),
+          total: issues.length as number,
+        });
+      } catch (err) {
+        log.error("Sentry proxy error", { error: err instanceof Error ? err.message : String(err) });
+        reply.send({ error: String(err), issues: [] });
+      }
+    });
+
     // ── Integration token management (org-scoped) ──────────────────
 
     // Save integration token (org-scoped)
@@ -3161,6 +3217,97 @@ export class WebhookServer {
       reply.send({ received: true, status });
     });
 
+    // ── Sentry webhook — receives error/issue events ──────────────
+    route("post", "/webhooks/sentry", async (request: any, reply: any) => {
+      const orgId = (request.query as Record<string, string>).orgId || (request.headers["x-org-id"] as string) || "default";
+
+      const payload = request.body as Record<string, unknown>;
+      const action = String(payload.action || ""); // "created", "resolved", "assigned"
+      const data = (payload.data || {}) as Record<string, unknown>;
+      const issue = (data.issue || data.event || {}) as Record<string, unknown>;
+
+      const title = String(issue.title || "Unknown error");
+      const culprit = String(issue.culprit || "");
+      const level = String(issue.level || "error");
+      const platform = String(issue.platform || "");
+      const firstSeen = String(issue.firstSeen || "");
+      const count = Number(issue.count || 1);
+      const userCount = Number(issue.userCount || 0);
+      const project = ((issue.project || {}) as Record<string, unknown>);
+      const projectName = String(project.name || project.slug || "unknown");
+
+      // Extract stack trace if available
+      const entries = ((issue.entries || []) as Array<Record<string, unknown>>);
+      const exceptionEntry = entries.find(e => e.type === "exception");
+      let stackTrace = "";
+      if (exceptionEntry) {
+        const values = ((exceptionEntry.data as Record<string, unknown>)?.values as Array<Record<string, unknown>>) || [];
+        for (const exc of values.slice(0, 1)) {
+          const frames = ((exc.stacktrace as Record<string, unknown>)?.frames as Array<Record<string, unknown>>) || [];
+          const relevantFrames = frames.filter(f => f.inApp).slice(-5);
+          stackTrace = relevantFrames.map(f =>
+            `  ${f.filename}:${f.lineNo} in ${f.function}`
+          ).join("\n");
+        }
+      }
+
+      log.info("Sentry webhook received", { action, title, project: projectName, level });
+
+      // Only process new errors
+      if (action !== "created" && action !== "triggered") {
+        return reply.send({ received: true, processed: false, reason: "action_not_relevant" });
+      }
+
+      // Log to audit
+      const sentryStorage = this.getOrgStorage(orgId);
+      await sentryStorage.appendAudit({
+        actorType: "system",
+        actorId: "sentry",
+        action: `error.${level}`,
+        result: "error",
+        metadata: {
+          project: projectName,
+          risk: level === "fatal" ? "critical" : level === "error" ? "high" : "medium",
+          detail: `${title}${culprit ? ` in ${culprit}` : ""}`,
+          errorTitle: title,
+          culprit,
+          stackTrace,
+          platform,
+          count,
+          userCount,
+          firstSeen,
+          source: "sentry",
+          orgId,
+        },
+      });
+
+      // Feed into self-healing pipeline via alert handler
+      if (this.alertHandler && (level === "error" || level === "fatal")) {
+        await this.alertHandler({
+          project: projectName,
+          branch: "main",
+          commitSha: "",
+          commitMessage: "",
+          commitAuthor: "",
+          errorMessage: `${title}\n${stackTrace}`,
+          url: String(issue.permalink || ""),
+          repo: "",
+          type: "deploy-failure",
+          orgId,
+          inspectorUrl: String(issue.permalink || ""),
+          deploymentId: String(issue.id || ""),
+        });
+      }
+
+      // Broadcast to SSE
+      broadcastEvent({
+        type: "sentry.error",
+        data: { title, culprit, level, project: projectName, count, userCount },
+      }, orgId);
+
+      reply.send({ received: true, processed: true });
+    });
+
     // ── Webhook URL generator (org-scoped) ────────────────────────
     route("get", "/api/webhooks/status", async (request: any, reply: any) => {
       const orgId = this.getOrgId(request);
@@ -3184,10 +3331,12 @@ export class WebhookServer {
         vercel: `${baseUrl}/webhooks/vercel?orgId=${orgId}`,
         github: `${baseUrl}/webhooks/github?orgId=${orgId}`,
         deploy: `${baseUrl}/webhooks/deploy?orgId=${orgId}`,
+        sentry: `${baseUrl}/webhooks/sentry?orgId=${orgId}`,
         instructions: {
           vercel: "Add this URL in Vercel > Settings > Webhooks. Select: Deployment Created, Succeeded, Error.",
           github: "Add this URL in GitHub > Repo > Settings > Webhooks. Select: push, pull_request, workflow_run.",
           deploy: "POST to this URL with { project, status, message, error, url, source }.",
+          sentry: "Add this URL in Sentry > Settings > Webhooks. Select: issue, error.",
         },
       });
     });
