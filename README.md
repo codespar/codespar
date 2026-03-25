@@ -33,11 +33,10 @@
 | Multi-file Refactoring (15 files, 30KB context) | ✅ Working |
 | RBAC (6 roles, 15 permissions) | ✅ Working |
 | Audit Trail (hash chain integrity) | ✅ Working |
-| NLU (Claude Haiku intent classification) | ✅ Working |
-| Smart Responses (Claude Sonnet for open questions) | ✅ Working |
+| 3-Tier Intent Parsing (regex → Claude Haiku NLU → Claude Sonnet smart response) | ✅ Working |
 | Vector Memory (TF-IDF semantic search) | ✅ Working |
 | Identity System (cross-channel user mapping) | ✅ Working |
-| Multi-tenant Organizations | ✅ Working |
+| Multi-tenant Organizations (Clerk Organizations, org-scoped everything) | ✅ Working |
 | GitHub Webhooks (auto-configured on link) | ✅ Working |
 | Task Scheduler (cron-like recurring tasks) | ✅ Working |
 | Streaming Responses (SSE from Anthropic API) | ✅ Working |
@@ -56,6 +55,14 @@
 | Railway Deploy | ✅ Working |
 | Agent State Persistence (.codespar/agent-states.json) | ✅ Working |
 | Channel Configure API (POST /api/channels/configure) | ✅ Working |
+| Self-healing Agent Loop (smart alerts, auto-fix, autonomous healing L3-L5) | ✅ Working |
+| Slack OAuth Multi-workspace (Socket Mode) | ✅ Working |
+| Claude API Instrumentation (token/cost tracking) | ✅ Working |
+| Observability (Vercel/Railway API integration, Recharts dashboards) | ✅ Working |
+| Agent Canvas (React Flow visual editor with inspector) | ✅ Working |
+| Code Panel (Monaco Editor in chat) | ✅ Working |
+| Per-org Integration Tokens (Vercel, Railway, Sentry, Datadog) | ✅ Working |
+| Web Chat (streaming SSE, image vision, deploy alerts) | ✅ Working |
 | Admin Panel (waitlist + newsletter management) | ✅ Working |
 | Billing & Usage Page (API metrics, agent stats) | ✅ Working |
 | Dashboard Integrations Page (17 services, 4 categories) | ✅ Working |
@@ -68,7 +75,7 @@
 
 ---
 
-**CodeSpar** is an open source, multi-agent platform that deploys autonomous AI coding agents to **WhatsApp**, **Slack**, **Telegram**, and **Discord** via `@mention` commands.
+**CodeSpar** is an open source, multi-agent platform that deploys autonomous AI coding agents to **WhatsApp**, **Slack**, **Telegram**, **Discord**, and **Web Chat** via `@mention` commands.
 
 Each project gets its own persistent agent that monitors builds, investigates failures, proposes fixes, and orchestrates deploys. Everything is controllable from your messaging channels.
 
@@ -91,6 +98,17 @@ Each project gets its own persistent agent that monitors builds, investigates fa
 - **Webhook signature validation** -- HMAC-SHA256 verification of GitHub webhook payloads via `GITHUB_WEBHOOK_SECRET`.
 - **GitHub Actions CI/CD** -- automated build and test pipeline on every push and pull request.
 - **Docs search** -- Cmd+K full-text search across all 62 documentation pages.
+- **Self-healing agent loop** -- agents detect failures via smart alerts, propose fixes, and autonomously heal at L3-L5 autonomy levels. The full cycle: detect → diagnose → fix → verify.
+- **3-tier intent parsing** -- regex patterns for known commands → Claude Haiku NLU for intent classification → Claude Sonnet for open-ended smart responses. Progressive escalation keeps latency low for common commands.
+- **Agent Canvas** -- React Flow visual editor for agent orchestration with an inspector panel. Drag-and-drop agent workflows, visualize agent relationships and state.
+- **Code Panel** -- Monaco Editor embedded in chat for inline code viewing and editing.
+- **Web chat with streaming** -- browser-based chat with SSE streaming, image vision support, and deploy alert notifications.
+- **Multi-tenant organizations** -- Clerk Organizations integration with org-scoped agents, projects, and configurations.
+- **Slack OAuth multi-workspace** -- OAuth flow for multi-workspace installation with Socket Mode for real-time events.
+- **Claude API instrumentation** -- token usage and cost tracking per request, per agent, and per organization.
+- **Observability dashboards** -- Vercel and Railway API integration for deploy metrics, with Recharts-powered dashboards.
+- **Per-org integration tokens** -- organization-scoped tokens for Vercel, Railway, Sentry, and Datadog integrations.
+- **3 new commands** -- `docs` (search documentation), `scan` (codebase analysis for security/lint/type issues), `perf` (performance metrics and regression detection). 24 commands total.
 - **CONTRIBUTING.md and CHANGELOG.md** -- contribution guidelines and a detailed changelog are now included in the repository.
 - **94 unit tests** -- Intent Parser, RBAC, FileStorage, Identity, and more.
 
@@ -227,6 +245,9 @@ Enable channels by setting their env vars. All channels are optional. Enable onl
 | `@codespar plan <feature>` | Breaks feature into 3-8 sequential sub-tasks |
 | `@codespar merge PR #<n> [squash\|rebase]` | Merges a pull request (default, squash, or rebase) |
 | `@codespar lens <question>` | Queries data, generates SQL, returns insights and visualization suggestions |
+| `@codespar docs <topic>` | Searches documentation, returns relevant excerpts |
+| `@codespar scan [path]` | Scans codebase for issues (security, lint, type errors) |
+| `@codespar perf [endpoint]` | Analyzes performance metrics, identifies regressions |
 | `@codespar demo [name]` | Show interactive demos (MCP Generator) |
 | `@codespar kill` | Emergency kill switch, stops all agent activity |
 | `@codespar help` | Shows all available commands |
@@ -259,14 +280,15 @@ The Dev Agent reads your actual codebase via the GitHub API, sends context to Cl
 | **Lens Agent** | Ephemeral | Queries databases, generates SQL, returns insights and visualization suggestions. |
 | **Coordinator** | Persistent | Cross-project orchestration. Cascading deploys, shared locks. |
 
-## Five Channels, Same Syntax
+## Six Channels, Same Syntax
 
 | Channel | Status | Connection |
 |---------|--------|-----------|
 | WhatsApp | ✅ Working | Evolution API v2.3.7 (QR scan, session management) |
-| Slack | ✅ Working | Socket Mode (app_mention + DMs) |
+| Slack | ✅ Working | OAuth multi-workspace, Socket Mode (app_mention + DMs) |
 | Telegram | ✅ Working | Official API (BotFather token) |
 | Discord | ✅ Working | Official API (Bot token + Gateway) |
+| Web Chat | ✅ Working | Streaming SSE, image vision, deploy alerts |
 | CLI | ✅ Working | Terminal (dev/debug) |
 
 The agent layer never knows which channel is being used. Every message is normalized to a `NormalizedMessage` before reaching any agent.
@@ -280,9 +302,9 @@ Agents earn trust over time. You control the pace.
 | L0 | Passive | Only responds when addressed |
 | L1 | **Notify** | Monitors and alerts. Never auto-executes. **Default.** |
 | L2 | Suggest | Proposes actions proactively. Requires approval. |
-| L3 | Auto-Low | Auto-executes low-risk (format, lint). Notifies after. |
-| L4 | Auto-Med | Auto-executes medium-risk (bug fixes, PR reviews). |
-| L5 | Full Auto | Autonomous within policy bounds. |
+| L3 | Auto-Low | Auto-executes low-risk (format, lint). Notifies after. Self-healing for minor issues. |
+| L4 | Auto-Med | Auto-executes medium-risk (bug fixes, PR reviews). Auto-fix with verification. |
+| L5 | Full Auto | Autonomous within policy bounds. Full self-healing loop (detect → diagnose → fix → verify). |
 
 > **Safety guardrail:** Regardless of autonomy level, agents **never** auto-execute: production deployments, data migrations, security-sensitive changes, or infrastructure modifications. These always require human approval.
 
@@ -302,15 +324,19 @@ Agents earn trust over time. You control the pace.
 ## Architecture
 
 ```
-Channel Adapters (WhatsApp, Slack, Telegram, Discord, CLI)
+Channel Adapters (WhatsApp, Slack, Telegram, Discord, CLI, Web Chat)
         ↓
-Message Router + NLU Intent Parser (Claude Haiku)
+3-Tier Intent Parsing (regex → Claude Haiku NLU → Claude Sonnet smart response)
         ↓
-Agent Layer (Supervisor → Project/Task/Review/Deploy/Incident/Coordinator)
+Agent Layer (Supervisor → Project/Task/Review/Deploy/Incident/Planning/Lens/Coordinator)
+        ↓
+Self-healing Loop (smart alerts → auto-fix → autonomous healing L3-L5)
         ↓
 Execution Engine (GitHub API + Claude Sonnet)
         ↓
 Storage (FileStorage JSON, PostgreSQL planned)
+        ↓
+Observability (Claude API instrumentation, Vercel/Railway metrics, Recharts dashboards)
 ```
 
 ## Tech Stack
@@ -382,7 +408,7 @@ CodeSpar Enterprise adds production monitoring integrations, MCP connectors, and
 
 | Feature | Open Source (MIT) | Enterprise |
 |---------|------------------|------------|
-| Core engine | 8 agents, 5 channels, RBAC, audit | Included |
+| Core engine | 8 agents, 6 channels, 24 commands, RBAC, audit, self-healing | Included |
 | Integrations | GitHub webhooks (CI/CD) | Sentry, Datadog, PagerDuty, New Relic, Grafana, Jira, Linear |
 | Protocol | REST webhooks | MCP (Model Context Protocol), custom connectors |
 | Analysis | Build failure investigation | Production error root cause, performance regression |
