@@ -135,3 +135,7 @@ export type {
 
 // Storage (PostgreSQL)
 export { PgStorage, createStorage } from "./storage/index.js";
+
+// Security
+export { PromptGuard, promptGuard } from "./security/prompt-guard.js";
+export type { PromptAnalysis } from "./security/prompt-guard.js";
