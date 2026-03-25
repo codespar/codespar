@@ -9,6 +9,7 @@ import { metrics } from "../../observability/metrics.js";
 import { parseIntent } from "../../router/intent-parser.js";
 import type { RouteFn, ServerContext } from "./types.js";
 import type { AgentConfig, AgentState, AutonomyLevel } from "../../types/agent.js";
+import { createAgentBody, agentActionBody, linkProjectBody, createProjectBody, parseBody } from "./schemas.js";
 import type { ProjectConfig } from "../../storage/types.js";
 import { GitHubClient } from "../../github/github-client.js";
 import { broadcastEvent } from "../webhook-server.js";

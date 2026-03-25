@@ -5,6 +5,7 @@
 import { createLogger } from "../../observability/logger.js";
 import type { RouteFn, ServerContext } from "./types.js";
 import type { ChannelAdapter } from "../../types/channel-adapter.js";
+import { configureChannelBody, parseBody } from "./schemas.js";
 
 const log = createLogger("routes/channels");
 
