@@ -381,6 +381,105 @@ export class ClaudeBridge {
   }
 
   /**
+   * Detect the natural language of a file's content using simple heuristics.
+   * Returns a language hint string (e.g., "Brazilian Portuguese", "English") or null.
+   */
+  private detectLanguage(content: string): string | null {
+    const sample = content.slice(0, 3000).toLowerCase();
+
+    // Portuguese indicators: accented characters + common words
+    const ptChars = (sample.match(/[ãõçéêáàâúíó]/g) || []).length;
+    const ptWords = [
+      "como", "para", "projeto", "instalação", "configuração",
+      "utilização", "sobre", "funcionalidades", "tecnologias",
+      "executar", "rodar", "desenvolvimento", "contribuição",
+      "pré-requisitos", "estrutura", "descrição", "variáveis",
+    ];
+    const ptHits = ptWords.filter((w) => sample.includes(w)).length;
+
+    if (ptChars >= 3 || ptHits >= 2) return "Brazilian Portuguese";
+
+    // Spanish indicators
+    const esWords = ["proyecto", "instalación", "configuración", "desarrollo", "contribuir", "requisitos"];
+    const esHits = esWords.filter((w) => sample.includes(w)).length;
+    if (esHits >= 2) return "Spanish";
+
+    return "English";
+  }
+
+  /**
+   * Read project context files (CLAUDE.md, README, package.json, architecture docs).
+   * Returns a string with the aggregated context for the system prompt.
+   */
+  private async gatherProjectContext(
+    github: GitHubClient,
+    owner: string,
+    repo: string,
+    onProgress?: (event: ProgressEvent) => void,
+  ): Promise<{ context: string; language: string | null }> {
+    const contextFiles = [
+      "CLAUDE.md",
+      "README.md",
+      "ARCHITECTURE.md",
+      "PLAN.md",
+      "MVP-PLAN.md",
+      "CONTRIBUTING.md",
+    ];
+
+    const sections: string[] = [];
+    let detectedLanguage: string | null = null;
+
+    onProgress?.({ type: "status", message: "Gathering project context..." });
+
+    for (const filePath of contextFiles) {
+      try {
+        const file = await github.readFile(owner, repo, filePath);
+        if (file && file.content.length > 0 && file.content.length < 30_000) {
+          // Truncate large context files to keep prompt manageable
+          const truncated = file.content.slice(0, 8000);
+          sections.push(`### ${filePath}\n${truncated}`);
+
+          // Detect language from README (most reliable indicator)
+          if (filePath.toLowerCase().startsWith("readme") && !detectedLanguage) {
+            detectedLanguage = this.detectLanguage(file.content);
+          }
+
+          onProgress?.({ type: "file-read", message: `Context: ${filePath}`, filePath });
+        }
+      } catch {
+        // File doesn't exist, skip silently
+      }
+    }
+
+    // Also read package.json for tech stack context (smaller, always useful)
+    try {
+      const pkg = await github.readFile(owner, repo, "package.json");
+      if (pkg && pkg.content.length < 10_000) {
+        // Extract only name, description, dependencies keys
+        try {
+          const parsed = JSON.parse(pkg.content);
+          const slim = {
+            name: parsed.name,
+            description: parsed.description,
+            dependencies: parsed.dependencies ? Object.keys(parsed.dependencies) : [],
+            devDependencies: parsed.devDependencies ? Object.keys(parsed.devDependencies) : [],
+          };
+          sections.push(`### package.json (summary)\n\`\`\`json\n${JSON.stringify(slim, null, 2)}\n\`\`\``);
+        } catch {
+          // Invalid JSON, skip
+        }
+      }
+    } catch {
+      // No package.json
+    }
+
+    return {
+      context: sections.length > 0 ? sections.join("\n\n") : "",
+      language: detectedLanguage,
+    };
+  }
+
+  /**
    * Recursively get the full file tree of a repository.
    * GitHub contents API only returns one level, so we recurse into directories.
    */
@@ -565,11 +664,23 @@ Respond with ONLY the file paths, one per line. No explanations, no markdown, no
           f.endsWith(".js") ||
           f.endsWith(".jsx") ||
           f.endsWith(".css") ||
-          f.endsWith(".json"),
+          f.endsWith(".json") ||
+          f.endsWith(".md") ||
+          f.endsWith(".mdx") ||
+          f.endsWith(".yaml") ||
+          f.endsWith(".yml"),
       );
 
       console.log(`[claude-bridge] File tree: ${srcFiles.length} source files in ${repoOwner}/${repoName}`);
       request.onProgress?.({ type: "status", message: `Scanning codebase... (${srcFiles.length} files)` });
+
+      // 1b. Gather project context (README, CLAUDE.md, architecture docs, package.json)
+      const { context: projectContext, language: detectedLanguage } = await this.gatherProjectContext(
+        github, repoOwner, repoName, request.onProgress,
+      );
+      if (detectedLanguage) {
+        log.info("Detected project language", { language: detectedLanguage, repo: `${repoOwner}/${repoName}` });
+      }
 
       // 2. Ask Claude which files are relevant to the instruction
       request.onProgress?.({ type: "status", message: "Selecting relevant files..." });
@@ -626,16 +737,28 @@ Respond with ONLY the file paths, one per line. No explanations, no markdown, no
         )
         .join("\n\n");
 
-      const systemPrompt = `You are a senior software engineer working on the ${repoOwner}/${repoName} repository.
+      // Build language and context instructions
+      const languageInstruction = detectedLanguage
+        ? `\n\nIMPORTANT: The project's documentation is written in ${detectedLanguage}. You MUST preserve the same language in any documentation or text files you modify. Do not switch languages unless explicitly asked.`
+        : "";
 
-You have access to the following files from the codebase:
+      const contextSection = projectContext
+        ? `\n\n## Project Context\nThe following documentation was found in the repository. Use it to understand the project's conventions, architecture, and goals:\n\n${projectContext}`
+        : "";
+
+      const systemPrompt = `You are a senior software engineer working on the ${repoOwner}/${repoName} repository.
+${contextSection}
+
+## Files from the codebase
 
 ${fileContext}
+${languageInstruction}
 
 When given an instruction:
-1. Analyze the existing code
-2. Make ONLY the specific changes needed
-3. For EACH file you modify, output ONLY the changed sections using this format:
+1. Analyze the existing code and project context
+2. Understand the existing conventions, structure, and language before making changes
+3. Make ONLY the specific changes needed — preserve the existing style, tone, and language
+4. For EACH file you modify, output ONLY the changed sections using this format:
 
 ===DIFF: path/to/file.ts===
 <<<SEARCH
