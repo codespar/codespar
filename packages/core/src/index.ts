@@ -120,3 +120,18 @@ export type { LogLevel, Logger } from "./observability/index.js";
 // Scheduler
 export { scheduler, scheduleBuildStatusReport, scheduleHealthCheck, scheduleAuditCleanup } from "./scheduler/index.js";
 export type { ScheduledTask } from "./scheduler/index.js";
+
+// Plugins (enterprise extension hooks)
+export { pluginRegistry } from "./plugins/index.js";
+export type {
+  PolicyDecision,
+  ToolMetric,
+  PolicyHook,
+  ObservabilityHook,
+  SecretsHook,
+  IntegrationHook,
+  PluginHooks,
+} from "./plugins/index.js";
+
+// Storage (PostgreSQL)
+export { PgStorage, createStorage } from "./storage/index.js";
