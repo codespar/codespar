@@ -15,7 +15,7 @@
  *   PROJECT_NAME      — Project identifier (default "default")
  */
 
-import { MessageRouter, WebhookServer, FileStorage, ApprovalManager, VectorStore, IdentityStore, analyzeDeployFailure, formatSmartAlert, parseIntent } from "@codespar/core";
+import { MessageRouter, WebhookServer, FileStorage, createStorage, ApprovalManager, VectorStore, IdentityStore, analyzeDeployFailure, formatSmartAlert, parseIntent } from "@codespar/core";
 import { AgentSupervisor } from "@codespar/agent-supervisor";
 import { ProjectAgent } from "@codespar/agent-project";
 import { CoordinatorAgent } from "@codespar/agent-coordinator";
@@ -31,7 +31,8 @@ console.log("");
 
 // 1. Core services
 const router = new MessageRouter();
-const storage = new FileStorage();
+const storage = createStorage();
+console.log(`[server] Storage: ${process.env.DATABASE_URL ? "PostgreSQL" : "FileStorage"}`);
 const approvalManager = new ApprovalManager();
 const vectorStore = new VectorStore();
 const supervisor = new AgentSupervisor(router);
@@ -139,7 +140,7 @@ try {
     const orgDirs = fs.readdirSync(orgsDir);
     for (const orgId of orgDirs) {
       try {
-        const orgStorage = new FileStorage(".codespar", orgId);
+        const orgStorage = createStorage(orgId);
         const orgProjects = await orgStorage.getProjectsList();
         for (const proj of orgProjects) {
           if (proj.agentId === agentId) continue;
