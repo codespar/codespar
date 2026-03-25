@@ -5,6 +5,7 @@
  * - POST /webhooks/github — receives and parses GitHub webhook payloads
  * - POST /webhooks/vercel — receives Vercel deploy event webhooks
  * - POST /webhooks/deploy — generic deploy webhook for any CI/CD service
+ * - POST /webhooks/sentry — receives Sentry error/issue event webhooks
  * - GET /health — returns server and agent health info
  * - GET /api/webhooks/status — returns which webhook secrets are configured
  *
@@ -2194,7 +2195,7 @@ export class WebhookServer {
       for (const integration of integrations) {
         try {
           const config = await storage.getChannelConfig(integration);
-          status[integration] = !!config?.token;
+          status[integration] = !!(config?.token || config?.authToken || config?.dsn || config?.apiKey);
         } catch {
           status[integration] = false;
         }
