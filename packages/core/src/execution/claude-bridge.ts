@@ -12,6 +12,7 @@
 import { GitHubClient } from "../github/index.js";
 import { createLogger } from "../observability/logger.js";
 import { metrics } from "../observability/metrics.js";
+import { pluginRegistry } from "../plugins/registry.js";
 
 const log = createLogger("claude-bridge");
 
@@ -89,6 +90,22 @@ export class ClaudeBridge {
 
   /** Execute an instruction. Uses Anthropic API if key is set, otherwise simulates. */
   async execute(request: ExecutionRequest): Promise<ExecutionResult> {
+    // Policy check (enterprise plugin)
+    const policyDecision = pluginRegistry.evaluatePolicy(
+      request.projectContext ?? "unknown",
+      "execute",
+    );
+    if (!policyDecision.allowed) {
+      return {
+        taskId: request.taskId,
+        status: "failed",
+        output: `Policy denied: ${policyDecision.reason ?? "action not allowed"}`,
+        durationMs: 0,
+        exitCode: null,
+        simulated: false,
+      };
+    }
+
     const apiKey = process.env.ANTHROPIC_API_KEY;
 
     if (!apiKey) {
@@ -147,6 +164,18 @@ export class ClaudeBridge {
       metrics.observe("api.claude.latency_ms", durationMs);
       metrics.observe("api.claude.tokens_in", inputTokens);
       metrics.observe("api.claude.tokens_out", outputTokens);
+
+      // Record metric (enterprise observability plugin)
+      pluginRegistry.recordMetric({
+        toolName: "execute",
+        agentId: request.projectContext ?? "unknown",
+        latencyMs: durationMs,
+        success: true,
+        cost: costUsd,
+        inputTokens,
+        outputTokens,
+      });
+      pluginRegistry.recordPolicyUsage(request.projectContext ?? "unknown", "execute", costUsd);
 
       return {
         taskId: request.taskId,
