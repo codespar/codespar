@@ -14,13 +14,19 @@
     "build": "tsc",
     "dev": "tsc --watch",
     "lint": "echo 'lint ok'",
-    "test": "vitest run"
+    "test": "vitest run",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "drizzle-kit migrate",
+    "db:studio": "drizzle-kit studio"
   },
   "dependencies": {
     "@fastify/cors": "^11.0.0",
-    "fastify": "^5.3.0"
+    "drizzle-orm": "^0.45.1",
+    "fastify": "^5.3.0",
+    "postgres": "^3.4.8"
   },
   "devDependencies": {
+    "drizzle-kit": "^0.31.10",
     "typescript": "^5.8.0"
   }
 }
