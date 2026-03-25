@@ -33,6 +33,7 @@ import type { AgentStatus, AgentState, AgentConfig, AutonomyLevel } from "../typ
 import type { ChannelAdapter } from "../types/channel-adapter.js";
 import type { StorageProvider, ProjectConfig, ProjectListEntry, SlackInstallation, AgentStateEntry } from "../storage/types.js";
 import { FileStorage } from "../storage/file-storage.js";
+import { createStorage } from "../storage/create-storage.js";
 import type { ApprovalManager } from "../approval/approval-manager.js";
 import type { IdentityStore } from "../auth/identity-store.js";
 import type { VectorStore } from "../memory/vector-store.js";
@@ -265,7 +266,7 @@ export class WebhookServer {
 
     let storage = this.orgStorageCache.get(orgId);
     if (!storage) {
-      storage = new FileStorage(this.storageBaseDir, orgId);
+      storage = createStorage(orgId);
       this.orgStorageCache.set(orgId, storage);
     }
     return storage;
