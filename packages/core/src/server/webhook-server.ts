@@ -2621,6 +2621,150 @@ export class WebhookServer {
       };
     });
 
+    // GitHub file tree (for IDE file explorer)
+    route("get", "/api/github/tree", async (request: any, reply: any) => {
+      const orgId = this.getOrgId(request);
+      const storage = this.getOrgStorage(orgId);
+
+      // Get linked project's repo
+      const projects = await storage.getProjectsList();
+      const repo =
+        (request.query as Record<string, string>).repo ||
+        (projects[0] ? projects[0].repo : "");
+
+      if (!repo) {
+        return reply.send({ tree: [], error: "No project linked" });
+      }
+
+      const [owner, repoName] = repo.split("/");
+      const branch = (request.query as Record<string, string>).branch || "main";
+      const token = process.env.GITHUB_TOKEN;
+
+      if (!token) {
+        return reply.send({ tree: [], error: "GITHUB_TOKEN not configured" });
+      }
+
+      try {
+        const res = await fetch(
+          `https://api.github.com/repos/${owner}/${repoName}/git/trees/${branch}?recursive=1`,
+          {
+            headers: {
+              Authorization: `Bearer ${token}`,
+              Accept: "application/vnd.github.v3+json",
+            },
+          }
+        );
+
+        if (!res.ok) {
+          return reply.send({ tree: [], error: `GitHub API returned ${res.status}` });
+        }
+
+        const data = (await res.json()) as Record<string, unknown>;
+        // Filter to max 500 files, exclude node_modules, .git, dist
+        const filtered = ((data.tree as Array<Record<string, unknown>>) || [])
+          .filter((item: Record<string, unknown>) => {
+            const p = String(item.path || "");
+            return (
+              !p.includes("node_modules") &&
+              !p.startsWith(".git/") &&
+              !p.includes("/dist/") &&
+              !p.includes("/.next/") &&
+              !p.includes("/build/")
+            );
+          })
+          .slice(0, 500);
+
+        return reply.send({
+          tree: filtered.map((item: Record<string, unknown>) => ({
+            path: item.path,
+            type: item.type === "tree" ? "folder" : "file",
+            size: item.size,
+          })),
+          repo,
+          branch,
+        });
+      } catch (err) {
+        return reply.send({ tree: [], error: String(err) });
+      }
+    });
+
+    // GitHub file content (for IDE editor)
+    route("get", "/api/github/file", async (request: any, reply: any) => {
+      const orgId = this.getOrgId(request);
+      const storage = this.getOrgStorage(orgId);
+
+      const filePath = (request.query as Record<string, string>).path;
+      const projects = await storage.getProjectsList();
+      const repo =
+        (request.query as Record<string, string>).repo ||
+        (projects[0] ? projects[0].repo : "");
+
+      if (!repo || !filePath) {
+        return reply.send({ error: "repo and path required" });
+      }
+
+      const [owner, repoName] = repo.split("/");
+      const token = process.env.GITHUB_TOKEN;
+
+      if (!token) {
+        return reply.send({ error: "GITHUB_TOKEN not configured" });
+      }
+
+      try {
+        const res = await fetch(
+          `https://api.github.com/repos/${owner}/${repoName}/contents/${filePath}`,
+          {
+            headers: {
+              Authorization: `Bearer ${token}`,
+              Accept: "application/vnd.github.v3+json",
+            },
+          }
+        );
+
+        if (!res.ok) {
+          return reply.send({ error: `GitHub API returned ${res.status}` });
+        }
+
+        const data = (await res.json()) as Record<string, unknown>;
+
+        // Decode base64 content
+        const content = data.content
+          ? Buffer.from(String(data.content), "base64").toString("utf-8")
+          : "";
+
+        // Detect language from extension
+        const ext = filePath.split(".").pop()?.toLowerCase() || "";
+        const langMap: Record<string, string> = {
+          ts: "typescript",
+          tsx: "typescript",
+          js: "javascript",
+          jsx: "javascript",
+          py: "python",
+          rs: "rust",
+          go: "go",
+          json: "json",
+          md: "markdown",
+          css: "css",
+          html: "html",
+          yaml: "yaml",
+          yml: "yaml",
+          sh: "shell",
+          sql: "sql",
+          dockerfile: "dockerfile",
+        };
+
+        return reply.send({
+          path: filePath,
+          content,
+          language: langMap[ext] || "plaintext",
+          size: data.size as number,
+          sha: data.sha as string,
+        });
+      } catch (err) {
+        return reply.send({ error: String(err) });
+      }
+    });
+
     // GitHub webhook receiver
     route("post", "/webhooks/github", async (request: any, reply: any) => {
       metrics.increment("webhook.received");
