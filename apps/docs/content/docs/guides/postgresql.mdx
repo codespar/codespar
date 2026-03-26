@@ -1,0 +1,97 @@
+---
+title: PostgreSQL Setup
+description: Configure PostgreSQL for persistent storage in production deployments.
+---
+
+# PostgreSQL Setup
+
+By default, CodeSpar uses **FileStorage** (JSON files on disk). For production deployments, switch to **PostgreSQL** for durability, concurrent access, and data that survives container restarts.
+
+## When to Use PostgreSQL
+
+- **Railway/Heroku/Fly.io** — ephemeral filesystems lose data on redeploy
+- **Multi-instance** — FileStorage doesn't support concurrent writes
+- **Production** — you need reliable, queryable storage
+
+## Quick Start
+
+### 1. Set DATABASE_URL
+
+```bash
+# Railway (auto-provisioned)
+DATABASE_URL=postgresql://postgres:password@host:5432/railway
+
+# Local development
+DATABASE_URL=postgresql://postgres:postgres@localhost:5432/codespar
+```
+
+That's it. When `DATABASE_URL` is set, CodeSpar automatically uses PostgreSQL instead of FileStorage.
+
+### 2. Run Migrations
+
+```bash
+cd packages/core
+
+# Generate migration SQL from schema
+npm run db:generate
+
+# Apply to database
+npm run db:migrate
+
+# Browse data (opens Drizzle Studio)
+npm run db:studio
+```
+
+### 3. Verify
+
+```bash
+curl http://localhost:3000/health
+# Should show: "status": "ok"
+```
+
+## Schema
+
+CodeSpar creates 8 tables:
+
+| Table | Purpose |
+|-------|---------|
+| `agent_memory` | Key-value memory per agent |
+| `project_configs` | Linked repository configurations |
+| `projects` | Project registry |
+| `audit_log` | Immutable audit trail with hash chain |
+| `subscribers` | Newsletter subscribers |
+| `slack_installations` | Slack OAuth installations |
+| `agent_states` | Persisted agent status and autonomy level |
+| `channel_configs` | Integration tokens (Sentry, Vercel, Railway, etc.) |
+
+## Multi-Tenant
+
+Each organization's data is stored in the same database, isolated by queries. The `orgId` field scopes all operations.
+
+```typescript
+// The factory function handles org-scoping automatically
+import { createStorage } from "@codespar/core";
+
+const storage = createStorage("org_abc123");
+// Uses PostgreSQL if DATABASE_URL is set, FileStorage otherwise
+```
+
+## Drizzle ORM
+
+CodeSpar uses [Drizzle ORM](https://orm.drizzle.team) for type-safe database access. The schema is defined in `packages/core/src/storage/schema.ts`.
+
+To modify the schema:
+
+1. Edit `schema.ts`
+2. Run `npm run db:generate` to create a migration
+3. Run `npm run db:migrate` to apply
+4. Commit the migration file
+
+## Fallback Behavior
+
+If `DATABASE_URL` is not set, CodeSpar falls back to FileStorage automatically. This makes local development simple — no database needed.
+
+```
+DATABASE_URL set → PgStorage (PostgreSQL via Drizzle)
+DATABASE_URL unset → FileStorage (JSON files in .codespar/)
+```

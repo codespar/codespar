@@ -9,7 +9,6 @@
     "memory",
     "orgs",
     "webhooks",
-    "scheduler",
-    "newsletter"
+    "scheduler"
   ]
 }
