@@ -1488,10 +1488,14 @@ Focus on: ${perfTarget}`;
     const uptimeMs = Date.now() - this.startedAt.getTime();
 
     const recentAudit = this.storage
-      ? (await this.storage.queryAudit("", 10)).entries.map((e) => ({
+      ? (await this.storage.queryAudit("", 30)).entries.map((e) => ({
           action: e.action,
           detail: String(e.metadata?.detail || e.metadata?.rawText || ""),
           timestamp: e.timestamp.toISOString(),
+          repo: String(e.metadata?.repo || ""),
+          branch: String(e.metadata?.branch || ""),
+          commitSha: String(e.metadata?.commitSha || ""),
+          commitMessage: String(e.metadata?.commitMessage || ""),
         }))
       : [];
 
