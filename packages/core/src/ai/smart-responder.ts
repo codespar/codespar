@@ -68,7 +68,7 @@ Available commands the user can use:
 
 Respond concisely and helpfully. If the user asks about capabilities, suggest relevant commands. If they ask about project status, use the context you have. Answer in the same language the user writes in.
 
-Keep responses under 500 words. Use bullet points for lists. Be direct and actionable.
+Keep responses under 1500 words. Use bullet points for lists. Be direct and actionable.
 When asked for release notes, changelog, or recent changes: include ALL relevant events from the activity log, grouped by commit/deploy. Don't skip entries.`;
 
   try {
@@ -128,7 +128,7 @@ When asked for release notes, changelog, or recent changes: include ALL relevant
       },
       body: JSON.stringify({
         model: process.env.SMART_MODEL || "claude-sonnet-4-20250514",
-        max_tokens: 500,
+        max_tokens: 2000,
         system: systemPrompt,
         messages: [{ role: "user", content: userContent }],
       }),
@@ -195,7 +195,7 @@ Available commands the user can use:
 
 Respond concisely and helpfully. If the user asks about capabilities, suggest relevant commands. If they ask about project status, use the context you have. Answer in the same language the user writes in.
 
-Keep responses under 500 words. Use bullet points for lists. Be direct and actionable.
+Keep responses under 1500 words. Use bullet points for lists. Be direct and actionable.
 When asked for release notes, changelog, or recent changes: include ALL relevant events from the activity log, grouped by commit/deploy. Don't skip entries.`;
 
   try {
@@ -255,7 +255,7 @@ When asked for release notes, changelog, or recent changes: include ALL relevant
       },
       body: JSON.stringify({
         model: process.env.SMART_MODEL || "claude-sonnet-4-20250514",
-        max_tokens: 500,
+        max_tokens: 2000,
         stream: true,
         system: systemPrompt,
         messages: [{ role: "user", content: userContent }],
