@@ -1505,9 +1505,31 @@ Focus on: ${perfTarget}`;
     };
 
     let repoUrl: string | undefined;
+    let repoOwner = "";
+    let repoName = "";
     if (this.storage) {
       const config = await this.storage.getProjectConfig(this.config.id);
-      if (config) repoUrl = config.repoUrl;
+      if (config) {
+        repoUrl = config.repoUrl;
+        repoOwner = config.repoOwner;
+        repoName = config.repoName;
+      }
+    }
+
+    // Fetch recent commits from GitHub for richer release notes context
+    let recentCommits: Array<{ sha: string; message: string; author: string; date: string }> = [];
+    if (repoOwner && repoName) {
+      try {
+        let githubToken: string | undefined;
+        if (this.storage) {
+          const oauthToken = await this.storage.getMemory("github-oauth", "token");
+          if (oauthToken && typeof oauthToken === "string") githubToken = oauthToken;
+        }
+        const github = new GitHubClient(githubToken);
+        if (github.isConfigured()) {
+          recentCommits = await github.getRecentCommits(repoOwner, repoName, 20);
+        }
+      } catch { /* skip if GitHub unavailable */ }
     }
 
     return {
@@ -1518,6 +1540,7 @@ Focus on: ${perfTarget}`;
       tasksHandled: this.tasksHandled,
       uptimeMinutes: Math.floor(uptimeMs / 60000),
       recentAudit,
+      recentCommits,
       memoryStats,
       linkedChannels: [],
     };

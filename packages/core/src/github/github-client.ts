@@ -347,4 +347,36 @@ export class GitHubClient {
     const data = (await res.json()) as any;
     return (data.default_branch as string) || "main";
   }
+
+  /** Get recent commits from a repo (default branch). */
+  async getRecentCommits(
+    owner: string,
+    repo: string,
+    count: number = 15,
+  ): Promise<Array<{
+    sha: string;
+    message: string;
+    author: string;
+    date: string;
+    files?: string[];
+  }>> {
+    try {
+      const res = await fetch(
+        `${this.baseUrl}/repos/${owner}/${repo}/commits?per_page=${count}`,
+        { headers: this.headers, signal: AbortSignal.timeout(10_000) },
+      );
+      if (!res.ok) return [];
+      const data = (await res.json()) as any[];
+      return data.map((c: any) => ({
+        sha: c.sha?.slice(0, 7) || "",
+        message: c.commit?.message?.split("\n")[0] || "",
+        author: c.commit?.author?.name || c.author?.login || "",
+        date: c.commit?.author?.date || "",
+        files: c.files?.map((f: any) => f.filename) as string[] | undefined,
+      }));
+    } catch (err) {
+      log.error("Failed to fetch commits", { error: err instanceof Error ? err.message : String(err) });
+      return [];
+    }
+  }
 }
