@@ -484,8 +484,8 @@ export function registerObservabilityRoutes(route: RouteFn, ctx: ServerContext):
       try {
         // Railway uses GraphQL API — filter by projectId if configured
         const query = railwayProjectId
-          ? `query { project(id: "${railwayProjectId}") { id name services { edges { node { id name deployments(first: 10) { edges { node { id status createdAt meta } } } } } } } }`
-          : `query { me { projects { edges { node { id name services { edges { node { id name deployments(first: 10) { edges { node { id status createdAt meta } } } } } } } } } } }`;
+          ? `query { project(id: "${railwayProjectId}") { id name services { edges { node { id name } } } } }`
+          : `query { me { projects(first: 3) { edges { node { id name services { edges { node { id name } } } } } } } }`;
 
         const res = await fetch("https://backboard.railway.app/graphql/v2", {
           method: "POST",
@@ -494,6 +494,7 @@ export function registerObservabilityRoutes(route: RouteFn, ctx: ServerContext):
             "Content-Type": "application/json",
           },
           body: JSON.stringify({ query }),
+          signal: AbortSignal.timeout(12_000), // 12s timeout to avoid Railway 503
         });
 
         if (!res.ok) {
