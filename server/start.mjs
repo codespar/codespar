@@ -200,8 +200,25 @@ try {
 const webhookServer = new WebhookServer({ port });
 
 webhookServer.onCIEvent(async (event) => {
-  const response = agent.handleCIEvent(event);
-  console.log(`[server] CI event: ${event.type} \u2014 ${event.status}`);
+  // Route CI event to the agent that owns the repo
+  const repoName = event.repo?.split("/")[1] || "";
+  const statuses = supervisor.getAgentStatuses();
+  const match = statuses.find((a) =>
+    a.projectId === repoName || a.id.includes(repoName)
+  );
+
+  if (match) {
+    const targetAgent = supervisor.getAgentById(match.id);
+    if (targetAgent && targetAgent.handleCIEvent) {
+      targetAgent.handleCIEvent(event);
+      console.log(`[server] CI event: ${event.type} \u2014 ${event.status} \u2192 ${match.id}`);
+      return;
+    }
+  }
+
+  // Fallback to default agent
+  agent.handleCIEvent(event);
+  console.log(`[server] CI event: ${event.type} \u2014 ${event.status} \u2192 agent-default (fallback)`);
 });
 
 webhookServer.setAgentCount(supervisor.getAgentStatuses().length);

@@ -519,8 +519,24 @@ export function registerObservabilityRoutes(route: RouteFn, ctx: ServerContext):
           },
         });
       } catch (err) {
-        log.error("Railway API proxy error", { error: err instanceof Error ? err.message : String(err) });
-        reply.code(500).send({ error: "Failed to fetch Railway data" });
+        const errMsg = err instanceof Error ? err.message : String(err);
+        log.error("Railway API proxy error", { error: errMsg });
+
+        // Fallback: return health data even if Railway API fails
+        const mem = process.memoryUsage();
+        const uptimeMs = Date.now() - ctx.startedAt.getTime();
+        reply.send({
+          railway: null,
+          error: errMsg.includes("abort") ? "Railway API timeout — data from local process only" : errMsg,
+          health: {
+            heapUsedMB: Math.round(mem.heapUsed / 1024 / 1024),
+            heapTotalMB: Math.round(mem.heapTotal / 1024 / 1024),
+            rssMB: Math.round(mem.rss / 1024 / 1024),
+            uptimeMs,
+            nodeVersion: process.version,
+            activeConnections: ctx.sseConnections.size,
+          },
+        });
       }
     });
 
