@@ -79,6 +79,14 @@ export function registerWebhookRoutes(route: RouteFn, ctx: ServerContext): void 
         return reply.status(200).send({ received: true, processed: false, reason: "intermediate_state" });
       }
 
+      // Resolve the agent that owns this repo
+      const repoName = event.repo.split("/")[1] || event.repo;
+      const agentStatuses = ctx.agentSupervisor?.getAgentStatuses() ?? [];
+      const matchingAgent = agentStatuses.find((a) =>
+        a.projectId === repoName || a.id.includes(repoName)
+      );
+      const resolvedAgentId = matchingAgent?.id ?? "agent-default";
+
       // Log to audit with org-scoped storage
       const ghStorage = ctx.getOrgStorage(orgId);
       await ghStorage.appendAudit({
@@ -99,6 +107,7 @@ export function registerWebhookRoutes(route: RouteFn, ctx: ServerContext): void 
           risk: event.status === "failure" ? "critical" : "low",
           detail: `${event.repo}: ${event.details.title || event.type}${event.branch ? ` (${event.branch})` : ""}`,
           source: "github",
+          agentId: resolvedAgentId,
           orgId,
         },
       });
@@ -106,7 +115,7 @@ export function registerWebhookRoutes(route: RouteFn, ctx: ServerContext): void 
       // Broadcast to SSE clients scoped to org
       broadcastEvent({
         type: "ci.event",
-        data: { repo: event.repo, type: event.type, status: event.status, branch: event.branch, orgId },
+        data: { repo: event.repo, type: event.type, status: event.status, branch: event.branch, orgId, agentId: resolvedAgentId },
       }, orgId);
 
       // Dispatch to all registered handlers
