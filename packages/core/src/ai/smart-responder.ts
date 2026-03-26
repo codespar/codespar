@@ -17,7 +17,7 @@ export interface AgentContext {
   autonomyLevel: number;
   tasksHandled: number;
   uptimeMinutes: number;
-  recentAudit: Array<{ action: string; detail: string; timestamp: string }>;
+  recentAudit: Array<{ action: string; detail: string; timestamp: string; repo?: string; branch?: string; commitSha?: string; commitMessage?: string }>;
   memoryStats: { total: number; byCategory: Record<string, number> };
   linkedChannels: string[];
 }
@@ -41,8 +41,11 @@ Current state:
 - Memory: ${context.memoryStats.total} entries (${Object.entries(context.memoryStats.byCategory).map(([k, v]) => `${k}: ${v}`).join(", ")})
 - Connected channels: ${context.linkedChannels.join(", ") || "CLI"}
 
-Recent activity:
-${context.recentAudit.slice(0, 10).map((a) => `- ${a.action}: ${a.detail}`).join("\n") || "No recent activity"}
+Recent activity (last 30 events):
+${context.recentAudit.slice(0, 30).map((a) => {
+  const extra = [a.repo, a.branch, a.commitSha?.slice(0, 7), a.commitMessage].filter(Boolean).join(" | ");
+  return `- ${a.action}: ${a.detail}${extra ? ` [${extra}]` : ""}`;
+}).join("\n") || "No recent activity"}
 
 Available commands the user can use:
 - status — check project/agent status
@@ -61,7 +64,8 @@ Available commands the user can use:
 
 Respond concisely and helpfully. If the user asks about capabilities, suggest relevant commands. If they ask about project status, use the context you have. Answer in the same language the user writes in.
 
-Keep responses under 300 words. Use bullet points for lists. Be direct and actionable.`;
+Keep responses under 500 words. Use bullet points for lists. Be direct and actionable.
+When asked for release notes, changelog, or recent changes: include ALL relevant events from the activity log, grouped by commit/deploy. Don't skip entries.`;
 
   try {
     // Build message content with images if present
@@ -161,8 +165,11 @@ Current state:
 - Memory: ${context.memoryStats.total} entries (${Object.entries(context.memoryStats.byCategory).map(([k, v]) => `${k}: ${v}`).join(", ")})
 - Connected channels: ${context.linkedChannels.join(", ") || "CLI"}
 
-Recent activity:
-${context.recentAudit.slice(0, 10).map((a) => `- ${a.action}: ${a.detail}`).join("\n") || "No recent activity"}
+Recent activity (last 30 events):
+${context.recentAudit.slice(0, 30).map((a) => {
+  const extra = [a.repo, a.branch, a.commitSha?.slice(0, 7), a.commitMessage].filter(Boolean).join(" | ");
+  return `- ${a.action}: ${a.detail}${extra ? ` [${extra}]` : ""}`;
+}).join("\n") || "No recent activity"}
 
 Available commands the user can use:
 - status — check project/agent status
@@ -181,7 +188,8 @@ Available commands the user can use:
 
 Respond concisely and helpfully. If the user asks about capabilities, suggest relevant commands. If they ask about project status, use the context you have. Answer in the same language the user writes in.
 
-Keep responses under 300 words. Use bullet points for lists. Be direct and actionable.`;
+Keep responses under 500 words. Use bullet points for lists. Be direct and actionable.
+When asked for release notes, changelog, or recent changes: include ALL relevant events from the activity log, grouped by commit/deploy. Don't skip entries.`;
 
   try {
     // Build message content with images if present
