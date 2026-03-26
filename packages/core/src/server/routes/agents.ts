@@ -49,12 +49,18 @@ export function registerAgentRoutes(route: RouteFn, ctx: ServerContext): void {
       const orgId = ctx.getOrgId(request);
       const statuses = ctx.agentSupervisor?.getAgentStatuses() ?? [];
 
-      // Filter agents by org — strict isolation, no cross-org leaking
-      const filtered = orgId === "default"
+      // Filter agents by org — show org-specific agents first,
+      // fall back to default/unscoped agents if the org has none yet.
+      // This handles the common case where agents were created before
+      // multi-tenant org IDs were assigned (e.g., via Setup page).
+      let filtered = orgId === "default"
         ? statuses.filter((s) => !s.orgId || s.orgId === "default")
-        : statuses.filter((s) => {
-            return s.orgId === orgId;
-          });
+        : statuses.filter((s) => s.orgId === orgId);
+
+      // Fallback: if org has no agents, include default/unscoped agents
+      if (filtered.length === 0 && orgId !== "default") {
+        filtered = statuses.filter((s) => !s.orgId || s.orgId === "default");
+      }
 
       return {
         agents: filtered.map((s) => ({
