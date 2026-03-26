@@ -89,7 +89,13 @@ export function registerApprovalAuditRoutes(route: RouteFn, ctx: ServerContext):
 
         // Fetch all entries then deduplicate deploy events on read.
         // This handles historical duplicates from before persistent dedup was added.
-        const { entries: rawEntries } = await storage.queryAudit("", 10000, 0);
+        let { entries: rawEntries } = await storage.queryAudit("", 10000, 0);
+
+        // Fallback: if org has no audit entries, try default storage
+        if (rawEntries.length === 0 && orgId !== "default" && ctx.storageProvider) {
+          const defaultResult = await ctx.storageProvider.queryAudit("", 10000, 0);
+          rawEntries = defaultResult.entries;
+        }
 
         // Deduplicate: for deploy events, keep only the latest per project+action+commitSha
         const seen = new Set<string>();
