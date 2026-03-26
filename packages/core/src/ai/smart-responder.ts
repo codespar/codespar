@@ -18,6 +18,7 @@ export interface AgentContext {
   tasksHandled: number;
   uptimeMinutes: number;
   recentAudit: Array<{ action: string; detail: string; timestamp: string; repo?: string; branch?: string; commitSha?: string; commitMessage?: string }>;
+  recentCommits?: Array<{ sha: string; message: string; author: string; date: string }>;
   memoryStats: { total: number; byCategory: Record<string, number> };
   linkedChannels: string[];
 }
@@ -46,6 +47,9 @@ ${context.recentAudit.slice(0, 30).map((a) => {
   const extra = [a.repo, a.branch, a.commitSha?.slice(0, 7), a.commitMessage].filter(Boolean).join(" | ");
   return `- ${a.action}: ${a.detail}${extra ? ` [${extra}]` : ""}`;
 }).join("\n") || "No recent activity"}
+
+Recent Git commits (from GitHub API):
+${context.recentCommits?.slice(0, 20).map((c) => `- ${c.sha} ${c.message} (by ${c.author}, ${c.date})`).join("\n") || "No commits available"}
 
 Available commands the user can use:
 - status — check project/agent status
@@ -170,6 +174,9 @@ ${context.recentAudit.slice(0, 30).map((a) => {
   const extra = [a.repo, a.branch, a.commitSha?.slice(0, 7), a.commitMessage].filter(Boolean).join(" | ");
   return `- ${a.action}: ${a.detail}${extra ? ` [${extra}]` : ""}`;
 }).join("\n") || "No recent activity"}
+
+Recent Git commits (from GitHub API):
+${context.recentCommits?.slice(0, 20).map((c) => `- ${c.sha} ${c.message} (by ${c.author}, ${c.date})`).join("\n") || "No commits available"}
 
 Available commands the user can use:
 - status — check project/agent status
