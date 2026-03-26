@@ -1,0 +1,108 @@
+---
+title: Plugin System
+description: Extend CodeSpar with enterprise plugins for policy, observability, secrets, and integrations.
+---
+
+# Plugin System
+
+CodeSpar's plugin system allows enterprise packages to hook into the core agent lifecycle without coupling the core to enterprise code.
+
+## Architecture
+
+```
+Core (MIT)                    Enterprise (commercial)
+┌──────────────┐              ┌──────────────────┐
+│ pluginRegistry│ ◄──register─ │ PolicyEngine     │
+│              │              │ MCPObserver      │
+│ evaluate()   │              │ SecretsVault     │
+│ record()     │              │ SentryConnector  │
+│ getSecret()  │              └──────────────────┘
+└──────────────┘
+```
+
+The core calls plugin hooks at specific points. Enterprise packages register themselves at startup. When no plugins are registered, all hooks are no-ops (zero overhead).
+
+## Available Hooks
+
+### PolicyHook
+
+Called **before** an agent executes an action.
+
+```typescript
+interface PolicyHook {
+  evaluate(agentId: string, toolName: string, estimatedCost?: number): PolicyDecision;
+  recordUsage?(agentId: string, toolName: string, cost: number): void;
+}
+```
+
+Returns `{ allowed: true }` or `{ allowed: false, reason: "budget exceeded" }`.
+
+### ObservabilityHook
+
+Called **after** an agent executes an action.
+
+```typescript
+interface ObservabilityHook {
+  record(metric: ToolMetric): void;
+  getStats?(toolName?: string): unknown;
+}
+```
+
+Records latency, cost, token usage, and errors for every tool call.
+
+### SecretsHook
+
+Called when an agent needs credentials.
+
+```typescript
+interface SecretsHook {
+  get(tenantId: string, key: string): string | null;
+  set?(tenantId: string, key: string, value: string): void;
+}
+```
+
+### IntegrationHook
+
+Handles webhooks from external services (Sentry, Linear, Jira, etc.).
+
+```typescript
+interface IntegrationHook {
+  id: string;
+  name: string;
+  handleWebhook(payload: unknown, headers: Record<string, string>): Promise<{ eventType: string; severity: string; title: string } | null>;
+  verifySignature?(payload: string, signature: string, secret: string): boolean;
+}
+```
+
+## Registering Plugins
+
+At application startup:
+
+```typescript
+import { pluginRegistry } from "@codespar/core";
+import { PolicyEngine } from "@codespar/enterprise-policy";
+import { MCPObserver } from "@codespar/enterprise-observability";
+import { SecretsVault } from "@codespar/enterprise-secrets";
+
+pluginRegistry.registerPolicy(new PolicyEngine());
+pluginRegistry.registerObservability(new MCPObserver());
+pluginRegistry.registerSecrets(new SecretsVault(process.env.VAULT_MASTER_KEY));
+```
+
+## Plugin Status
+
+Check which plugins are active:
+
+```typescript
+const status = pluginRegistry.getStatus();
+// { policy: true, observability: true, secrets: true, integrations: ["sentry", "linear"] }
+```
+
+## Open Source vs Enterprise
+
+| Hook | Open Source | Enterprise |
+|------|-----------|-----------|
+| Policy | No-op (all allowed) | Budget limits, rate limits, time windows, approval requirements |
+| Observability | No-op | Cost tracking, hallucination detection, anomaly detection |
+| Secrets | No-op (uses env vars) | AES-256-GCM encrypted vault with rotation |
+| Integrations | GitHub webhooks only | Sentry, Linear, Jira, Datadog, PagerDuty |

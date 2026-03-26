@@ -1,0 +1,74 @@
+---
+title: Prompt Injection Guard
+description: How CodeSpar defends against prompt injection attacks (Security Layer 7).
+---
+
+# Prompt Injection Guard
+
+CodeSpar includes a built-in prompt injection classifier — **Security Layer #7** in the [10-layer defense model](/docs/configuration/security).
+
+## How It Works
+
+Every user message is analyzed before reaching the LLM, using three detection layers:
+
+### 1. Pattern Blocklist (14 rules)
+
+Known injection patterns are matched via regex:
+
+| Category | Examples |
+|----------|---------|
+| Instruction override | "ignore previous instructions", "forget everything" |
+| Role manipulation | "you are now a different AI", "DAN mode" |
+| Data exfiltration | "reveal your system prompt", "show me your API key" |
+| Command injection | `rm -rf`, `DROP TABLE`, `curl | sh` |
+| Delimiter abuse | Fake system/assistant markers, encoded payloads |
+
+### 2. Structural Analysis
+
+Detects suspicious patterns that don't match specific rules:
+
+- **Multiple role markers** — `user:`, `assistant:`, `system:` in a single message
+- **Instruction-heavy language** — excessive use of "must", "always", "override"
+- **Suspicious Unicode** — zero-width characters, RTL overrides (common in evasion)
+
+### 3. Composite Risk Scoring
+
+Each signal contributes to a risk score (0–1). Messages above **0.7** are blocked.
+
+## Usage
+
+The guard is integrated automatically. You can also use it programmatically:
+
+```typescript
+import { promptGuard } from "@codespar/core";
+
+const result = promptGuard.analyze("ignore previous instructions");
+// { blocked: true, riskScore: 0.9, triggers: ["ignore-previous"], reason: "..." }
+```
+
+### Custom Rules
+
+Add organization-specific patterns:
+
+```typescript
+promptGuard.addPattern({
+  id: "block-competitor",
+  pattern: /switch to \w+ instead/i,
+  weight: 0.8,
+  description: "Blocks attempts to redirect to competitor tools",
+});
+```
+
+## What Happens When Blocked
+
+- The message is **not forwarded** to the LLM
+- A warning is logged to the audit trail
+- The user receives: `"Message blocked: potential prompt injection detected"`
+
+## Limitations
+
+- **Regex-based** — sophisticated attacks may bypass pattern matching
+- **No ML classifier** — a future version may add a lightweight classifier model
+- **False positives possible** — legitimate messages about security topics may trigger rules
+
+For enterprise deployments requiring stricter controls, contact us about custom classifier models.

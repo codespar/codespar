@@ -162,7 +162,6 @@ When the limit is exceeded, the server responds with `429 Too Many Requests` and
 | [Organizations](/docs/api/orgs) | `GET /api/orgs`, `POST /api/orgs`, `GET /api/orgs/:id` | Manage organizations (multi-tenant) |
 | [Webhooks](/docs/api/webhooks) | `POST /webhooks/github` | Receive GitHub webhook events |
 | [Scheduler](/docs/api/scheduler) | `GET /api/scheduler`, `POST /api/scheduler/:name/pause`, `POST /api/scheduler/:name/resume`, `DELETE /api/scheduler/:name` | Manage recurring scheduled tasks |
-| [Newsletter](/docs/api/newsletter) | `POST /api/newsletter/subscribe`, `GET /api/newsletter/subscribers`, `DELETE /api/newsletter/unsubscribe`, `GET /api/newsletter/count` | Newsletter subscriber management |
 
 ## Quick Start
 
@@ -197,5 +196,4 @@ curl "http://localhost:3000/api/audit?limit=5"
 - [Agent API](/docs/api/agents) -- Manage agents
 - [Project API](/docs/api/projects) -- Link repositories
 - [Scheduler API](/docs/api/scheduler) -- Recurring tasks
-- [Newsletter API](/docs/api/newsletter) -- Subscriber management
 - [Configuration](/docs/configuration) -- Environment variables and setup
