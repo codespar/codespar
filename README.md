@@ -43,11 +43,13 @@
 | Slack Thread Support (responses in threads) | ✅ Working |
 | Image Vision (screenshot analysis, all channels) | ✅ Working |
 | Smart File Picker (Claude Haiku file selection) | ✅ Working |
+| Context-Aware Agent (language detection, project context gathering) | ✅ Working |
 | File Attachments (Slack files.uploadV2) | ✅ Working |
 | API Versioning (/v1/ prefix on all endpoints) | ✅ Working |
 | Create/Delete Agent API | ✅ Working |
 | Newsletter + Resend Integration | ✅ Working |
 | Structured Logging + Metrics Endpoint | ✅ Working |
+| Zod Request Validation (all API endpoints) | ✅ Working |
 | Rate Limiting (100/min API, 30/min webhooks) | ✅ Working |
 | Webhook Signature Validation (HMAC-SHA256) | ✅ Working |
 | GitHub Actions CI/CD | ✅ Working |
@@ -67,7 +69,7 @@
 | Billing & Usage Page (API metrics, agent stats) | ✅ Working |
 | Dashboard Integrations Page (17 services, 4 categories) | ✅ Working |
 | Dashboard (codespar.dev/dashboard) | ✅ Working |
-| Docs Site (docs.codespar.dev, 62 pages) | ✅ Working |
+| Docs Site (docs.codespar.dev, 75 pages) | ✅ Working |
 | Docs Search (Cmd+K) | ✅ Working |
 | MCP Server Generator (enterprise) | ✅ Working |
 | AgentGate Governance (enterprise) | ✅ Working |
@@ -109,8 +111,10 @@ Each project gets its own persistent agent that monitors builds, investigates fa
 - **Observability dashboards** -- Vercel and Railway API integration for deploy metrics, with Recharts-powered dashboards.
 - **Per-org integration tokens** -- organization-scoped tokens for Vercel, Railway, Sentry, and Datadog integrations.
 - **3 new commands** -- `docs` (search documentation), `scan` (codebase analysis for security/lint/type issues), `perf` (performance metrics and regression detection). 24 commands total.
+- **Webhook server decomposition** -- the monolithic webhook handler was decomposed into 8 route modules (480-line orchestrator + 8 focused modules) for maintainability and testability.
+- **Context-aware agents** -- language detection and project context gathering for smarter responses across all channels.
 - **CONTRIBUTING.md and CHANGELOG.md** -- contribution guidelines and a detailed changelog are now included in the repository.
-- **94 unit tests** -- Intent Parser, RBAC, FileStorage, Identity, and more.
+- **186+ unit tests** -- Intent Parser, RBAC, FileStorage, Identity, and more.
 
 ## Quick Start
 
@@ -316,7 +320,7 @@ Agents earn trust over time. You control the pace.
 4. RBAC. 6 roles (owner to read-only + emergency_admin), 15 permissions.
 5. ABAC Policies. Time windows, environment restrictions, quorum.
 6. Agent Sandboxing. Each agent scoped to project, no cross-project data.
-7. Prompt Injection Defense. Pattern blocklist + risk classifier + template isolation.
+7. Prompt Injection Defense. Pattern blocklist + risk classifier + template isolation + Prompt Injection Guard.
 8. Execution Sandbox. Docker container per task, restricted filesystem/network.
 9. Output Validation. Scan for leaked secrets before sending to channels.
 10. Audit Trail. Immutable hash chain, 1-year retention.
@@ -334,7 +338,9 @@ Self-healing Loop (smart alerts → auto-fix → autonomous healing L3-L5)
         ↓
 Execution Engine (GitHub API + Claude Sonnet)
         ↓
-Storage (FileStorage JSON, PostgreSQL planned)
+Storage (PostgreSQL 16, FileStorage fallback)
+        ↓
+Plugin System (pluginRegistry, PolicyHook, ObservabilityHook, SecretsHook)
         ↓
 Observability (Claude API instrumentation, Vercel/Railway metrics, Recharts dashboards)
 ```
@@ -345,9 +351,9 @@ Observability (Claude API instrumentation, Vercel/Railway metrics, Recharts dash
 |-----------|--------|
 | Runtime | Node.js 22 + TypeScript 5.4 |
 | Framework | Fastify 5 |
-| Database | FileStorage (JSON). PostgreSQL 16 + pgvector planned. |
+| Database | PostgreSQL 16 via Drizzle ORM (FileStorage fallback for development) |
 | Cache/Queue | Redis 7 (Streams + Pub/Sub) |
-| ORM | Drizzle ORM (planned) |
+| ORM | Drizzle ORM |
 | AI | Anthropic Messages API (Claude Sonnet, Claude Haiku) |
 | Execution | Docker containers (pooled) |
 | Monorepo | Turborepo |
