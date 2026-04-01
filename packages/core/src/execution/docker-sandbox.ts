@@ -142,8 +142,8 @@ export class DockerSandbox implements ExecutionSandbox {
     const stderrChunks: Buffer[] = [];
 
     // Demux Docker multiplexed stream
-    const stdout = { write: (chunk: Buffer) => stdoutChunks.push(chunk) } as NodeJS.WritableStream;
-    const stderr = { write: (chunk: Buffer) => stderrChunks.push(chunk) } as NodeJS.WritableStream;
+    const stdout = { write: (chunk: Buffer) => stdoutChunks.push(chunk) } as unknown as NodeJS.WritableStream;
+    const stderr = { write: (chunk: Buffer) => stderrChunks.push(chunk) } as unknown as NodeJS.WritableStream;
     container.modem.demuxStream(stream, stdout, stderr);
 
     await container.start();

@@ -6,7 +6,7 @@
  */
 
 import { EventEmitter } from "node:events";
-import type Redis from "ioredis";
+import type { Redis } from "ioredis";
 
 // ── Types ───────────────────────────────────────────────────────────
 

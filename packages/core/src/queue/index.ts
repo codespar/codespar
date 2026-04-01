@@ -22,7 +22,7 @@ export {
 import { getRedisClient } from "./redis-client.js";
 import { RedisEventBus, InMemoryEventBus, type EventBus } from "./event-bus.js";
 import { RedisTaskQueue, InMemoryTaskQueue, type TaskQueue } from "./task-queue.js";
-import Redis from "ioredis";
+import { Redis } from "ioredis";
 
 /**
  * Create an EventBus instance.
@@ -39,7 +39,7 @@ export function createEventBus(): EventBus {
   const url = process.env.REDIS_URL!;
   const sub = new Redis(url, {
     maxRetriesPerRequest: 3,
-    retryStrategy: (times) => Math.min(times * 200, 5000),
+    retryStrategy: (times: number) => Math.min(times * 200, 5000),
     lazyConnect: true,
   });
 

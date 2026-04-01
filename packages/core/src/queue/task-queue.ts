@@ -5,7 +5,7 @@
  * Falls back to a simple in-memory FIFO array when Redis is unavailable.
  */
 
-import type Redis from "ioredis";
+import type { Redis } from "ioredis";
 
 // ── Types ───────────────────────────────────────────────────────────
 
@@ -71,7 +71,7 @@ export class RedisTaskQueue implements TaskQueue {
       "data",
       JSON.stringify(task),
     );
-    return id;
+    return id ?? "";
   }
 
   async dequeue(consumer: string): Promise<QueuedTask | null> {
@@ -91,7 +91,7 @@ export class RedisTaskQueue implements TaskQueue {
     if (!results || results.length === 0) return null;
 
     // results shape: [[streamKey, [[entryId, [field, value, ...]]]]]
-    const entries = results[0][1] as Array<[string, string[]]>;
+    const entries = (results as Array<[string, Array<[string, string[]]>]>)[0][1];
     if (!entries || entries.length === 0) return null;
 
     const [entryId, fields] = entries[0];
