@@ -15,6 +15,7 @@ import type { NormalizedMessage } from "../../types/normalized-message.js";
 import type { ChannelResponse } from "../../types/channel-adapter.js";
 import type { EventBus } from "../../queue/event-bus.js";
 import type { TaskQueue } from "../../queue/task-queue.js";
+import type { ContainerPool } from "../../execution/container-pool.js";
 
 /** Route registration helper — registers on both /path and /v1/path */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -44,4 +45,6 @@ export interface ServerContext {
   broadcastEvent(event: { type: string; data: unknown }, orgId?: string): void;
   /** SSE connections set */
   sseConnections: Set<{ reply: FastifyReply; orgId: string }>;
+  /** Pre-warmed Docker container pool (null if Docker unavailable) */
+  containerPool: ContainerPool | null;
 }

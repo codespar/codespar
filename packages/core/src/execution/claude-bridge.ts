@@ -13,6 +13,8 @@ import { GitHubClient } from "../github/index.js";
 import { createLogger } from "../observability/logger.js";
 import { metrics } from "../observability/metrics.js";
 import { pluginRegistry } from "../plugins/registry.js";
+import type { ContainerPool } from "./container-pool.js";
+import type { SandboxResult } from "./sandbox.js";
 
 const log = createLogger("claude-bridge");
 
@@ -51,6 +53,8 @@ export interface ExecutionRequest {
   imageUrls?: Array<{ url: string; mimeType?: string }>;
   /** Progress callback for real-time updates */
   onProgress?: (event: ProgressEvent) => void;
+  /** When true, execute the command in a Docker sandbox instead of via Anthropic API */
+  useDocker?: boolean;
 }
 
 export interface RepoExecutionRequest extends ExecutionRequest {
@@ -81,6 +85,12 @@ Be concise but thorough. Use code blocks with file paths. Focus on practical, pr
 
 export class ClaudeBridge {
   private available: boolean = false;
+  private containerPool: ContainerPool | null = null;
+
+  /** Inject a container pool for Docker-based execution. */
+  setContainerPool(pool: ContainerPool): void {
+    this.containerPool = pool;
+  }
 
   /** Check if the Anthropic API is available (API key is set). */
   async isAvailable(): Promise<boolean> {
@@ -104,6 +114,11 @@ export class ClaudeBridge {
         exitCode: null,
         simulated: false,
       };
+    }
+
+    // Docker sandbox path (opt-in via useDocker flag)
+    if (request.useDocker && this.containerPool) {
+      return this.executeInDocker(request);
     }
 
     const apiKey = process.env.ANTHROPIC_API_KEY;
@@ -639,6 +654,104 @@ Respond with ONLY the file paths, one per line. No explanations, no markdown, no
     } catch (err) {
       console.log(`[claude-bridge] File picker error: ${err instanceof Error ? err.message : String(err)}`);
       return [];
+    }
+  }
+
+  /**
+   * Execute an instruction inside a Docker sandbox container.
+   * Acquires a container from the pool, runs the command via `docker exec`,
+   * and releases the container back to the pool afterward.
+   */
+  private async executeInDocker(request: ExecutionRequest): Promise<ExecutionResult> {
+    const pool = this.containerPool!;
+    const startTime = Date.now();
+    let container: import("dockerode").Container | undefined;
+
+    try {
+      request.onProgress?.({ type: "status", message: "Acquiring Docker container..." });
+      container = await pool.acquire();
+
+      // Start the container if it hasn't been started yet (pool containers
+      // are created with `sleep infinity` but may not be running).
+      try {
+        const info = await container.inspect();
+        if (!info.State.Running) {
+          await container.start();
+        }
+      } catch {
+        // If inspect fails the container may have been removed; create falls through to error
+        await container.start();
+      }
+
+      request.onProgress?.({ type: "status", message: "Executing in Docker sandbox..." });
+
+      // Execute the instruction as a shell command inside the container
+      const exec = await container.exec({
+        Cmd: ["sh", "-c", request.instruction],
+        AttachStdout: true,
+        AttachStderr: true,
+        WorkingDir: request.workDir || "/workspace",
+      });
+
+      const stream = await exec.start({ hijack: true, stdin: false });
+      const stdoutChunks: Buffer[] = [];
+      const stderrChunks: Buffer[] = [];
+
+      // Demux the multiplexed Docker stream
+      const stdout = { write: (chunk: Buffer) => { stdoutChunks.push(chunk); } } as unknown as NodeJS.WritableStream;
+      const stderr = { write: (chunk: Buffer) => { stderrChunks.push(chunk); } } as unknown as NodeJS.WritableStream;
+      container.modem.demuxStream(stream, stdout, stderr);
+
+      // Wait for the exec to finish (with timeout)
+      await new Promise<void>((resolve, reject) => {
+        const timeout = setTimeout(() => {
+          stream.destroy();
+          reject(new Error("Docker execution timed out"));
+        }, request.timeout ?? 60_000);
+
+        stream.on("end", () => {
+          clearTimeout(timeout);
+          resolve();
+        });
+        stream.on("error", (err: Error) => {
+          clearTimeout(timeout);
+          reject(err);
+        });
+      });
+
+      const inspectResult = await exec.inspect();
+      const exitCode = inspectResult.ExitCode ?? 1;
+      const stdoutStr = Buffer.concat(stdoutChunks).toString("utf-8");
+      const stderrStr = Buffer.concat(stderrChunks).toString("utf-8");
+      const durationMs = Date.now() - startTime;
+
+      log.info("Docker execution completed", { taskId: request.taskId, exitCode, durationMs });
+      metrics.increment("docker.executions");
+      metrics.observe("docker.execution_ms", durationMs);
+
+      return {
+        taskId: request.taskId,
+        status: exitCode === 0 ? "completed" : "failed",
+        output: (stdoutStr + (stderrStr ? `\n--- stderr ---\n${stderrStr}` : "")).slice(0, 5000),
+        durationMs,
+        exitCode,
+        simulated: false,
+      };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Unknown error";
+      log.error("Docker execution failed", { taskId: request.taskId, error: message });
+      return {
+        taskId: request.taskId,
+        status: message.includes("timed out") ? "timeout" : "failed",
+        output: `Docker execution error: ${message}`,
+        durationMs: Date.now() - startTime,
+        exitCode: null,
+        simulated: false,
+      };
+    } finally {
+      if (container) {
+        await pool.release(container).catch(() => { /* best-effort */ });
+      }
     }
   }
 
