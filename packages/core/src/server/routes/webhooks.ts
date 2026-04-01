@@ -307,6 +307,16 @@ export function registerWebhookRoutes(route: RouteFn, ctx: ServerContext): void 
         data: { project: name, state, url, error: errorMessage || undefined, orgId },
       }, orgId);
 
+      // Publish to event bus for cross-service subscribers
+      if (ctx.eventBus) {
+        ctx.eventBus.publish("deploy:status", {
+          type: "deploy:status",
+          projectId: name,
+          timestamp: Date.now(),
+          payload: { project: name, state, url, error: errorMessage || undefined, source: "vercel", orgId },
+        }).catch(() => {});
+      }
+
       // For failures, notify connected channels
       if (state === "ERROR" || state === "error" || type === "deployment.error") {
         if (ctx.alertHandler) {
@@ -391,6 +401,16 @@ export function registerWebhookRoutes(route: RouteFn, ctx: ServerContext): void 
       });
 
       broadcastEvent({ type: "deploy.status", data: { project, status, source, orgId } }, orgId);
+
+      // Publish to event bus for cross-service subscribers
+      if (ctx.eventBus) {
+        ctx.eventBus.publish("deploy:status", {
+          type: "deploy:status",
+          projectId: project,
+          timestamp: Date.now(),
+          payload: { project, status, source, orgId },
+        }).catch(() => {});
+      }
 
       if (status === "failure" && ctx.alertHandler) {
         await ctx.alertHandler({

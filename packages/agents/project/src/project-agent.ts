@@ -21,9 +21,13 @@ import type {
   StorageProvider,
   ProjectConfig,
   CIEvent,
+  EventBus,
+  EventBusChannel,
+  TaskQueue,
+  QueuedTask,
 } from "@codespar/core";
 
-import { ApprovalManager, VectorStore, IdentityStore, GitHubClient, generateSmartResponse, metrics } from "@codespar/core";
+import { ApprovalManager, VectorStore, IdentityStore, GitHubClient, generateSmartResponse, metrics, createTaskQueue } from "@codespar/core";
 import type { AgentContext } from "@codespar/core";
 import { TaskAgent } from "@codespar/agent-task";
 import { DeployAgent } from "@codespar/agent-deploy";
@@ -87,6 +91,8 @@ export class ProjectAgent implements Agent {
   private identityStore: IdentityStore | null = null;
   private approvalManager: ApprovalManager;
   private deployAgent: DeployAgent;
+  private eventBus: EventBus | null = null;
+  private redisTaskQueue: TaskQueue | null = null;
 
   constructor(
     config: AgentConfig,
@@ -118,8 +124,25 @@ export class ProjectAgent implements Agent {
     this.identityStore = store;
   }
 
+  /** Attach the event bus for publishing agent lifecycle events. */
+  setEventBus(bus: EventBus): void {
+    this.eventBus = bus;
+  }
+
   get state(): AgentState {
     return this._state;
+  }
+
+  /** Fire-and-forget publish to event bus. Errors are silently ignored. */
+  private publishEvent(channel: EventBusChannel, payload: unknown): void {
+    if (!this.eventBus) return;
+    this.eventBus.publish(channel, {
+      type: channel,
+      agentId: this.config.id,
+      projectId: this.config.projectId,
+      timestamp: Date.now(),
+      payload,
+    }).catch(() => {});
   }
 
   async initialize(): Promise<void> {
@@ -150,6 +173,17 @@ export class ProjectAgent implements Agent {
 
     this.startedAt = new Date();
     this._state = "IDLE";
+
+    // Initialize per-project task queue (Redis Streams or in-memory)
+    if (this.config.projectId) {
+      try {
+        this.redisTaskQueue = createTaskQueue(this.config.projectId);
+      } catch {
+        // Task queue is optional — continue without it
+      }
+    }
+
+    this.publishEvent("agent:status", { state: "IDLE", reason: "initialized" });
   }
 
   async handleMessage(
@@ -157,6 +191,7 @@ export class ProjectAgent implements Agent {
     intent: ParsedIntent
   ): Promise<ChannelResponse> {
     this._state = "ACTIVE";
+    this.publishEvent("agent:status", { state: "ACTIVE", intent: intent.type });
     const handlerStart = Date.now();
     this.tasksHandled++;
 
@@ -204,6 +239,7 @@ export class ProjectAgent implements Agent {
           });
         }
         this._state = "IDLE";
+        this.publishEvent("agent:status", { state: "IDLE", reason: "smart_response" });
         return { text: `[${this.config.id}] ${smartResponse}` };
       }
     }
@@ -994,6 +1030,7 @@ Focus on: ${perfTarget}`;
     metrics.observe("agent.tool_latency_ms", Date.now() - handlerStart);
 
     this._state = "IDLE";
+    this.publishEvent("agent:status", { state: "IDLE", latencyMs: Date.now() - handlerStart });
     return response;
   }
 
@@ -1363,6 +1400,30 @@ Focus on: ${perfTarget}`;
     this.activeTaskCount++;
     this.taskAgentCounter++;
     const taskAgentId = `${this.config.id}-task-${this.taskAgentCounter}`;
+    const instruction = intent.params.instruction || intent.params.issue || intent.rawText;
+
+    // Enqueue to the Redis-backed task queue for observability
+    let queuedTaskId: string | undefined;
+    if (this.redisTaskQueue) {
+      try {
+        queuedTaskId = await this.redisTaskQueue.enqueue({
+          type: intent.type,
+          agentId: taskAgentId,
+          projectId: this.config.projectId || this.config.id,
+          payload: { instruction, intent: intent.type },
+          createdAt: Date.now(),
+        });
+      } catch {
+        // Task queue is best-effort — continue without it
+      }
+    }
+
+    this.publishEvent("task:created", {
+      taskAgentId,
+      intent: intent.type,
+      instruction: typeof instruction === "string" ? instruction.slice(0, 200) : "",
+      queuedTaskId,
+    });
 
     const taskAgent = new TaskAgent(
       {
@@ -1378,6 +1439,18 @@ Focus on: ${perfTarget}`;
       await taskAgent.initialize();
       const result = await taskAgent.handleMessage(message, intent);
       await taskAgent.shutdown();
+
+      // Acknowledge the queued task and publish completion
+      if (queuedTaskId && this.redisTaskQueue) {
+        this.redisTaskQueue.acknowledge(queuedTaskId).catch(() => {});
+      }
+      this.publishEvent("task:completed", {
+        taskAgentId,
+        intent: intent.type,
+        queuedTaskId,
+        success: true,
+      });
+
       return result;
     } finally {
       this.activeTaskCount--;
