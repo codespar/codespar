@@ -114,7 +114,10 @@ Each project gets its own persistent agent that monitors builds, investigates fa
 - **Webhook server decomposition** -- the monolithic webhook handler was decomposed into 8 route modules (480-line orchestrator + 8 focused modules) for maintainability and testability.
 - **Context-aware agents** -- language detection and project context gathering for smarter responses across all channels.
 - **CONTRIBUTING.md and CHANGELOG.md** -- contribution guidelines and a detailed changelog are now included in the repository.
-- **186+ unit tests** -- Intent Parser, RBAC, FileStorage, Identity, and more.
+- **A2A Agent Cards** -- each of the 8 agent types publishes metadata (skills, capabilities, lifecycle) via `/.well-known/agent.json` discovery endpoint. Follows the A2A (Agent-to-Agent) protocol pattern for interoperability with external agent frameworks.
+- **Redis Pub/Sub + Streams** -- event bus for real-time agent progress/status updates (5 typed channels), task queue using Redis Streams with consumer groups for reliable at-least-once delivery. Auto-detects `REDIS_URL`; falls back to in-memory EventEmitter and FIFO queue for local dev without Redis.
+- **Docker container pool** -- `DockerSandbox` for isolated task execution with memory/CPU limits, network isolation, tmpfs, and timeout enforcement. `ContainerPool` pre-warms containers for fast acquisition. Falls back to Claude API bridge when Docker is unavailable.
+- **269+ unit tests** -- Intent Parser, RBAC, FileStorage, Identity, A2A Agent Cards, Redis queue, Docker sandbox, and more.
 
 ## Quick Start
 
