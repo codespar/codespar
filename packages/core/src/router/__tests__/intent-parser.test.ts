@@ -175,6 +175,21 @@ describe("Intent Parser — regex classification", () => {
     expect(result.params.name).toBe("John");
   });
 
+  // ── spec ──────────────────────────────────────────────────────
+  it('parses "spec add user authentication" → spec with description', async () => {
+    const result = await parseIntent("spec add user authentication");
+    expect(result.type).toBe("spec");
+    expect(result.params.description).toBe("add user authentication");
+    expect(result.confidence).toBe(1.0);
+    expect(result.risk).toBe("low");
+  });
+
+  it('parses "spec payment processing flow" → spec', async () => {
+    const result = await parseIntent("spec payment processing flow");
+    expect(result.type).toBe("spec");
+    expect(result.params.description).toBe("payment processing flow");
+  });
+
   // ── unknown ─────────────────────────────────────────────────────
   it('parses "random gibberish" → unknown', async () => {
     const result = await parseIntent("random gibberish");

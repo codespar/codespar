@@ -148,6 +148,7 @@ const INTENT_PERMISSION: Record<IntentType, Permission | null> = {
   prs: "view_status", // listing PRs is read-only
   merge: "approve_pr",
   plan: "instruct_agent",
+  spec: "instruct_agent",
   lens: "view_status",
   demo: null, // always allowed -- demos are read-only
   docs: "view_status",

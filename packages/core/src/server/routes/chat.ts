@@ -170,6 +170,10 @@ export function registerChatRoutes(route: RouteFn, ctx: ServerContext): void {
         sendEvent("progress", {
           message: "Breaking down the feature into tasks...",
         });
+      } else if (intent.type === "spec") {
+        sendEvent("progress", {
+          message: "Generating structured spec (EARS notation)...",
+        });
       }
 
       try {

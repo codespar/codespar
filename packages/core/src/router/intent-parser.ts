@@ -131,6 +131,11 @@ const PATTERNS: PatternRule[] = [
     pattern: /^perf(?:ormance)?(?:\s+(report|bundle|latency|all))?$/i,
     paramExtractor: (m) => ({ target: m[1] || "report" }),
   },
+  {
+    type: "spec",
+    pattern: /^spec\s+(.+)$/i,
+    paramExtractor: (m) => ({ description: m[1] }),
+  },
 ];
 
 /** Synchronous regex-only parser (used internally). */

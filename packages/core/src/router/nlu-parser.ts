@@ -28,6 +28,7 @@ Classify the user's message into ONE of these intents:
 - prs: asking about pull requests (how many PRs, list PRs, open PRs)
 - merge: asking to merge a pull request
 - plan: asking to plan or break down a large feature into sub-tasks
+- spec: asking to generate a structured spec, requirements document, or EARS-notation specification for a feature
 - lens: asking about data, analytics, database queries, metrics, charts, reports
 - demo: asking to see a feature demo or demonstration
 - unknown: cannot determine intent
@@ -35,6 +36,7 @@ Classify the user's message into ONE of these intents:
 Respond with ONLY a JSON object: {"intent":"<type>","params":{},"confidence":0.95}
 
 For instruct/fix/plan, extract the task description into params.instruction or params.issue.
+For spec, extract the feature description into params.description.
 For deploy/rollback, extract environment into params.environment.
 For review, extract PR number into params.prNumber.
 For autonomy, extract level into params.level.`;
