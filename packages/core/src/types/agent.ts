@@ -51,6 +51,28 @@ export interface AgentConfig {
   orgId?: string;
 }
 
+export interface AgentSkill {
+  id: string;
+  name: string;
+  description: string;
+  inputModes: string[];
+  outputModes: string[];
+}
+
+export interface AgentMetadata {
+  type: AgentType;
+  displayName: string;
+  description: string;
+  lifecycle: "persistent" | "ephemeral";
+  capabilities: {
+    streaming: boolean;
+    pushNotifications: boolean;
+    autonomyLevels: string[];
+  };
+  skills: AgentSkill[];
+  requiredServices: string[];
+}
+
 export interface Agent {
   /** Agent configuration */
   readonly config: AgentConfig;

@@ -5,7 +5,7 @@
  * Custom types can be registered at startup.
  */
 
-import type { Agent, AgentConfig } from "../types/agent.js";
+import type { Agent, AgentConfig, AgentMetadata, AgentType } from "../types/agent.js";
 import type { StorageProvider } from "../storage/types.js";
 import { createLogger } from "../observability/logger.js";
 
@@ -40,4 +40,27 @@ export function getRegisteredTypes(): string[] {
 /** Check if an agent type is registered. */
 export function isRegisteredType(type: string): boolean {
   return registry.has(type);
+}
+
+// ── Agent Metadata Registry (A2A Agent Cards) ────────────────────────
+
+const metadataMap = new Map<AgentType, AgentMetadata>();
+
+/** Register metadata for an agent type (A2A Agent Card). */
+export function registerAgentMetadata(type: AgentType, metadata: AgentMetadata): void {
+  if (metadataMap.has(type)) {
+    log.warn("Overwriting existing agent metadata", { type });
+  }
+  metadataMap.set(type, metadata);
+  log.info("Registered agent metadata", { type });
+}
+
+/** Get metadata for a specific agent type. */
+export function getAgentMetadata(type: AgentType): AgentMetadata | undefined {
+  return metadataMap.get(type);
+}
+
+/** Get metadata for all registered agent types. */
+export function getAllAgentMetadata(): AgentMetadata[] {
+  return Array.from(metadataMap.values());
 }

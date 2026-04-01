@@ -3,7 +3,7 @@
  */
 
 import { randomUUID } from "node:crypto";
-import { getRegisteredTypes, getAgentFactory, isRegisteredType } from "../../agents/agent-registry.js";
+import { getRegisteredTypes, getAgentFactory, isRegisteredType, getAllAgentMetadata, getAgentMetadata } from "../../agents/agent-registry.js";
 import { createLogger } from "../../observability/logger.js";
 import { metrics } from "../../observability/metrics.js";
 import { parseIntent } from "../../router/intent-parser.js";
@@ -537,5 +537,66 @@ export function registerAgentRoutes(route: RouteFn, ctx: ServerContext): void {
       }
     );
 
+    // ── A2A Agent Cards ──────────────────────────────────────────────
+
+    // List all agent metadata in A2A Agent Card format
+    route("get", "/api/agent-cards", async (_request: any, _reply: any) => {
+      const allMetadata = getAllAgentMetadata();
+      const baseUrl = process.env.WEBHOOK_BASE_URL || "https://codespar-production.up.railway.app";
+
+      return {
+        agents: allMetadata.map((meta) => ({
+          name: meta.displayName,
+          description: meta.description,
+          url: `${baseUrl}/api/agent-cards/${meta.type}`,
+          version: "1.0.0",
+          lifecycle: meta.lifecycle,
+          capabilities: {
+            streaming: meta.capabilities.streaming,
+            pushNotifications: meta.capabilities.pushNotifications,
+            autonomyLevels: meta.capabilities.autonomyLevels,
+          },
+          skills: meta.skills.map((skill) => ({
+            id: skill.id,
+            name: skill.name,
+            description: skill.description,
+            inputModes: skill.inputModes,
+            outputModes: skill.outputModes,
+          })),
+          requiredServices: meta.requiredServices,
+        })),
+      };
+    });
+
+    // Get a single agent card by type
+    route("get", "/api/agent-cards/:type", async (request: any, reply: any) => {
+      const { type } = request.params;
+      const meta = getAgentMetadata(type);
+      if (!meta) {
+        return reply.status(404).send({ error: `No agent card found for type '${type}'` });
+      }
+
+      const baseUrl = process.env.WEBHOOK_BASE_URL || "https://codespar-production.up.railway.app";
+      return {
+        name: meta.displayName,
+        description: meta.description,
+        url: `${baseUrl}/api/agent-cards/${meta.type}`,
+        version: "1.0.0",
+        lifecycle: meta.lifecycle,
+        capabilities: {
+          streaming: meta.capabilities.streaming,
+          pushNotifications: meta.capabilities.pushNotifications,
+          autonomyLevels: meta.capabilities.autonomyLevels,
+        },
+        skills: meta.skills.map((skill) => ({
+          id: skill.id,
+          name: skill.name,
+          description: skill.description,
+          inputModes: skill.inputModes,
+          outputModes: skill.outputModes,
+        })),
+        requiredServices: meta.requiredServices,
+      };
+    });
 
 }

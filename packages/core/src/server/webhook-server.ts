@@ -21,7 +21,7 @@ import { createHmac, randomUUID, timingSafeEqual } from "node:crypto";
 import Fastify, { type FastifyInstance, type FastifyReply } from "fastify";
 import cors from "@fastify/cors";
 import { parseGitHubWebhook, type CIEvent } from "../webhooks/github-handler.js";
-import { getRegisteredTypes, getAgentFactory, isRegisteredType } from "../agents/agent-registry.js";
+import { getRegisteredTypes, getAgentFactory, isRegisteredType, getAllAgentMetadata } from "../agents/agent-registry.js";
 import { createLogger } from "../observability/logger.js";
 import { metrics } from "../observability/metrics.js";
 import { scheduler } from "../scheduler/scheduler.js";
@@ -39,6 +39,7 @@ import type { IdentityStore } from "../auth/identity-store.js";
 import type { VectorStore } from "../memory/vector-store.js";
 import type { ChannelType, NormalizedMessage } from "../types/normalized-message.js";
 import { parseIntent } from "../router/intent-parser.js";
+import { registerAllAgentMetadata } from "../agents/agent-metadata.js";
 import { registerObservabilityRoutes } from "./routes/observability.js";
 import { registerWebhookRoutes } from "./routes/webhooks.js";
 import { registerOAuthGitHubRoutes } from "./routes/oauth-github.js";
@@ -182,6 +183,8 @@ export class WebhookServer {
   private agentFactory: AgentFactory | null = null;
   private identityStore: IdentityStore | null = null;
   private vectorStore: VectorStore | null = null;
+  private eventBus: import("../queue/event-bus.js").EventBus | null = null;
+  private taskQueue: import("../queue/task-queue.js").TaskQueue | null = null;
   private storageBaseDir: string = ".codespar";
   private orgStorageCache: Map<string, StorageProvider> = new Map();
   private chatHandler: ((message: import("../types/normalized-message.js").NormalizedMessage, orgId?: string) => Promise<import("../types/channel-adapter.js").ChannelResponse | null>) | null = null;
@@ -195,6 +198,7 @@ export class WebhookServer {
 
     this.app = Fastify({ logger: false });
     this.app.register(cors, { origin: true });
+    registerAllAgentMetadata();
     this.registerRequestTracking();
     this.registerVersionHeader();
     this.registerRateLimiting();
@@ -409,6 +413,36 @@ export class WebhookServer {
         eventLoopLagMs,
         activeConnections: sseConnections.size,
         nodeVersion: process.version,
+      };
+    });
+
+    // ── A2A Well-Known Agent Card Discovery ─────────────────────────
+    this.app.get("/.well-known/agent.json", async (_request, _reply) => {
+      const baseUrl = process.env.WEBHOOK_BASE_URL || "https://codespar-production.up.railway.app";
+      const allMetadata = getAllAgentMetadata();
+
+      return {
+        name: "CodeSpar",
+        description:
+          "Autonomous multi-agent platform for code projects. " +
+          "Monitors repos, executes tasks, reviews PRs, orchestrates deploys, and investigates incidents.",
+        url: baseUrl,
+        version: "1.0.0",
+        protocol: "a2a",
+        capabilities: {
+          streaming: true,
+          pushNotifications: true,
+        },
+        agents: allMetadata.map((meta) => ({
+          name: meta.displayName,
+          description: meta.description,
+          url: `${baseUrl}/api/agent-cards/${meta.type}`,
+          version: "1.0.0",
+          lifecycle: meta.lifecycle,
+          capabilities: meta.capabilities,
+          skills: meta.skills,
+          requiredServices: meta.requiredServices,
+        })),
       };
     });
 

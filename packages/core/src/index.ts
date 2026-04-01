@@ -19,6 +19,8 @@ export type {
   AgentStatus,
   AgentType,
   AgentState,
+  AgentSkill,
+  AgentMetadata,
   AutonomyLevel,
 } from "./types/agent.js";
 
@@ -84,6 +86,11 @@ export {
   getAgentFactory,
   getRegisteredTypes,
   isRegisteredType,
+  registerAgentMetadata,
+  getAgentMetadata,
+  getAllAgentMetadata,
+  registerAllAgentMetadata,
+  AGENT_METADATA,
 } from "./agents/index.js";
 export type { AgentFactory as AgentPluginFactory } from "./agents/index.js";
 
