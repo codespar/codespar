@@ -30,12 +30,13 @@ import { DeployAgent } from "@codespar/agent-deploy";
 import { ReviewAgent } from "@codespar/agent-review";
 import { IncidentAgent } from "@codespar/agent-incident";
 
-const COMMANDS_HELP = `Available commands (24):
+const COMMANDS_HELP = `Available commands (25):
 
   Code & Tasks:
     instruct <task>           Execute a coding task (creates PR)
     fix <issue>               Investigate and propose fix
     plan <feature>            Break down a feature into sub-tasks
+    spec <feature>            Generate structured spec (EARS notation)
     lens <question>           Query data and get insights
 
   Pull Requests:
@@ -719,6 +720,65 @@ export class ProjectAgent implements Agent {
               project: this.config.projectId || "unknown",
               risk: intent.risk,
               detail: `Lens query: ${(intent.params.question || "").slice(0, 100)}`,
+              channel: message.channelType,
+              latency_ms: Date.now() - handlerStart,
+            },
+          });
+        }
+        break;
+      }
+
+      case "spec": {
+        const specDescription = intent.params.description || intent.rawText;
+        const specPrompt = `Generate a structured feature specification using EARS (Easy Approach to Requirements Syntax) notation for: "${specDescription}"
+
+Output the spec in three sections:
+
+## Requirements
+Use EARS "shall" statements in these patterns:
+- **Ubiquitous:** The system shall <action>.
+- **Event-driven:** When <event>, the system shall <action>.
+- **State-driven:** While <state>, the system shall <action>.
+- **Optional:** Where <condition>, the system shall <action>.
+- **Unwanted behavior:** If <condition>, then the system shall <action>.
+
+Number each requirement (REQ-001, REQ-002, etc.).
+
+## Design
+List 3-5 key architecture decisions needed for this feature. For each decision, state:
+- The decision
+- The rationale
+- Alternatives considered (brief)
+
+## Tasks
+Create an implementation checklist with checkboxes. Order tasks by dependency (prerequisite tasks first). Each task should be small enough to implement in a single PR. Format as:
+- [ ] Task description (estimated effort: S/M/L)
+
+Be specific and practical. Reference real patterns, libraries, and file structures. Do NOT be generic.`;
+
+        // Rewrite the message to send the spec prompt as an instruct command
+        const specMessage: NormalizedMessage = {
+          ...message,
+          text: `instruct ${specPrompt}`,
+        };
+        const specIntent: ParsedIntent = {
+          ...intent,
+          type: "instruct",
+          params: { instruction: specPrompt },
+        };
+        response = await this.delegateToTaskAgent(specMessage, specIntent);
+
+        if (this.storage) {
+          await this.storage.appendAudit({
+            actorType: "user",
+            actorId: message.channelUserId,
+            action: "spec.generated",
+            result: "success",
+            metadata: {
+              agentId: this.config.id,
+              project: this.config.projectId || "unknown",
+              risk: intent.risk,
+              detail: `Spec: ${specDescription.slice(0, 100)}`,
               channel: message.channelType,
               latency_ms: Date.now() - handlerStart,
             },
@@ -1871,9 +1931,10 @@ Focus on: ${perfTarget}`;
   merge PR #N         Merge pull requests
   prs                 List open PRs
   plan <feature>      Break down large features
+  spec <feature>      Generate structured spec (EARS)
   lens <question>     Query and analyze data
   deploy [env]        Trigger deployments
-  help                Show all 20 commands`;
+  help                Show all 25 commands`;
 
     if (target === "agent" || target === "all") {
       return {
