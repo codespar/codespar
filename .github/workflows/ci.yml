@@ -14,18 +14,6 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-          cache: npm
-      - run: npm install --legacy-peer-deps
-      - run: npm run build
+      - run: npm install
+      - run: npx turbo run build
       - run: npx vitest run
-
-  docs:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: npm
-      - run: npm install --legacy-peer-deps
-      - run: cd apps/docs && npx next build
