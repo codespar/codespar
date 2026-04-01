@@ -31,7 +31,19 @@ export type {
   A2ATaskRequest,
   A2ATaskStatus,
   A2ATaskResponse,
+  ExternalAgentCard,
+  ExternalAgentEntry,
+  ExternalAgentSkill,
 } from "./types/a2a.js";
+
+// A2A Outbound (client + registry)
+export { A2AClient, A2AClientError } from "./a2a/index.js";
+export type { A2AClientOptions } from "./a2a/index.js";
+export { A2ARegistry } from "./a2a/index.js";
+
+// A2A Outbound Policy Enforcement (AgentGate)
+export type { A2AOutboundPolicy, A2ACallContext, A2APolicyResult } from "./a2a/index.js";
+export { DEFAULT_A2A_POLICY, A2APolicyEvaluator, matchesPattern } from "./a2a/index.js";
 
 // Storage
 export type {

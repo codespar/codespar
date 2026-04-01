@@ -1,7 +1,9 @@
 /**
- * A2A (Agent-to-Agent) protocol types for inbound task handling.
+ * A2A (Agent-to-Agent) protocol types.
  *
- * Phase 2: Accept incoming task requests from external agents.
+ * Inbound: Accept incoming task requests from external agents.
+ * Outbound: Discover and invoke external A2A agents.
+ *
  * External agents discover skills via Agent Cards (Phase 1),
  * then submit tasks to the /a2a/tasks endpoint.
  */
@@ -39,4 +41,33 @@ export interface A2ATaskResponse {
   error?: { code: string; message: string };
   createdAt: number;
   updatedAt: number;
+}
+
+// ── External Agent Discovery (Outbound A2A) ──────────────────────────
+
+export interface ExternalAgentSkill {
+  id: string;
+  name: string;
+  description: string;
+}
+
+export interface ExternalAgentEntry {
+  type: string;
+  displayName: string;
+  description: string;
+  lifecycle: string;
+  skills: ExternalAgentSkill[];
+}
+
+/**
+ * Parsed representation of a remote agent's `.well-known/agent.json`.
+ * Cached by A2ARegistry with a configurable TTL.
+ */
+export interface ExternalAgentCard {
+  url: string;
+  name: string;
+  version?: string;
+  protocol?: string;
+  agents: ExternalAgentEntry[];
+  discoveredAt: number;
 }
