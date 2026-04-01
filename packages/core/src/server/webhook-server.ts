@@ -48,6 +48,11 @@ import { registerAgentRoutes } from "./routes/agents.js";
 import { registerChannelRoutes } from "./routes/channels.js";
 import { registerApprovalAuditRoutes } from "./routes/approval-audit.js";
 import { registerAdminRoutes } from "./routes/admin.js";
+import { registerA2ARoutes } from "./routes/a2a.js";
+import { createEventBus } from "../queue/index.js";
+import type { EventBus, EventBusChannel } from "../queue/event-bus.js";
+import { ContainerPool } from "../execution/container-pool.js";
+import { DockerSandbox } from "../execution/docker-sandbox.js";
 
 import type { ServerContext } from "./routes/types.js";
 
@@ -183,13 +188,14 @@ export class WebhookServer {
   private agentFactory: AgentFactory | null = null;
   private identityStore: IdentityStore | null = null;
   private vectorStore: VectorStore | null = null;
-  private eventBus: import("../queue/event-bus.js").EventBus | null = null;
+  private eventBus: EventBus | null = null;
   private taskQueue: import("../queue/task-queue.js").TaskQueue | null = null;
   private storageBaseDir: string = ".codespar";
   private orgStorageCache: Map<string, StorageProvider> = new Map();
   private chatHandler: ((message: import("../types/normalized-message.js").NormalizedMessage, orgId?: string) => Promise<import("../types/channel-adapter.js").ChannelResponse | null>) | null = null;
   private alertHandler: ((alert: DeployAlert) => Promise<void>) | null = null;
   private _vercelDedup: Map<string, number> = new Map();
+  private _containerPool: ContainerPool | null = null;
 
   constructor(config?: WebhookServerConfig) {
     this.port = config?.port ?? parseInt(process.env["PORT"] ?? "3000", 10);
@@ -286,9 +292,61 @@ export class WebhookServer {
     this.agentCount = count;
   }
 
+  /** Get the event bus instance (for external wiring, e.g. agents). */
+  getEventBus(): EventBus | null {
+    return this.eventBus;
+  }
+
+  /** Pre-warmed Docker container pool (null if Docker unavailable). */
+  get containerPool(): ContainerPool | null {
+    return this._containerPool;
+  }
+
   /** Start listening for incoming webhooks */
   async start(): Promise<void> {
     this.startedAt = new Date();
+
+    // Initialize the event bus (Redis Pub/Sub or in-memory fallback)
+    try {
+      this.eventBus = createEventBus();
+      log.info("Event bus initialized");
+
+      // Forward event bus messages to SSE clients
+      const channelsToForward: EventBusChannel[] = [
+        "agent:status",
+        "task:created",
+        "task:completed",
+        "deploy:status",
+        "agent:progress",
+      ];
+      for (const channel of channelsToForward) {
+        await this.eventBus.subscribe(channel, (msg) => {
+          broadcastEvent(
+            { type: channel, data: msg.payload },
+            msg.projectId,
+          );
+        });
+      }
+    } catch (err) {
+      log.warn("Event bus initialization failed, continuing without it", {
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+
+    // Initialize Docker container pool if Docker is available
+    try {
+      const probe = new DockerSandbox();
+      if (await probe.isAvailable()) {
+        this._containerPool = new ContainerPool();
+        await this._containerPool.warmUp(2);
+        log.info("Docker container pool initialized", { stats: this._containerPool.stats });
+      }
+    } catch (err) {
+      log.warn("Docker container pool unavailable, Docker execution disabled", {
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+
     await this.app.listen({ port: this.port, host: this.host });
     log.info("Listening", { host: this.host, port: this.port });
 
@@ -316,6 +374,14 @@ export class WebhookServer {
 
   /** Graceful shutdown */
   async stop(): Promise<void> {
+    if (this._containerPool) {
+      await this._containerPool.drain();
+      log.info("Docker container pool drained");
+    }
+    if (this.eventBus) {
+      await this.eventBus.close();
+      log.info("Event bus closed");
+    }
     await this.app.close();
     log.info("Stopped");
   }
@@ -501,7 +567,8 @@ export class WebhookServer {
     // ── Observability (extracted to routes/observability.ts) ──────
     registerObservabilityRoutes(route, this as unknown as ServerContext);
 
-
+    // ── A2A inbound task handling (extracted to routes/a2a.ts) ──────
+    registerA2ARoutes(route, this as unknown as ServerContext);
 
     // ── Admin: integrations, orgs, newsletter, scheduler (extracted to routes/admin.ts) ──────
     registerAdminRoutes(route, this as unknown as ServerContext);

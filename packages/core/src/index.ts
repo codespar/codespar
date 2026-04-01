@@ -27,6 +27,12 @@ export type {
 export type { ParsedIntent, IntentType, RiskLevel } from "./types/intent.js";
 export { INTENT_RISK } from "./types/intent.js";
 
+export type {
+  A2ATaskRequest,
+  A2ATaskStatus,
+  A2ATaskResponse,
+} from "./types/a2a.js";
+
 // Storage
 export type {
   AgentMemory,
@@ -106,6 +112,10 @@ export type {
   ExecutionSandbox,
 } from "./execution/index.js";
 export { DEFAULT_SANDBOX_CONFIG } from "./execution/index.js";
+export { DockerSandbox } from "./execution/index.js";
+export { ContainerPool } from "./execution/index.js";
+export type { PoolStats } from "./execution/index.js";
+export { createSandbox } from "./execution/index.js";
 
 // Memory (Vector Store)
 export { VectorStore } from "./memory/index.js";
@@ -146,3 +156,8 @@ export { PgStorage, createStorage } from "./storage/index.js";
 // Security
 export { PromptGuard, promptGuard } from "./security/prompt-guard.js";
 export type { PromptAnalysis } from "./security/prompt-guard.js";
+
+// Queue (Redis Pub/Sub event bus + task queue)
+export { createEventBus, createTaskQueue } from "./queue/index.js";
+export type { EventBus, EventBusChannel, EventBusMessage, EventBusHandler } from "./queue/event-bus.js";
+export type { TaskQueue, QueuedTask } from "./queue/task-queue.js";
