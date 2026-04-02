@@ -697,7 +697,8 @@ export function registerObservabilityRoutes(route: RouteFn, ctx: ServerContext):
       }
 
       try {
-        const projectFilter = projectSlug ? `&project=${projectSlug}` : "";
+        // Sentry &project= expects numeric project ID; if slug is non-numeric, omit it to avoid 400
+        const projectFilter = projectSlug && /^\d+$/.test(projectSlug) ? `&project=${projectSlug}` : "";
         const res = await fetch(
           `https://sentry.io/api/0/organizations/${orgSlug}/issues/?query=is:unresolved&sort=date${projectFilter}&limit=20`,
           { headers: { Authorization: `Bearer ${authToken}` } }
