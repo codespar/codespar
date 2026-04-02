@@ -117,6 +117,7 @@ export function registerWebhookRoutes(route: RouteFn, ctx: ServerContext): void 
         type: "ci.event",
         data: { repo: event.repo, type: event.type, status: event.status, branch: event.branch, orgId, agentId: resolvedAgentId },
       }, orgId);
+      broadcastEvent({ type: "log.entry", data: { time: new Date().toISOString(), level: event.status === "failure" ? "error" : "info", source: "github", action: `ci.${event.type}`, message: `${event.repo}: ${event.details.title || event.type}` } }, orgId);
 
       // Dispatch to all registered handlers
       const errors: Error[] = [];
@@ -306,6 +307,7 @@ export function registerWebhookRoutes(route: RouteFn, ctx: ServerContext): void 
         type: "deploy.status",
         data: { project: name, state, url, error: errorMessage || undefined, orgId },
       }, orgId);
+      broadcastEvent({ type: "log.entry", data: { time: new Date().toISOString(), level: (state === "ERROR" || state === "error") ? "error" : "info", source: "vercel", action: `deploy.${state}`, message: `${name}: ${state}${errorMessage ? ` — ${errorMessage.slice(0, 100)}` : ""}` } }, orgId);
 
       // Publish to event bus for cross-service subscribers
       if (ctx.eventBus) {
@@ -536,6 +538,7 @@ export function registerWebhookRoutes(route: RouteFn, ctx: ServerContext): void 
         type: "sentry.error",
         data: { title, culprit, level, project: projectName, count, userCount },
       }, orgId);
+      broadcastEvent({ type: "log.entry", data: { time: new Date().toISOString(), level: level === "fatal" ? "error" : level, source: "sentry", action: `error.${level}`, message: `${title}${culprit ? ` in ${culprit}` : ""}` } }, orgId);
 
       reply.send({ received: true, processed: true });
     });

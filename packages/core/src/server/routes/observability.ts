@@ -732,4 +732,19 @@ export function registerObservabilityRoutes(route: RouteFn, ctx: ServerContext):
       }
     });
 
+    // ── Incidents (grouped alerts) ─────────────────────────────────
+
+    route("get", "/api/observability/incidents", async (_request: any, _reply: any) => {
+      const { incidentGrouper } = await import("../../observability/incident-grouper.js");
+      return { incidents: incidentGrouper.getActive() };
+    });
+
+    route("post", "/api/observability/incidents/:id/acknowledge", async (request: any, reply: any) => {
+      const { id } = request.params;
+      const { incidentGrouper } = await import("../../observability/incident-grouper.js");
+      const ok = incidentGrouper.acknowledge(id);
+      if (!ok) return reply.status(404).send({ error: "Incident not found" });
+      return { acknowledged: true };
+    });
+
 }
