@@ -439,6 +439,7 @@ export function registerObservabilityRoutes(route: RouteFn, ctx: ServerContext):
           target: d.target,
           meta: d.meta,
           source: d.source,
+          inspectorUrl: d.inspectorUrl,
         }));
 
         // Process projects
