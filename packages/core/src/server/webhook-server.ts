@@ -251,6 +251,11 @@ export class WebhookServer {
     this.chatHandler = handler;
   }
 
+  /** Expose module-level SSE connections to route modules via ServerContext */
+  get sseConnections(): Set<{ reply: import("fastify").FastifyReply; orgId: string }> {
+    return sseConnections;
+  }
+
   /** Set the base directory used for org-scoped file storage */
   setStorageBaseDir(baseDir: string): void {
     this.storageBaseDir = baseDir;
