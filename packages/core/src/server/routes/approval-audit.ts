@@ -84,6 +84,7 @@ export function registerApprovalAuditRoutes(route: RouteFn, ctx: ServerContext):
         const pageSize = Math.min(Math.max(rawLimit, 1), 100);
         const pageNum = Math.max(parseInt(request.query.page ?? "1", 10), 1);
         const riskFilter = request.query.risk ?? "all";
+        const projectFilter = request.query.project ?? "";
         const orgId = ctx.getOrgId(request);
         const storage = ctx.getOrgStorage(orgId);
 
@@ -109,10 +110,18 @@ export function registerApprovalAuditRoutes(route: RouteFn, ctx: ServerContext):
           return true;
         });
 
+        // Apply project filter (if specified)
+        const projectFiltered = projectFilter
+          ? allEntries.filter((e) => {
+              const entryProject = String(e.metadata?.["project"] || "");
+              return entryProject === projectFilter || entryProject.includes(projectFilter);
+            })
+          : allEntries;
+
         const filtered =
           riskFilter === "all"
-            ? allEntries
-            : allEntries.filter(
+            ? projectFiltered
+            : projectFiltered.filter(
                 (e) =>
                   e.metadata?.["risk"] === riskFilter
               );
