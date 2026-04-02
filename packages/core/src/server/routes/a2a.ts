@@ -128,13 +128,24 @@ export function registerA2ARoutes(route: RouteFn, ctx: ServerContext): void {
     });
   });
 
-  // GET /a2a/tasks — List all tasks (with pagination)
+  // GET /a2a/tasks — List all tasks (with pagination, optional project filter)
   route("get", "/a2a/tasks", async (request: any, _reply: any) => {
     const query = request.query as Record<string, string> | undefined;
     const limit = Math.min(Math.max(parseInt(query?.limit ?? "50", 10) || 50, 1), 200);
     const offset = Math.max(parseInt(query?.offset ?? "0", 10) || 0, 0);
+    const projectFilter = query?.project ?? "";
 
-    const allTasks = Array.from(taskStore.values());
+    let allTasks = Array.from(taskStore.values());
+
+    // Apply project filter — match against skill prefix or agentType
+    if (projectFilter) {
+      allTasks = allTasks.filter((t) => {
+        const skill = t.skill || "";
+        const agentType = t.agentType || "";
+        return skill === projectFilter || skill.includes(projectFilter)
+          || agentType === projectFilter || agentType.includes(projectFilter);
+      });
+    }
 
     // Sort by most recent first
     allTasks.sort((a, b) => b.createdAt - a.createdAt);

@@ -600,10 +600,19 @@ export function registerObservabilityRoutes(route: RouteFn, ctx: ServerContext):
         } catch { /* Vercel API unavailable */ }
       }
 
-      // Sort by time (newest first) and limit
-      allLogs.sort((a, b) => new Date(String(b.time)).getTime() - new Date(String(a.time)).getTime());
+      // Apply project filter (if specified)
+      const projectFilter = String((request.query as Record<string, string>).project || "");
+      const filteredLogs = projectFilter
+        ? allLogs.filter((entry) => {
+            const entryDetail = String(entry.detail || "");
+            return entryDetail === projectFilter || entryDetail.includes(projectFilter);
+          })
+        : allLogs;
 
-      reply.send({ logs: allLogs.slice(0, 50), source: "combined" });
+      // Sort by time (newest first) and limit
+      filteredLogs.sort((a, b) => new Date(String(b.time)).getTime() - new Date(String(a.time)).getTime());
+
+      reply.send({ logs: filteredLogs.slice(0, 50), source: "combined" });
     });
 
     // ── Route metrics ──────────────────────────────
@@ -736,9 +745,14 @@ export function registerObservabilityRoutes(route: RouteFn, ctx: ServerContext):
 
     // ── Incidents (grouped alerts) ─────────────────────────────────
 
-    route("get", "/api/observability/incidents", async (_request: any, _reply: any) => {
+    route("get", "/api/observability/incidents", async (request: any, _reply: any) => {
       const { incidentGrouper } = await import("../../observability/incident-grouper.js");
-      return { incidents: incidentGrouper.getActive() };
+      const projectFilter = String((request.query as Record<string, string>)?.project || "");
+      const allIncidents = incidentGrouper.getActive();
+      const filtered = projectFilter
+        ? allIncidents.filter((inc) => inc.project === projectFilter || inc.project.includes(projectFilter))
+        : allIncidents;
+      return { incidents: filtered };
     });
 
     route("post", "/api/observability/incidents/:id/acknowledge", async (request: any, reply: any) => {

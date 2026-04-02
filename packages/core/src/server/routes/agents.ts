@@ -44,9 +44,10 @@ export function registerAgentRoutes(route: RouteFn, ctx: ServerContext): void {
       return { types: getRegisteredTypes() };
     });
 
-    // List all agents with status (filtered by org)
+    // List all agents with status (filtered by org, optionally by project)
     route("get", "/api/agents", async (request: any, _reply: any) => {
       const orgId = ctx.getOrgId(request);
+      const projectFilter = (request.query as Record<string, string>)?.project ?? "";
       const statuses = ctx.agentSupervisor?.getAgentStatuses() ?? [];
 
       // Filter agents by org — show org-specific agents first,
@@ -60,6 +61,14 @@ export function registerAgentRoutes(route: RouteFn, ctx: ServerContext): void {
       // Fallback: if org has no agents, include default/unscoped agents
       if (filtered.length === 0 && orgId !== "default") {
         filtered = statuses.filter((s) => !s.orgId || s.orgId === "default");
+      }
+
+      // Apply project filter (if specified)
+      if (projectFilter) {
+        filtered = filtered.filter((s) => {
+          const agentProject = s.projectId ?? "";
+          return agentProject === projectFilter || agentProject.includes(projectFilter);
+        });
       }
 
       return {
