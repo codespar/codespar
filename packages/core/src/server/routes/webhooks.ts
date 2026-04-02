@@ -524,7 +524,7 @@ export function registerWebhookRoutes(route: RouteFn, ctx: ServerContext): void 
           errorMessage: `${title}\n${stackTrace}`,
           url: String(issue.permalink || ""),
           repo: "",
-          type: "deploy-failure",
+          type: "sentry-error",
           orgId,
           inspectorUrl: String(issue.permalink || ""),
           deploymentId: String(issue.id || ""),

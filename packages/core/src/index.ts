@@ -96,7 +96,7 @@ export type {
   AgentFactory,
   DeployAlert,
 } from "./server/webhook-server.js";
-export { WebhookServer } from "./server/webhook-server.js";
+export { WebhookServer, broadcastEvent } from "./server/webhook-server.js";
 
 // Agents (Plugin Registry)
 export {

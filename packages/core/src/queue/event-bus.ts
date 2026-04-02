@@ -15,7 +15,9 @@ export type EventBusChannel =
   | "agent:status"
   | "task:created"
   | "task:completed"
-  | "deploy:status";
+  | "deploy:status"
+  | "alert:analyzed"
+  | "sentry:error";
 
 export interface EventBusMessage {
   type: string;

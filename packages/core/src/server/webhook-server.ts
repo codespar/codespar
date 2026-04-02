@@ -87,7 +87,7 @@ export interface DeployAlert {
   errorMessage: string;
   url: string;
   repo: string;
-  type: "deploy-failure" | "deploy-success";
+  type: "deploy-failure" | "deploy-success" | "sentry-error";
   orgId: string;
   inspectorUrl: string;
   deploymentId: string;

@@ -15,7 +15,7 @@
  *   PROJECT_NAME      — Project identifier (default "default")
  */
 
-import { MessageRouter, WebhookServer, FileStorage, createStorage, ApprovalManager, VectorStore, IdentityStore, analyzeDeployFailure, formatSmartAlert, parseIntent } from "@codespar/core";
+import { MessageRouter, WebhookServer, FileStorage, createStorage, ApprovalManager, VectorStore, IdentityStore, analyzeDeployFailure, formatSmartAlert, parseIntent, broadcastEvent } from "@codespar/core";
 import { AgentSupervisor } from "@codespar/agent-supervisor";
 import { ProjectAgent } from "@codespar/agent-project";
 import { CoordinatorAgent } from "@codespar/agent-coordinator";
@@ -248,6 +248,15 @@ webhookServer.setAlertHandler(async (alert) => {
       await supervisor.broadcastToAllChannels({ text: message });
       console.log(`[alert] Smart alert sent: ${analysis.severity} severity, ${analysis.confidence} confidence`);
 
+      // Broadcast analyzed alert to dashboard via SSE + EventBus
+      broadcastEvent({ type: "alert.analyzed", data: { ...analysis, project: alert.project, branch: alert.branch, orgId: alert.orgId } }, alert.orgId);
+      try {
+        const eventBus = webhookServer.getEventBus?.();
+        if (eventBus) {
+          eventBus.publish("alert:analyzed", { type: "alert:analyzed", projectId: alert.project, timestamp: Date.now(), payload: { ...analysis, project: alert.project, orgId: alert.orgId } }).catch(() => {});
+        }
+      } catch { /* ignore eventBus errors */ }
+
       // Save error pattern to vector store for future reference
       try {
         await vectorStore.add({
@@ -313,6 +322,22 @@ webhookServer.setAlertHandler(async (alert) => {
           console.error(`[alert] Auto-fix failed for ${alert.project}:`, err.message);
         }
       }
+    }
+  } else if (alert.type === "sentry-error") {
+    // Sentry production errors — analyze and broadcast
+    const analysis = await analyzeDeployFailure(alert);
+    if (analysis) {
+      const message = formatSmartAlert(analysis);
+      await supervisor.broadcastToAllChannels({ text: message });
+      console.log(`[alert] Sentry alert sent: ${analysis.severity} severity`);
+
+      broadcastEvent({ type: "sentry.analyzed", data: { ...analysis, project: alert.project, orgId: alert.orgId } }, alert.orgId);
+      try {
+        const eventBus = webhookServer.getEventBus?.();
+        if (eventBus) {
+          eventBus.publish("sentry:error", { type: "sentry:error", projectId: alert.project, timestamp: Date.now(), payload: { ...analysis, project: alert.project, orgId: alert.orgId } }).catch(() => {});
+        }
+      } catch { /* ignore */ }
     }
   } else if (alert.type === "deploy-success") {
     const msg = `\u2705 Deploy succeeded: ${alert.project}\n  ${alert.commitMessage ? alert.commitMessage.slice(0, 80) : ""}${alert.url ? `\n  ${alert.url}` : ""}`;
