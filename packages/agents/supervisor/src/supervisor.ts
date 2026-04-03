@@ -17,6 +17,7 @@ import type {
   NormalizedMessage,
 } from "@codespar/core";
 import { parseIntent } from "@codespar/core";
+import type { ChannelRouter } from "@codespar/core";
 
 export interface SupervisorConfig {
   healthCheckIntervalMs?: number;
@@ -189,6 +190,46 @@ export class AgentSupervisor {
         await adapter.sendToChannel(channelId, response);
       } catch (err) {
         console.error(`[supervisor] Broadcast to ${adapter.type} failed:`, err instanceof Error ? err.message : err);
+      }
+    }
+  }
+
+  /**
+   * Send a message to channels that match the given alert type and project,
+   * using the ChannelRouter for targeted delivery.
+   *
+   * Falls back to broadcastToAllChannels() when:
+   * - No channelRouter is provided
+   * - No routes match the alert type / project
+   */
+  async broadcastToTargetedChannels(
+    response: ChannelResponse,
+    alertType: string,
+    projectId?: string,
+    channelRouter?: ChannelRouter,
+  ): Promise<void> {
+    if (!channelRouter || !channelRouter.hasRoutes()) {
+      return this.broadcastToAllChannels(response);
+    }
+
+    const targets = channelRouter.getTargets(alertType, projectId);
+    if (targets.length === 0) {
+      return this.broadcastToAllChannels(response);
+    }
+
+    for (const target of targets) {
+      const adapter = this.adapters.find((a) => a.type === target.channelType);
+      if (!adapter) {
+        console.warn(`[supervisor] No adapter for channel type "${target.channelType}", skipping route`);
+        continue;
+      }
+      try {
+        await adapter.sendToChannel(target.channelId, response);
+      } catch (err) {
+        console.error(
+          `[supervisor] Targeted send to ${target.channelType}/${target.channelId} failed:`,
+          err instanceof Error ? err.message : err,
+        );
       }
     }
   }

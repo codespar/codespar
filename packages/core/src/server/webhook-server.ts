@@ -49,6 +49,7 @@ import { registerChannelRoutes } from "./routes/channels.js";
 import { registerApprovalAuditRoutes } from "./routes/approval-audit.js";
 import { registerAdminRoutes } from "./routes/admin.js";
 import { registerA2ARoutes } from "./routes/a2a.js";
+import { registerChannelRoutingRoutes } from "./routes/channel-routing.js";
 import { createEventBus } from "../queue/index.js";
 import type { EventBus, EventBusChannel } from "../queue/event-bus.js";
 import { ContainerPool } from "../execution/container-pool.js";
@@ -565,6 +566,9 @@ export class WebhookServer {
 
     // ── Channels (extracted to routes/channels.ts) ──────
     registerChannelRoutes(route, this as unknown as ServerContext);
+
+    // ── Channel Routing (per-channel alert routing rules) ──────
+    registerChannelRoutingRoutes(route, this as unknown as ServerContext);
 
     // ── Approval + Audit (extracted to routes/approval-audit.ts) ──────
     registerApprovalAuditRoutes(route, this as unknown as ServerContext);
