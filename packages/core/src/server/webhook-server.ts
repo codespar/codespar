@@ -50,6 +50,8 @@ import { registerApprovalAuditRoutes } from "./routes/approval-audit.js";
 import { registerAdminRoutes } from "./routes/admin.js";
 import { registerA2ARoutes } from "./routes/a2a.js";
 import { registerChannelRoutingRoutes } from "./routes/channel-routing.js";
+import { registerPagerDutyRoutes } from "./routes/pagerduty.js";
+import { registerLinearRoutes } from "./routes/linear.js";
 import { createEventBus } from "../queue/index.js";
 import type { EventBus, EventBusChannel } from "../queue/event-bus.js";
 import { ContainerPool } from "../execution/container-pool.js";
@@ -585,6 +587,12 @@ export class WebhookServer {
 
     // ── OAuth & GitHub (extracted to routes/oauth-github.ts) ──────
     registerOAuthGitHubRoutes(route, this as unknown as ServerContext);
+
+    // ── PagerDuty (on-call, incidents, acknowledge) ──────
+    registerPagerDutyRoutes(route, this as unknown as ServerContext);
+
+    // ── Linear (teams, issues, auto-ticket creation) ──────
+    registerLinearRoutes(route, this as unknown as ServerContext);
 
     // ── Webhooks (extracted to routes/webhooks.ts) ──────
     registerWebhookRoutes(route, this as unknown as ServerContext);

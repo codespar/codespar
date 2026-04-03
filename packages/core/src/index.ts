@@ -188,6 +188,20 @@ export type {
   SentryStatsPoint,
 } from "./integrations/index.js";
 
+export { PagerDutyClient, PagerDutyClientError } from "./integrations/index.js";
+export type {
+  PagerDutyConfig,
+  PagerDutyIncident,
+  OnCallUser,
+} from "./integrations/index.js";
+
+export { LinearClient, LinearClientError } from "./integrations/index.js";
+export type {
+  LinearConfig,
+  LinearIssue,
+  LinearTeam,
+} from "./integrations/index.js";
+
 // Queue (Redis Pub/Sub event bus + task queue)
 export { createEventBus, createTaskQueue } from "./queue/index.js";
 export type { EventBus, EventBusChannel, EventBusMessage, EventBusHandler } from "./queue/event-bus.js";

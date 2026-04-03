@@ -15,7 +15,7 @@
  *   PROJECT_NAME      — Project identifier (default "default")
  */
 
-import { MessageRouter, WebhookServer, FileStorage, createStorage, ApprovalManager, VectorStore, IdentityStore, analyzeDeployFailure, formatSmartAlert, parseIntent, broadcastEvent, DeployHealthMonitor, ChannelRouter, SentryClient } from "@codespar/core";
+import { MessageRouter, WebhookServer, FileStorage, createStorage, ApprovalManager, VectorStore, IdentityStore, analyzeDeployFailure, formatSmartAlert, parseIntent, broadcastEvent, DeployHealthMonitor, ChannelRouter, SentryClient, PagerDutyClient, LinearClient } from "@codespar/core";
 import { AgentSupervisor } from "@codespar/agent-supervisor";
 import { ProjectAgent } from "@codespar/agent-project";
 import { CoordinatorAgent } from "@codespar/agent-coordinator";
@@ -53,6 +53,36 @@ if (process.env.SENTRY_AUTH_TOKEN && process.env.SENTRY_ORG) {
     console.log(`[server] Sentry integration: enabled (org: ${process.env.SENTRY_ORG})`);
   } catch (err) {
     console.error("[server] Failed to initialize Sentry client:", err.message);
+  }
+}
+
+// 1e. Optional PagerDuty integration — pages on-call when critical alerts fire
+let pagerDutyClient = null;
+if (process.env.PAGERDUTY_API_TOKEN && process.env.PAGERDUTY_FROM_EMAIL) {
+  try {
+    pagerDutyClient = new PagerDutyClient({
+      apiToken: process.env.PAGERDUTY_API_TOKEN,
+      fromEmail: process.env.PAGERDUTY_FROM_EMAIL,
+      serviceId: process.env.PAGERDUTY_SERVICE_ID,
+      escalationPolicyId: process.env.PAGERDUTY_ESCALATION_POLICY_ID,
+    });
+    console.log(`[server] PagerDuty integration: enabled (from: ${process.env.PAGERDUTY_FROM_EMAIL})`);
+  } catch (err) {
+    console.error("[server] Failed to initialize PagerDuty client:", err.message);
+  }
+}
+
+// 1f. Optional Linear integration — auto-creates tickets from incidents
+let linearClient = null;
+if (process.env.LINEAR_API_KEY) {
+  try {
+    linearClient = new LinearClient({
+      apiKey: process.env.LINEAR_API_KEY,
+      teamId: process.env.LINEAR_TEAM_ID,
+    });
+    console.log(`[server] Linear integration: enabled${process.env.LINEAR_TEAM_ID ? ` (team: ${process.env.LINEAR_TEAM_ID})` : ""}`);
+  } catch (err) {
+    console.error("[server] Failed to initialize Linear client:", err.message);
   }
 }
 
@@ -310,6 +340,76 @@ webhookServer.setAlertHandler(async (alert) => {
       await supervisor.broadcastToTargetedChannels({ text: basicMsg }, "deploy", alert.project, channelRouter);
     }
 
+    // PagerDuty escalation for critical/high severity alerts
+    if (pagerDutyClient && analysis && (analysis.severity === "critical" || analysis.severity === "high")) {
+      try {
+        const pdIncident = await pagerDutyClient.createIncident({
+          title: `[${analysis.severity.toUpperCase()}] Deploy failure: ${alert.project} (${alert.branch})`,
+          body: `Root cause: ${analysis.rootCause}\nSuggested fix: ${analysis.suggestedFix}\nAffected files: ${analysis.affectedFiles.join(", ")}`,
+          urgency: analysis.severity === "critical" ? "high" : "low",
+        });
+        console.log(`[alert] PagerDuty incident created: ${pdIncident.id}`);
+
+        // Get on-call and include in broadcast
+        const oncall = await pagerDutyClient.getOnCall().catch(() => []);
+        if (oncall.length > 0) {
+          const l1 = oncall.find(u => u.escalationLevel === 1) || oncall[0];
+          const pageMsg = `\uD83D\uDEA8 Paged ${l1.name} (on-call L${l1.escalationLevel}) — PagerDuty incident ${pdIncident.id}`;
+          await supervisor.broadcastToTargetedChannels({ text: pageMsg }, "incident", alert.project, channelRouter);
+          console.log(`[alert] Paged on-call: ${l1.name} (L${l1.escalationLevel})`);
+        }
+      } catch (err) {
+        console.error("[alert] PagerDuty escalation failed:", err.message);
+      }
+    }
+
+    // Linear auto-ticket creation for critical/high severity alerts
+    if (linearClient && analysis && (analysis.severity === "critical" || analysis.severity === "high")) {
+      try {
+        // Dedup: search for existing ticket with same error title
+        const searchQuery = `${alert.project} ${alert.errorMessage?.slice(0, 60) || analysis.rootCause?.slice(0, 60) || ""}`.trim();
+        const existing = await linearClient.searchIssues(searchQuery, 5);
+        const duplicate = existing.find(issue =>
+          issue.title.includes(alert.project) &&
+          (issue.state.type === "backlog" || issue.state.type === "unstarted" || issue.state.type === "started")
+        );
+
+        if (duplicate) {
+          console.log(`[alert] Linear ticket already exists: ${duplicate.identifier} — ${duplicate.title}`);
+          await supervisor.broadcastToTargetedChannels(
+            { text: `\uD83D\uDCCB Existing ticket: ${duplicate.identifier} — ${duplicate.url}` },
+            "incident", alert.project, channelRouter,
+          );
+        } else {
+          const priorityMap = { critical: 1, high: 2, medium: 3, low: 4 };
+          const description = [
+            `**Root cause:** ${analysis.rootCause || "Unknown"}`,
+            `**Suggested fix:** ${analysis.suggestedFix || "N/A"}`,
+            analysis.affectedFiles?.length > 0 ? `**Affected files:** ${analysis.affectedFiles.join(", ")}` : "",
+            alert.branch ? `**Branch:** ${alert.branch}` : "",
+            alert.commitSha ? `**Commit:** ${alert.commitSha}` : "",
+            alert.errorMessage ? `\n**Error:**\n\`\`\`\n${alert.errorMessage.slice(0, 1000)}\n\`\`\`` : "",
+            "\n---\n*Auto-created by CodeSpar incident handler*",
+          ].filter(Boolean).join("\n");
+
+          const issue = await linearClient.createIssue({
+            title: `[${analysis.severity.toUpperCase()}] ${alert.project}: ${(alert.errorMessage || analysis.rootCause || "Deploy failure").slice(0, 100)}`,
+            description,
+            priority: priorityMap[analysis.severity] || 3,
+            labelNames: ["incident", "auto-created", alert.project],
+          });
+
+          console.log(`[alert] Linear ticket created: ${issue.identifier}`);
+          await supervisor.broadcastToTargetedChannels(
+            { text: `\uD83D\uDCCB Ticket created: ${issue.identifier} — ${issue.url}` },
+            "incident", alert.project, channelRouter,
+          );
+        }
+      } catch (err) {
+        console.error("[alert] Linear auto-ticket failed:", err.message);
+      }
+    }
+
     // Phase 3: Autonomous healing based on agent autonomy level
     const agentStatuses = supervisor.getAgentStatuses();
     const projectAgent = agentStatuses.find(a => {
@@ -372,6 +472,46 @@ webhookServer.setAlertHandler(async (alert) => {
           eventBus.publish("sentry:error", { type: "sentry:error", projectId: alert.project, timestamp: Date.now(), payload: { ...analysis, project: alert.project, orgId: alert.orgId } }).catch(() => {});
         }
       } catch { /* ignore */ }
+
+      // Linear auto-ticket for critical/high Sentry errors
+      if (linearClient && (analysis.severity === "critical" || analysis.severity === "high")) {
+        try {
+          const searchQuery = `${alert.project} ${(alert.errorMessage || "").slice(0, 60)}`.trim();
+          const existing = await linearClient.searchIssues(searchQuery, 5);
+          const duplicate = existing.find(issue =>
+            issue.title.includes(alert.project) &&
+            (issue.state.type === "backlog" || issue.state.type === "unstarted" || issue.state.type === "started")
+          );
+
+          if (!duplicate) {
+            const priorityMap = { critical: 1, high: 2, medium: 3, low: 4 };
+            const description = [
+              `**Root cause:** ${analysis.rootCause || "Unknown"}`,
+              `**Suggested fix:** ${analysis.suggestedFix || "N/A"}`,
+              analysis.affectedFiles?.length > 0 ? `**Affected files:** ${analysis.affectedFiles.join(", ")}` : "",
+              alert.errorMessage ? `\n**Error:**\n\`\`\`\n${alert.errorMessage.slice(0, 1000)}\n\`\`\`` : "",
+              "\n---\n*Auto-created by CodeSpar from Sentry error*",
+            ].filter(Boolean).join("\n");
+
+            const issue = await linearClient.createIssue({
+              title: `[${analysis.severity.toUpperCase()}] ${alert.project}: ${(alert.errorMessage || analysis.rootCause || "Production error").slice(0, 100)}`,
+              description,
+              priority: priorityMap[analysis.severity] || 3,
+              labelNames: ["incident", "auto-created", "sentry", alert.project],
+            });
+
+            console.log(`[alert] Linear ticket created from Sentry: ${issue.identifier}`);
+            await supervisor.broadcastToTargetedChannels(
+              { text: `\uD83D\uDCCB Ticket created: ${issue.identifier} — ${issue.url}` },
+              "error", alert.project, channelRouter,
+            );
+          } else {
+            console.log(`[alert] Linear ticket already exists for Sentry error: ${duplicate.identifier}`);
+          }
+        } catch (err) {
+          console.error("[alert] Linear auto-ticket (Sentry) failed:", err.message);
+        }
+      }
     }
   } else if (alert.type === "deploy-success") {
     console.log(`[alert] Deploy success: ${alert.project} — capturing baseline & starting health monitor`);
@@ -472,9 +612,28 @@ webhookServer.setAlertHandler(async (alert) => {
         broadcastEvent({ type: "deploy.unhealthy", data: { project: alert.project, errorRate: result.errorRate, errorCount: result.errorCount, totalRequests: result.totalRequests, duration: result.duration, rollbackDecision: result.rollbackDecision, newErrors: result.newErrors, baselineErrorRate: result.baselineErrorRate, orgId: alert.orgId } }, alert.orgId);
       },
       // onComplete — fires when monitoring window ends with healthy status
-      (result) => {
+      async (result) => {
         console.log(`[alert] Deploy healthy: ${alert.project} — ${result.checkCount} checks over ${result.duration}`);
         broadcastEvent({ type: "deploy.healthy", data: { project: alert.project, checkCount: result.checkCount, duration: result.duration, orgId: alert.orgId } }, alert.orgId);
+
+        // Auto-resolve any open PagerDuty incidents for this project
+        if (pagerDutyClient) {
+          try {
+            const openIncidents = await pagerDutyClient.listIncidents({
+              statuses: ["triggered", "acknowledged"],
+              limit: 10,
+            });
+            const projectIncidents = openIncidents.filter(inc =>
+              inc.title.includes(alert.project)
+            );
+            for (const inc of projectIncidents) {
+              await pagerDutyClient.resolveIncident(inc.id);
+              console.log(`[alert] Auto-resolved PagerDuty incident ${inc.id} (deploy healthy)`);
+            }
+          } catch (err) {
+            console.error("[alert] Failed to auto-resolve PagerDuty incidents:", err.message);
+          }
+        }
       },
       // Decision engine callbacks
       {
