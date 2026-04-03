@@ -464,6 +464,13 @@ webhookServer.setAlertHandler(async (alert) => {
       const message = formatSmartAlert(analysis);
       await supervisor.broadcastToTargetedChannels({ text: message }, "error", alert.project, channelRouter);
       console.log(`[alert] Sentry alert sent: ${analysis.severity} severity`);
+    } else {
+      // Fallback: send basic alert without Claude analysis
+      const basicMsg = `🚨 **Sentry Error** — ${alert.project}\n  ${alert.errorMessage || "Unknown error"}\n  ${alert.url ? alert.url : ""}`;
+      await supervisor.broadcastToTargetedChannels({ text: basicMsg }, "error", alert.project, channelRouter);
+      console.log(`[alert] Sentry basic alert sent (no analysis available)`);
+    }
+    if (analysis) {
 
       broadcastEvent({ type: "sentry.analyzed", data: { ...analysis, project: alert.project, orgId: alert.orgId } }, alert.orgId);
       try {
