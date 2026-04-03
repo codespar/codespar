@@ -15,7 +15,7 @@
  *   PROJECT_NAME      — Project identifier (default "default")
  */
 
-import { MessageRouter, WebhookServer, FileStorage, createStorage, ApprovalManager, VectorStore, IdentityStore, analyzeDeployFailure, formatSmartAlert, parseIntent, broadcastEvent, DeployHealthMonitor, ChannelRouter } from "@codespar/core";
+import { MessageRouter, WebhookServer, FileStorage, createStorage, ApprovalManager, VectorStore, IdentityStore, analyzeDeployFailure, formatSmartAlert, parseIntent, broadcastEvent, DeployHealthMonitor, ChannelRouter, SentryClient } from "@codespar/core";
 import { AgentSupervisor } from "@codespar/agent-supervisor";
 import { ProjectAgent } from "@codespar/agent-project";
 import { CoordinatorAgent } from "@codespar/agent-coordinator";
@@ -354,7 +354,7 @@ webhookServer.setAlertHandler(async (alert) => {
       } catch { /* ignore */ }
     }
   } else if (alert.type === "deploy-success") {
-    console.log(`[alert] Deploy success: ${alert.project} — starting health monitor`);
+    console.log(`[alert] Deploy success: ${alert.project} — capturing baseline & starting health monitor`);
 
     // Determine autonomy level for the project agent
     const agentStatuses = supervisor.getAgentStatuses();
@@ -362,6 +362,36 @@ webhookServer.setAlertHandler(async (alert) => {
       a.projectId === alert.project || a.id.includes(alert.project)
     );
     const autonomyLevel = matchedAgent?.autonomyLevel ?? 1;
+
+    // Capture baseline error state BEFORE starting monitoring
+    const baseline = await healthMonitor.captureBaseline(alert.project).catch((err) => {
+      console.error(`[alert] Failed to capture baseline for ${alert.project}:`, err.message);
+      return null;
+    });
+
+    if (baseline) {
+      console.log(`[alert] Baseline: ${(baseline.errorRate * 100).toFixed(1)}% error rate, ${baseline.errorMessages.size} unique error types`);
+    }
+
+    /** Helper: format enriched notification with before/after comparison. */
+    const formatEnrichedMsg = (result, prefix) => {
+      const pct = (result.errorRate * 100).toFixed(1);
+      const baselinePct = result.baselineErrorRate !== undefined
+        ? (result.baselineErrorRate * 100).toFixed(1)
+        : "?";
+      let msg = `${prefix} — ${alert.project}\n  Error rate: ${pct}% (was ${baselinePct}% before deploy)\n  Checked ${result.checkCount} times over ${result.duration}\n  Errors: ${result.errorCount}/${result.totalRequests} requests`;
+
+      if (result.newErrors?.length > 0) {
+        msg += `\n  New errors: ${result.newErrors.slice(0, 3).join(", ")}${result.newErrors.length > 3 ? ` (+${result.newErrors.length - 3} more)` : ""}`;
+      }
+      if (result.resolvedErrors?.length > 0) {
+        msg += `\n  Resolved: ${result.resolvedErrors.slice(0, 3).join(", ")}`;
+      }
+      if (result.rollbackDecision) {
+        msg += `\n  Decision: ${result.rollbackDecision.reason}`;
+      }
+      return msg;
+    };
 
     // Start post-deploy health monitoring (non-blocking)
     healthMonitor.monitor(
@@ -373,15 +403,15 @@ webhookServer.setAlertHandler(async (alert) => {
         errorThreshold: 0.10,
         minSamples: 5,
       },
-      // onUnhealthy — fires when error rate exceeds threshold for 2 consecutive checks
+      // onUnhealthy — fires when decision engine recommends rollback
       async (result) => {
         const pct = (result.errorRate * 100).toFixed(1);
-        console.log(`[alert] Deploy unhealthy: ${alert.project} — ${pct}% error rate`);
+        console.log(`[alert] Deploy unhealthy: ${alert.project} — ${pct}% error rate — decision: rollback`);
 
         if (autonomyLevel >= 4) {
           // L4+: auto-rollback via Vercel API (redeploy previous deployment)
-          const rollbackMsg = `\u26a0\ufe0f **Auto-rollback triggered** for ${alert.project}\n  Error rate: ${pct}% (threshold: 10%)\n  Checked ${result.checkCount} times over ${result.duration}\n  Errors: ${result.errorCount}/${result.totalRequests} requests\n  Rolling back to previous deployment...`;
-          await supervisor.broadcastToTargetedChannels({ text: rollbackMsg }, "incident", alert.project, channelRouter);
+          const rollbackMsg = formatEnrichedMsg(result, "\u26a0\ufe0f **Auto-rollback triggered**");
+          await supervisor.broadcastToTargetedChannels({ text: rollbackMsg + "\n  Rolling back to previous deployment..." }, "incident", alert.project, channelRouter);
 
           // Attempt Vercel rollback if token is available
           const vercelToken = process.env.VERCEL_TOKEN;
@@ -411,22 +441,36 @@ webhookServer.setAlertHandler(async (alert) => {
             }
           }
         } else if (autonomyLevel >= 3) {
-          // L3: notify + suggest rollback
-          const msg = `\u26a0\ufe0f **Deploy may be unhealthy** — ${alert.project}\n  Error rate: ${pct}% (threshold: 10%)\n  Checked ${result.checkCount} times over ${result.duration}\n  Errors: ${result.errorCount}/${result.totalRequests} requests\n  Consider rolling back. Use: @codespar rollback production`;
-          await supervisor.broadcastToTargetedChannels({ text: msg }, "incident", alert.project, channelRouter);
+          const msg = formatEnrichedMsg(result, "\u26a0\ufe0f **Deploy may be unhealthy**");
+          await supervisor.broadcastToTargetedChannels({ text: msg + "\n  Consider rolling back. Use: @codespar rollback production" }, "incident", alert.project, channelRouter);
         } else {
-          // L1-L2: notify only
-          const msg = `\u26a0\ufe0f **Deploy may be unhealthy** — ${alert.project}\n  Error rate: ${pct}% (threshold: 10%)\n  Checked ${result.checkCount} times over ${result.duration}\n  Errors: ${result.errorCount}/${result.totalRequests} requests\n  Consider investigating.`;
-          await supervisor.broadcastToTargetedChannels({ text: msg }, "incident", alert.project, channelRouter);
+          const msg = formatEnrichedMsg(result, "\u26a0\ufe0f **Deploy may be unhealthy**");
+          await supervisor.broadcastToTargetedChannels({ text: msg + "\n  Consider investigating." }, "incident", alert.project, channelRouter);
         }
 
         // Broadcast unhealthy event to SSE
-        broadcastEvent({ type: "deploy.unhealthy", data: { project: alert.project, errorRate: result.errorRate, errorCount: result.errorCount, totalRequests: result.totalRequests, duration: result.duration, orgId: alert.orgId } }, alert.orgId);
+        broadcastEvent({ type: "deploy.unhealthy", data: { project: alert.project, errorRate: result.errorRate, errorCount: result.errorCount, totalRequests: result.totalRequests, duration: result.duration, rollbackDecision: result.rollbackDecision, newErrors: result.newErrors, baselineErrorRate: result.baselineErrorRate, orgId: alert.orgId } }, alert.orgId);
       },
       // onComplete — fires when monitoring window ends with healthy status
       (result) => {
         console.log(`[alert] Deploy healthy: ${alert.project} — ${result.checkCount} checks over ${result.duration}`);
         broadcastEvent({ type: "deploy.healthy", data: { project: alert.project, checkCount: result.checkCount, duration: result.duration, orgId: alert.orgId } }, alert.orgId);
+      },
+      // Decision engine callbacks
+      {
+        baseline: baseline ?? undefined,
+        // onMonitorExtended — decision engine says "keep watching"
+        async onMonitorExtended(result) {
+          const msg = formatEnrichedMsg(result, "\uD83D\uDD0D **Still watching deploy**");
+          await supervisor.broadcastToTargetedChannels({ text: msg }, "incident", alert.project, channelRouter);
+          console.log(`[alert] Deploy monitoring extended: ${alert.project} — ${result.rollbackDecision?.reason}`);
+        },
+        // onIgnored — decision engine says "false alarm, errors pre-existed"
+        async onIgnored(result) {
+          console.log(`[alert] Deploy alert ignored (false alarm): ${alert.project} — ${result.rollbackDecision?.reason}`);
+          const msg = `\u2705 **False alarm** — ${alert.project}\n  ${result.rollbackDecision?.reason || "Errors existed before this deploy"}`;
+          await supervisor.broadcastToTargetedChannels({ text: msg }, "incident", alert.project, channelRouter);
+        },
       },
     ).catch((err) => {
       console.error(`[alert] Health monitor error for ${alert.project}:`, err.message);

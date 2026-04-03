@@ -146,7 +146,9 @@ export { GitHubClient } from "./github/index.js";
 export { createLogger, metrics } from "./observability/index.js";
 export type { LogLevel, Logger } from "./observability/index.js";
 export { DeployHealthMonitor } from "./observability/index.js";
-export type { HealthCheckConfig, HealthCheckResult } from "./observability/index.js";
+export type { HealthCheckConfig, HealthCheckResult, BaselineSnapshot } from "./observability/index.js";
+export { RollbackDecisionEngine } from "./observability/index.js";
+export type { RollbackContext, RollbackDecision, RollbackDecisionConfig } from "./observability/index.js";
 
 // Scheduler
 export { scheduler, scheduleBuildStatusReport, scheduleHealthCheck, scheduleAuditCleanup } from "./scheduler/index.js";
@@ -174,6 +176,17 @@ export type { ChannelRoute } from "./routing/index.js";
 // Security
 export { PromptGuard, promptGuard } from "./security/prompt-guard.js";
 export type { PromptAnalysis } from "./security/prompt-guard.js";
+
+// Integrations (third-party API clients)
+export { SentryClient, SentryClientError } from "./integrations/index.js";
+export type {
+  SentryIssue,
+  SentryIssueDetail,
+  SentryEvent,
+  SentryEventFrame,
+  SentryEventException,
+  SentryStatsPoint,
+} from "./integrations/index.js";
 
 // Queue (Redis Pub/Sub event bus + task queue)
 export { createEventBus, createTaskQueue } from "./queue/index.js";

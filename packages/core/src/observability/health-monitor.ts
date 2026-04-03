@@ -11,6 +11,9 @@
 
 import { createLogger } from "./logger.js";
 import type { StorageProvider } from "../storage/types.js";
+import { RollbackDecisionEngine } from "./rollback-decision.js";
+import type { RollbackContext, RollbackDecision } from "./rollback-decision.js";
+import type { SentryClient } from "../integrations/sentry-client.js";
 
 const log = createLogger("health-monitor");
 
@@ -43,6 +46,23 @@ export interface HealthCheckResult {
   errorCount: number;
   checkCount: number;
   duration: string;
+  /** Rollback decision context (populated when decision engine is active). */
+  rollbackDecision?: RollbackDecision;
+  /** Baseline error rate captured before deploy started. */
+  baselineErrorRate?: number;
+  /** Error messages that appeared after deploy but not before. */
+  newErrors?: string[];
+  /** Error messages that existed before deploy but are now gone. */
+  resolvedErrors?: string[];
+}
+
+/** Snapshot of error state captured before a deploy, used for comparison. */
+export interface BaselineSnapshot {
+  errorRate: number;
+  totalRequests: number;
+  errorCount: number;
+  errorMessages: Set<string>;
+  capturedAt: number;
 }
 
 // ── Internal state per active monitor ─────────────────────────────────
@@ -58,6 +78,8 @@ interface ActiveMonitor {
   totalRequests: number;
   errorCount: number;
   cancelled: boolean;
+  baseline: BaselineSnapshot | null;
+  currentErrorMessages: Set<string>;
 }
 
 // ── Monitor class ─────────────────────────────────────────────────────
@@ -65,9 +87,58 @@ interface ActiveMonitor {
 export class DeployHealthMonitor {
   private monitors = new Map<string, ActiveMonitor>();
   private storage: StorageProvider | null;
+  private decisionEngine: RollbackDecisionEngine;
+  private sentryClient: SentryClient | null = null;
+  /** Map of projectId → Sentry project slug for API queries. */
+  private sentryProjectMap = new Map<string, string>();
 
-  constructor(storage?: StorageProvider) {
+  constructor(storage?: StorageProvider, decisionEngine?: RollbackDecisionEngine) {
     this.storage = storage ?? null;
+    this.decisionEngine = decisionEngine ?? new RollbackDecisionEngine();
+  }
+
+  /**
+   * Configure optional Sentry integration for direct API error count correlation.
+   * When set, health checks will also query Sentry for error counts since deploy time,
+   * providing faster and more accurate error detection than audit trail alone.
+   */
+  setSentryClient(client: SentryClient, projectMap?: Map<string, string>): void {
+    this.sentryClient = client;
+    if (projectMap) this.sentryProjectMap = projectMap;
+    log.info("Sentry client configured for health monitoring");
+  }
+
+  /**
+   * Capture baseline error state for a project by querying the last 5 minutes
+   * of audit entries. Call this BEFORE starting monitoring for a deploy.
+   */
+  async captureBaseline(
+    projectId: string,
+    windowMs = 300_000,
+  ): Promise<BaselineSnapshot> {
+    const sinceMs = Date.now() - windowMs;
+    const { totalRequests, errorCount, errorMessages } =
+      await this.countRecentErrorsWithMessages(projectId, sinceMs);
+    const errorRate =
+      totalRequests > 0 ? errorCount / totalRequests : 0;
+
+    const snapshot: BaselineSnapshot = {
+      errorRate,
+      totalRequests,
+      errorCount,
+      errorMessages: new Set(errorMessages),
+      capturedAt: Date.now(),
+    };
+
+    log.info("Baseline captured", {
+      projectId,
+      errorRate: (errorRate * 100).toFixed(1) + "%",
+      totalRequests,
+      errorCount,
+      uniqueErrors: errorMessages.length,
+    });
+
+    return snapshot;
   }
 
   /**
@@ -80,6 +151,11 @@ export class DeployHealthMonitor {
     config?: Partial<HealthCheckConfig>,
     onUnhealthy?: (result: HealthCheckResult) => Promise<void>,
     onComplete?: (result: HealthCheckResult) => void,
+    options?: {
+      baseline?: BaselineSnapshot;
+      onMonitorExtended?: (result: HealthCheckResult) => Promise<void>;
+      onIgnored?: (result: HealthCheckResult) => Promise<void>;
+    },
   ): Promise<HealthCheckResult> {
     const cfg: HealthCheckConfig = { ...DEFAULT_CONFIG, ...config };
 
@@ -100,6 +176,8 @@ export class DeployHealthMonitor {
       totalRequests: 0,
       errorCount: 0,
       cancelled: false,
+      baseline: options?.baseline ?? null,
+      currentErrorMessages: new Set(),
     };
 
     this.monitors.set(deployId, monitor);
@@ -119,12 +197,11 @@ export class DeployHealthMonitor {
         if (monitor.cancelled) return;
 
         monitor.checkCount++;
-        const { totalRequests, errorCount } = await this.countRecentErrors(
-          projectId,
-          monitor.startedAt,
-        );
+        const { totalRequests, errorCount, errorMessages } =
+          await this.countRecentErrorsWithMessages(projectId, monitor.startedAt);
         monitor.totalRequests = totalRequests;
         monitor.errorCount = errorCount;
+        monitor.currentErrorMessages = new Set(errorMessages);
 
         const errorRate =
           totalRequests >= cfg.minSamples ? errorCount / totalRequests : 0;
@@ -143,18 +220,82 @@ export class DeployHealthMonitor {
           monitor.consecutiveUnhealthy = 0;
         }
 
-        // Two consecutive unhealthy checks → fire onUnhealthy and stop
+        // Two consecutive unhealthy checks → evaluate with decision engine
         if (monitor.consecutiveUnhealthy >= 2) {
+          // Build rollback context for the decision engine
+          const baseline = monitor.baseline;
+          const newErrors = baseline
+            ? errorMessages.filter((m) => !baseline.errorMessages.has(m))
+            : errorMessages;
+          const resolvedErrors = baseline
+            ? [...baseline.errorMessages].filter(
+                (m) => !monitor.currentErrorMessages.has(m),
+              )
+            : [];
+
+          const ctx: RollbackContext = {
+            projectId,
+            deployId,
+            deployTimestamp: monitor.startedAt,
+            currentErrorRate: errorRate,
+            baselineErrorRate: baseline?.errorRate ?? 0,
+            newErrors,
+            resolvedErrors,
+            totalRequests,
+          };
+
+          const decision = this.decisionEngine.decide(ctx);
           const result = this.buildResult(monitor, false, errorRate);
-          log.warn("Deploy unhealthy — triggering callback", { deployId, errorRate });
-          if (onUnhealthy) {
-            try {
-              await onUnhealthy(result);
-            } catch (err) {
-              log.error("onUnhealthy callback error", { error: String(err) });
+          result.rollbackDecision = decision;
+          result.baselineErrorRate = baseline?.errorRate ?? 0;
+          result.newErrors = newErrors;
+          result.resolvedErrors = resolvedErrors;
+
+          if (decision.action === "rollback") {
+            log.warn("Deploy unhealthy — rollback recommended", {
+              deployId,
+              errorRate,
+              reason: decision.reason,
+            });
+            if (onUnhealthy) {
+              try {
+                await onUnhealthy(result);
+              } catch (err) {
+                log.error("onUnhealthy callback error", { error: String(err) });
+              }
+            }
+            finish(result);
+          } else if (decision.action === "monitor") {
+            log.info("Deploy flagged — extending monitoring", {
+              deployId,
+              errorRate,
+              reason: decision.reason,
+            });
+            // Reset consecutive counter so monitoring continues
+            monitor.consecutiveUnhealthy = 0;
+            if (options?.onMonitorExtended) {
+              try {
+                await options.onMonitorExtended(result);
+              } catch (err) {
+                log.error("onMonitorExtended callback error", { error: String(err) });
+              }
+            }
+          } else {
+            // "ignore" — false alarm, pre-existing errors
+            log.info("Deploy flagged — ignoring (false alarm)", {
+              deployId,
+              errorRate,
+              reason: decision.reason,
+            });
+            monitor.consecutiveUnhealthy = 0;
+            if (options?.onIgnored) {
+              try {
+                await options.onIgnored(result);
+              } catch (err) {
+                log.error("onIgnored callback error", { error: String(err) });
+              }
             }
           }
-          finish(result);
         }
       };
 
@@ -219,31 +360,39 @@ export class DeployHealthMonitor {
     projectId: string,
     sinceMs: number,
   ): Promise<{ totalRequests: number; errorCount: number }> {
+    const result = await this.countRecentErrorsWithMessages(projectId, sinceMs);
+    return { totalRequests: result.totalRequests, errorCount: result.errorCount };
+  }
+
+  /**
+   * Count recent errors and collect unique error messages for pattern comparison.
+   */
+  private async countRecentErrorsWithMessages(
+    projectId: string,
+    sinceMs: number,
+  ): Promise<{ totalRequests: number; errorCount: number; errorMessages: string[] }> {
     if (!this.storage) {
-      return { totalRequests: 0, errorCount: 0 };
+      return { totalRequests: 0, errorCount: 0, errorMessages: [] };
     }
 
     try {
-      // Fetch recent audit entries (broad query — empty agent ID returns all)
       const { entries } = await this.storage.queryAudit("", 200, 0);
 
       let totalRequests = 0;
       let errorCount = 0;
+      const errorMessages: Set<string> = new Set();
 
       for (const entry of entries) {
-        // Only count entries since monitoring started
         const entryTime =
           entry.timestamp instanceof Date
             ? entry.timestamp.getTime()
             : new Date(entry.timestamp).getTime();
         if (entryTime < sinceMs) continue;
 
-        // Match entries related to this project
         const meta = entry.metadata as Record<string, unknown> | undefined;
         const entryProject = String(meta?.project || "");
         if (entryProject !== projectId) continue;
 
-        // Count Sentry errors and deploy errors
         const isSentryError =
           entry.actorId === "sentry" && entry.result === "error";
         const isDeployError =
@@ -256,15 +405,47 @@ export class DeployHealthMonitor {
         if (isSentryError || isDeployError) {
           totalRequests++;
           errorCount++;
+          // Extract error message for pattern comparison
+          const errorMsg =
+            String(meta?.errorMessage || meta?.error || entry.action);
+          errorMessages.add(errorMsg.slice(0, 200));
         } else if (isSuccess) {
           totalRequests++;
         }
       }
 
-      return { totalRequests, errorCount };
+      // Supplement with Sentry API data if client is configured
+      if (this.sentryClient) {
+        try {
+          const sentryProjectSlug = this.sentryProjectMap.get(projectId) || projectId;
+          const sentryErrorCount = await this.sentryClient.getErrorCount(
+            sentryProjectSlug,
+            new Date(sinceMs),
+          );
+          if (sentryErrorCount > errorCount) {
+            log.info("Sentry API reports higher error count than audit trail", {
+              projectId,
+              auditErrors: errorCount,
+              sentryErrors: sentryErrorCount,
+            });
+            // Use the higher of the two counts — Sentry may catch errors
+            // that haven't been forwarded via webhook yet
+            const additional = sentryErrorCount - errorCount;
+            errorCount += additional;
+            totalRequests += additional;
+          }
+        } catch (err) {
+          log.warn("Sentry API check failed during health monitoring, using audit data only", {
+            projectId,
+            error: String(err),
+          });
+        }
+      }
+
+      return { totalRequests, errorCount, errorMessages: [...errorMessages] };
     } catch (err) {
       log.error("Failed to query audit for health check", { error: String(err) });
-      return { totalRequests: 0, errorCount: 0 };
+      return { totalRequests: 0, errorCount: 0, errorMessages: [] };
     }
   }
 
