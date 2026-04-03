@@ -117,7 +117,14 @@ Each project gets its own persistent agent that monitors builds, investigates fa
 - **A2A Agent Cards** -- each of the 8 agent types publishes metadata (skills, capabilities, lifecycle) via `/.well-known/agent.json` discovery endpoint. Follows the A2A (Agent-to-Agent) protocol pattern for interoperability with external agent frameworks.
 - **Redis Pub/Sub + Streams** -- event bus for real-time agent progress/status updates (5 typed channels), task queue using Redis Streams with consumer groups for reliable at-least-once delivery. Auto-detects `REDIS_URL`; falls back to in-memory EventEmitter and FIFO queue for local dev without Redis.
 - **Docker container pool** -- `DockerSandbox` for isolated task execution with memory/CPU limits, network isolation, tmpfs, and timeout enforcement. `ContainerPool` pre-warms containers for fast acquisition. Falls back to Claude API bridge when Docker is unavailable.
-- **269+ unit tests** -- Intent Parser, RBAC, FileStorage, Identity, A2A Agent Cards, Redis queue, Docker sandbox, and more.
+- **PagerDuty on-call escalation** -- creates incidents on critical alerts, pages on-call engineer, auto-resolves when deploy confirmed healthy.
+- **Linear auto-ticket creation** -- auto-creates tickets from deploy failures and Sentry errors with dedup, severity-to-priority mapping, root cause in description.
+- **Sentry real-time webhook** -- HMAC-SHA256 verified, dedup 5-minute window, enriched stack traces, resolved/ignored action handling. SentryClient API for querying issues.
+- **Post-deploy health monitor** -- checks error rate every 30s for 5 minutes after deploy. Intelligent rollback decision engine compares baseline vs current errors.
+- **Per-channel alert routing** -- route deploy/error/incident alerts to specific Slack/Discord channels per project. API: GET/POST/DELETE /api/channel-routes.
+- **Discord + Telegram approval buttons** -- interactive approve/reject/investigate buttons matching Slack parity.
+- **A2A Phase 2-3** -- inbound task gateway (POST/GET /a2a/tasks), outbound client with TTL-cached discovery, policy evaluator with budget/allowlist governance.
+- **400+ unit tests** -- Intent Parser, RBAC, FileStorage, Identity, A2A Agent Cards, Redis queue, Docker sandbox, PagerDuty, Linear, Sentry, rollback, health monitor, channel router, A2A policy/client/registry/gateway, incident grouper, and more.
 
 ## Quick Start
 
@@ -418,9 +425,9 @@ CodeSpar Enterprise adds production monitoring integrations, MCP connectors, and
 | Feature | Open Source (MIT) | Enterprise |
 |---------|------------------|------------|
 | Core engine | 8 agents, 6 channels, 25 commands, RBAC, audit, self-healing | Included |
-| Integrations | GitHub webhooks (CI/CD) | Sentry, Datadog, PagerDuty, New Relic, Grafana, Jira, Linear |
-| Protocol | REST webhooks | MCP (Model Context Protocol), custom connectors |
-| Analysis | Build failure investigation | Production error root cause, performance regression |
+| Integrations | GitHub webhooks, Sentry webhooks, PagerDuty escalation, Linear tickets, per-channel alert routing | Datadog, New Relic, Grafana, Jira, custom connectors |
+| Protocol | REST webhooks, A2A task gateway (inbound/outbound) | MCP (Model Context Protocol), custom connectors |
+| Analysis | Build failure investigation, post-deploy health monitor, rollback decision engine | Production error root cause, performance regression, SLA tracking |
 | Fix automation | PR creation via GitHub API | Auto-fix with test validation, staging deploy + verify |
 | Dashboard | Overview, audit, agents | Integration marketplace, SLA tracking, cost analytics |
 | Infrastructure | FileStorage, single instance | PostgreSQL, Redis, horizontal scaling |
