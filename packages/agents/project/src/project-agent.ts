@@ -921,7 +921,9 @@ End with a **Tech Debt Score**: X/100 (lower is better, 0 = no debt)`;
         const perfTarget = intent.params.target || "report";
         let perfData = "";
         if (this.storage) {
-          const { entries } = await this.storage.queryAudit("", 100, 0);
+          const { entries: allPerfEntries } = await this.storage.queryAudit("", 100, 0);
+          const pid = this.config.projectId || "";
+          const entries = pid ? allPerfEntries.filter(e => { const p = String((e.metadata as Record<string, unknown>)?.project || ""); return !p || p === pid || p.includes(pid); }) : allPerfEntries;
           const deploys = entries.filter(e => String(e.action).startsWith("deploy."));
           const successDeploys = deploys.filter(e => e.result === "success");
           const failDeploys = deploys.filter(e => e.result === "error");
@@ -1620,16 +1622,26 @@ Focus on: ${perfTarget}`;
   private async buildAgentContext(): Promise<AgentContext> {
     const uptimeMs = Date.now() - this.startedAt.getTime();
 
+    const projectId = this.config.projectId || "";
     const recentAudit = this.storage
-      ? (await this.storage.queryAudit("", 30)).entries.map((e) => ({
-          action: e.action,
-          detail: String(e.metadata?.detail || e.metadata?.rawText || ""),
-          timestamp: e.timestamp.toISOString(),
-          repo: String(e.metadata?.repo || ""),
-          branch: String(e.metadata?.branch || ""),
-          commitSha: String(e.metadata?.commitSha || ""),
-          commitMessage: String(e.metadata?.commitMessage || ""),
-        }))
+      ? (await this.storage.queryAudit("", 100)).entries
+          .filter((e) => {
+            // Filter to this agent's project — skip entries from other projects
+            const entryProject = String(e.metadata?.project || "");
+            const entryDetail = String(e.metadata?.detail || "");
+            if (!projectId) return true;
+            return !entryProject || entryProject === projectId || entryProject.includes(projectId) || entryDetail.includes(projectId);
+          })
+          .slice(0, 30)
+          .map((e) => ({
+            action: e.action,
+            detail: String(e.metadata?.detail || e.metadata?.rawText || ""),
+            timestamp: e.timestamp.toISOString(),
+            repo: String(e.metadata?.repo || ""),
+            branch: String(e.metadata?.branch || ""),
+            commitSha: String(e.metadata?.commitSha || ""),
+            commitMessage: String(e.metadata?.commitMessage || ""),
+          }))
       : [];
 
     const memoryStats = this.vectorStore?.getStats() ?? {
@@ -1687,7 +1699,9 @@ Focus on: ${perfTarget}`;
     }
 
     const limit = intent.params.count ? parseInt(intent.params.count, 10) : 10;
-    const { entries } = await this.storage.queryAudit("", limit);
+    const { entries: allLogEntries } = await this.storage.queryAudit("", 100);
+    const logPid = this.config.projectId || "";
+    const entries = (logPid ? allLogEntries.filter(e => { const p = String((e.metadata as Record<string, unknown>)?.project || ""); return !p || p === logPid || p.includes(logPid); }) : allLogEntries).slice(0, limit);
 
     if (entries.length === 0) {
       return {
@@ -1987,7 +2001,9 @@ Focus on: ${perfTarget}`;
     // Recent audit activity
     let recentActivity = "";
     if (this.storage) {
-      const { entries } = await this.storage.queryAudit("", 3);
+      const { entries: allStatusEntries } = await this.storage.queryAudit("", 20);
+      const statusPid = this.config.projectId || "";
+      const entries = (statusPid ? allStatusEntries.filter(e => { const p = String((e.metadata as Record<string, unknown>)?.project || ""); return !p || p === statusPid || p.includes(statusPid); }) : allStatusEntries).slice(0, 3);
       if (entries.length > 0) {
         const lines = entries.map((e) => {
           const action = e.metadata?.detail || e.action;
