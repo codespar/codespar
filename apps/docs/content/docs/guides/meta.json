@@ -28,6 +28,10 @@
     "agentgate-payments",
     "agentgate-governance",
     "web-chat",
-    "demo"
+    "demo",
+    "a2a-integration",
+    "health-monitor-rollback",
+    "pagerduty-integration",
+    "linear-integration"
   ]
 }

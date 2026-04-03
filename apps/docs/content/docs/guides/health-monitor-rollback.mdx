@@ -1,0 +1,267 @@
+---
+title: Post-Deploy Health Monitor
+description: How CodeSpar monitors deployments and auto-rolls back — 30-second checks, Sentry integration, rollback decision engine, and autonomy-level behavior.
+---
+
+# Post-Deploy Health Monitor
+
+After every deployment, CodeSpar runs a health monitor that checks your application for 5 minutes. If something goes wrong, the system decides whether to notify, suggest a rollback, or auto-rollback — depending on your autonomy level.
+
+## How It Works
+
+1. **Deploy completes** — the Deploy Agent triggers the health monitor
+2. **30-second check interval** — the monitor runs every 30 seconds for 5 minutes (10 checks total)
+3. **Two data sources** — audit trail error rate + Sentry API
+4. **Decision engine** — evaluates 6 rules after each check
+5. **Action** — notify, suggest rollback, or auto-rollback based on autonomy level
+
+```
+Deploy completes
+    │
+    ▼
+Health Monitor starts (5 min window)
+    │
+    ├── Every 30s ──► Check audit trail error rate
+    │                  Check Sentry for new errors
+    │                  │
+    │                  ▼
+    │              Decision engine (6 rules)
+    │                  │
+    │                  ├── Healthy → continue monitoring
+    │                  ├── Unhealthy → action based on autonomy level
+    │                  └── Transient → wait for next check
+    │
+    ▼
+5 min elapsed, all checks pass → Deploy confirmed healthy
+```
+
+## What It Checks
+
+### Audit Trail Error Rate
+
+The monitor queries the audit log for error events in the post-deploy window and compares against the pre-deploy baseline:
+
+| Metric | How It's Calculated |
+|--------|-------------------|
+| **Pre-deploy baseline** | Average error rate over the 30 minutes before deploy |
+| **Post-deploy rate** | Error rate in each 30-second check window |
+| **Spike threshold** | Post-deploy rate > 2x baseline (configurable) |
+
+### Sentry API
+
+If Sentry is configured, the monitor also fetches recent issues:
+
+| Metric | What It Checks |
+|--------|---------------|
+| **New issues** | Issues first seen after the deploy timestamp |
+| **Regression issues** | Previously resolved issues that reappeared |
+| **Event volume** | Total error events in the post-deploy window |
+
+Configure Sentry integration:
+
+```bash
+SENTRY_API_TOKEN=your-sentry-token
+SENTRY_ORG_SLUG=your-org
+SENTRY_PROJECT_SLUG=your-project
+```
+
+## Rollback Decision Engine
+
+The decision engine evaluates 6 rules after each health check. Rules are evaluated in order — the first match determines the action.
+
+### Rule 1: Critical Error Spike
+
+**Condition:** Post-deploy error rate > 5x baseline
+**Action:** Immediate rollback (at L4+) or urgent notification (at L1-L3)
+
+This catches catastrophic failures like a broken database connection or a missing environment variable that causes every request to fail.
+
+### Rule 2: New Sentry Errors (High Severity)
+
+**Condition:** New Sentry issues with `fatal` or `error` level first seen after deploy
+**Action:** Rollback recommended (at L3+) or notification (at L1-L2)
+
+New errors that did not exist before the deploy are a strong signal of a regression.
+
+### Rule 3: Sentry Regression
+
+**Condition:** Previously resolved Sentry issues reappeared after deploy
+**Action:** Rollback recommended (at L3+) or notification (at L1-L2)
+
+A regression means something that was fixed has broken again — often a reverted fix or a conflicting change.
+
+### Rule 4: Sustained Error Rate Increase
+
+**Condition:** Post-deploy error rate > 2x baseline for 3+ consecutive checks (90 seconds)
+**Action:** Rollback suggested (at L3+) or notification (at L1-L2)
+
+A sustained increase that is not a brief transient spike indicates a real problem.
+
+### Rule 5: Transient Spike (Single Check)
+
+**Condition:** Post-deploy error rate > 2x baseline for only 1 check, then returns to normal
+**Action:** Log and continue monitoring
+
+Brief spikes are common during deploy transitions (e.g., cold starts, cache warming). The engine waits for the next check before acting.
+
+### Rule 6: Baseline Comparison (Healthy)
+
+**Condition:** Post-deploy error rate within 1.5x baseline, no new Sentry issues
+**Action:** Continue monitoring. After 10 healthy checks, mark deploy as confirmed.
+
+### Rule Summary
+
+| Rule | Condition | L1-L2 | L3 | L4+ |
+|------|-----------|-------|-----|------|
+| Critical spike (5x) | Error rate > 5x baseline | Notify (urgent) | Suggest rollback | Auto-rollback |
+| New Sentry errors | Fatal/error after deploy | Notify | Suggest rollback | Auto-rollback |
+| Sentry regression | Resolved issue reappeared | Notify | Suggest rollback | Auto-rollback |
+| Sustained increase (2x) | > 2x baseline for 90s | Notify | Suggest rollback | Suggest rollback |
+| Transient spike | > 2x baseline, 1 check only | Log | Log | Log |
+| Healthy | Within 1.5x baseline | Continue | Continue | Continue |
+
+## Autonomy Levels and Rollback Behavior
+
+The health monitor's actions depend on your project's autonomy level:
+
+### L1-L2: Notify Only
+
+The monitor sends alerts to connected channels but never takes action automatically.
+
+```
+Deploy Health Alert
+──────────────────
+Project: acme/backend-api
+Environment: production
+Deploy: v2.4.1 (abc1234)
+
+Error rate increased 3.2x from baseline.
+2 new Sentry issues detected since deploy.
+
+Action required: Review and decide whether to rollback.
+  @codespar rollback production
+```
+
+### L3: Suggest Rollback
+
+The monitor sends an alert with a one-click rollback suggestion. The team must approve.
+
+```
+Deploy Health Warning — Rollback Suggested
+──────────────────
+Project: acme/backend-api
+Environment: production
+Deploy: v2.4.1 (abc1234)
+
+Error rate increased 3.2x from baseline (sustained 90s).
+2 new Sentry issues: TypeError in auth.ts, ConnectionError in db.ts
+
+Suggested action: Rollback to v2.4.0
+  Approve rollback? Reply: @codespar approve rb_01J8K3M5
+```
+
+### L4+: Auto-Rollback
+
+For critical spikes and new Sentry errors, the monitor automatically triggers a rollback and notifies the team after.
+
+```
+Auto-Rollback Executed
+──────────────────
+Project: acme/backend-api
+Environment: production
+
+Rolled back: v2.4.1 → v2.4.0
+Reason: Error rate 5.8x baseline + 2 new fatal Sentry issues
+Duration: deploy was live for 2m 30s
+
+Health monitor confirmed rollback is healthy.
+```
+
+## Configuration
+
+### Environment Variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `HEALTH_MONITOR_ENABLED` | `true` | Enable post-deploy health monitoring |
+| `HEALTH_MONITOR_INTERVAL_MS` | `30000` | Check interval in milliseconds |
+| `HEALTH_MONITOR_DURATION_MS` | `300000` | Total monitoring window (5 min) |
+| `HEALTH_MONITOR_SPIKE_THRESHOLD` | `2.0` | Error rate multiplier to trigger sustained alert |
+| `HEALTH_MONITOR_CRITICAL_THRESHOLD` | `5.0` | Error rate multiplier for immediate action |
+| `HEALTH_MONITOR_SUSTAINED_CHECKS` | `3` | Consecutive checks above threshold before sustained alert |
+| `HEALTH_MONITOR_BASELINE_WINDOW_MS` | `1800000` | Pre-deploy baseline window (30 min) |
+| `SENTRY_API_TOKEN` | `""` | Sentry API token for issue fetching |
+| `SENTRY_ORG_SLUG` | `""` | Sentry organization slug |
+| `SENTRY_PROJECT_SLUG` | `""` | Sentry project slug |
+
+### Per-Project Override
+
+You can override thresholds per project in the project configuration:
+
+```yaml
+# Project: acme/backend-api
+healthMonitor:
+  enabled: true
+  spikeThreshold: 3.0        # More tolerant (default 2.0)
+  criticalThreshold: 8.0     # Higher bar for critical (default 5.0)
+  sustainedChecks: 4          # Wait longer before sustained alert
+  durationMs: 600000          # Monitor for 10 min instead of 5
+```
+
+## Channel Notifications
+
+The health monitor sends notifications to all channels connected to the project. Notification format adapts per channel:
+
+### What Teams Receive
+
+| Event | Notification |
+|-------|-------------|
+| Monitor started | Brief message: "Health monitor active for v2.4.1 — watching for 5 min" |
+| Transient spike | No notification (logged internally) |
+| Sustained increase | Alert with error rate, Sentry issues, suggested action |
+| Critical spike | Urgent alert with rollback suggestion or auto-rollback confirmation |
+| Deploy confirmed healthy | Success message: "v2.4.1 confirmed healthy after 5 min (10/10 checks passed)" |
+| Auto-rollback executed | Rollback confirmation with reason, previous version, and health status |
+
+### Example: Deploy Confirmed Healthy
+
+```
+Deploy Confirmed Healthy
+──────────────────
+Project: acme/backend-api
+Environment: production
+Deploy: v2.4.1 (abc1234)
+
+10/10 health checks passed over 5 minutes.
+Error rate: 0.02% (baseline: 0.03%)
+Sentry: 0 new issues
+
+Deploy is stable.
+```
+
+## Troubleshooting
+
+### Health Monitor Not Running
+
+1. Verify `HEALTH_MONITOR_ENABLED` is `true`
+2. Check that the deploy was triggered through CodeSpar (manual deploys do not trigger the monitor unless configured)
+3. Check server logs for `health-monitor` entries
+
+### False Positives (Rollback on Healthy Deploy)
+
+1. Lower the `HEALTH_MONITOR_SPIKE_THRESHOLD` (e.g., from `2.0` to `3.0`)
+2. Increase `HEALTH_MONITOR_SUSTAINED_CHECKS` to require more consecutive failures
+3. Check if your baseline window includes anomalous data (e.g., a previous incident)
+
+### Sentry Issues Not Detected
+
+1. Verify `SENTRY_API_TOKEN` has `project:read` and `event:read` scopes
+2. Confirm `SENTRY_ORG_SLUG` and `SENTRY_PROJECT_SLUG` match your Sentry project
+3. Check that Sentry is receiving events from your application (Sentry dashboard > Issues)
+
+## Next Steps
+
+- [Deploy Pipeline](/docs/guides/deploy-pipeline) -- set up the full deploy workflow
+- [PagerDuty Integration](/docs/guides/pagerduty-integration) -- page on-call when deploys fail
+- [Webhook Monitoring](/docs/guides/webhook-monitoring) -- monitor CI builds via webhooks
+- [Approval System](/docs/guides/approval-system) -- configure rollback approval rules

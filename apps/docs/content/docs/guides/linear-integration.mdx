@@ -1,0 +1,325 @@
+---
+title: Linear Integration
+description: Step-by-step Linear setup — auto-create issues from deploy failures and Sentry errors, deduplication, priority mapping, and label management.
+---
+
+# Linear Integration
+
+CodeSpar integrates with Linear to automatically create issues when things go wrong. Deploy failures, Sentry errors, and incident investigations become Linear tickets with the right priority, labels, and project assignment — without manual triage.
+
+## Prerequisites
+
+Before you start, you need:
+
+1. **Linear account** with access to the target team
+2. **Linear API key** — go to Linear > Settings > API > Personal API keys > Create key
+3. **Team ID** — the Linear team where issues will be created
+
+### Finding Your Team ID
+
+Use the Linear API to list your teams:
+
+```bash
+curl -X POST https://api.linear.app/graphql \
+  -H "Authorization: YOUR_LINEAR_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{ "query": "{ teams { nodes { id name } } }" }'
+```
+
+Response:
+
+```json
+{
+  "data": {
+    "teams": {
+      "nodes": [
+        { "id": "abc123-def456", "name": "Platform" },
+        { "id": "ghi789-jkl012", "name": "Frontend" }
+      ]
+    }
+  }
+}
+```
+
+Use the `id` value for the team you want.
+
+## Configuration
+
+Set the following environment variables in your CodeSpar instance:
+
+```bash
+# Required
+LINEAR_API_KEY=lin_api_abcdef1234567890
+LINEAR_TEAM_ID=abc123-def456
+
+# Optional
+LINEAR_ENABLED=true                        # Enable/disable Linear integration (default: true if API key is set)
+LINEAR_AUTO_CREATE=true                    # Auto-create issues on failures (default: true)
+LINEAR_PROJECT_ID=                         # Linear project ID to assign issues to (optional)
+LINEAR_DEFAULT_ASSIGNEE_ID=               # Default assignee for auto-created issues (optional)
+LINEAR_DEDUP_ENABLED=true                  # Search for existing issues before creating (default: true)
+```
+
+### Environment Variable Reference
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `LINEAR_API_KEY` | Yes | — | Linear API key with write access |
+| `LINEAR_TEAM_ID` | Yes | — | Team ID where issues are created |
+| `LINEAR_ENABLED` | No | `true` | Toggle integration on/off |
+| `LINEAR_AUTO_CREATE` | No | `true` | Auto-create issues on failures |
+| `LINEAR_PROJECT_ID` | No | — | Project to assign issues to |
+| `LINEAR_DEFAULT_ASSIGNEE_ID` | No | — | Default assignee ID |
+| `LINEAR_DEDUP_ENABLED` | No | `true` | Check for existing issues before creating |
+
+## Auto-Ticket Creation
+
+CodeSpar automatically creates Linear issues for two categories of events:
+
+### Deploy Failures
+
+When a deploy fails or the health monitor triggers a rollback:
+
+| Event | Linear Issue Created |
+|-------|---------------------|
+| Deploy health monitor: critical spike | Yes — priority: Urgent |
+| Deploy health monitor: sustained error increase | Yes — priority: High |
+| Auto-rollback executed | Yes — priority: Urgent |
+| Deploy manually rolled back | Yes — priority: High |
+
+Example issue:
+
+```
+Title: [Deploy Failure] acme/backend-api v2.4.1 — error rate 5.8x baseline
+
+Description:
+  Environment: production
+  Deploy: v2.4.1 (abc1234)
+  Error rate: 5.8x baseline (sustained 90s)
+  Action taken: Auto-rollback to v2.4.0
+
+  Root cause analysis:
+  TypeError in auth.ts:47 — null user after session expiry
+  Correlated commit: def5678 "Update auth middleware"
+
+  CodeSpar audit trail: https://your-codespar-instance.com/audit/evt_01J8K3M5
+
+Priority: Urgent
+Labels: incident, auto-created, acme-backend-api
+```
+
+### Sentry Errors
+
+When new Sentry errors are detected (post-deploy or during monitoring):
+
+| Event | Linear Issue Created |
+|-------|---------------------|
+| New fatal Sentry error | Yes — priority: Urgent |
+| New error-level Sentry issue | Yes — priority: High |
+| Sentry regression (resolved issue reappeared) | Yes — priority: High |
+| New warning-level Sentry issue | No (below threshold) |
+
+Example issue:
+
+```
+Title: [Sentry] TypeError: Cannot read property 'email' of null — auth.ts:47
+
+Description:
+  Sentry issue: BACKEND-1A2B
+  First seen: 2026-04-03T14:31:00Z (post-deploy v2.4.1)
+  Events: 47 in 2 minutes
+  Users affected: 12
+
+  Stacktrace (top frame):
+  at getUserEmail (src/services/auth.ts:47)
+  at handleRequest (src/routes/api.ts:23)
+
+  Sentry link: https://sentry.io/organizations/acme/issues/1234567/
+
+  Correlated deploy: v2.4.1 (abc1234)
+  Correlated commit: def5678 "Update auth middleware"
+
+Priority: Urgent
+Labels: incident, auto-created, sentry, acme-backend-api
+```
+
+## Deduplication
+
+When `LINEAR_DEDUP_ENABLED` is `true`, CodeSpar searches for existing Linear issues before creating a new one. This prevents duplicate tickets for the same problem.
+
+### How Dedup Works
+
+1. **Search by title prefix** — CodeSpar searches for open issues matching the event signature
+2. **Match criteria** — same project slug + same error signature (Sentry issue ID or deploy version)
+3. **If match found** — add a comment to the existing issue instead of creating a new one
+4. **If no match** — create a new issue
+
+### Comment on Existing Issue
+
+When a duplicate event is detected, CodeSpar adds a comment:
+
+```
+[CodeSpar] Additional occurrence detected:
+  Time: 2026-04-03T14:35:00Z
+  Events: 12 new error events since last update
+  Total events: 59
+  Users affected: 18 (was 12)
+```
+
+### Dedup Key Format
+
+The dedup search uses these patterns:
+
+| Event Type | Search Pattern |
+|-----------|---------------|
+| Deploy failure | `[Deploy Failure] {projectSlug} {version}` |
+| Sentry error | `[Sentry] {error message prefix} — {file}` |
+| Build failure | `[Build Failure] {projectSlug} #{buildNumber}` |
+
+## Priority Mapping
+
+CodeSpar maps its internal severity levels to Linear priorities:
+
+| CodeSpar Severity | Linear Priority | Linear Priority Value |
+|-------------------|----------------|----------------------|
+| `critical` | Urgent | `1` |
+| `high` | High | `2` |
+| `medium` | Medium | `3` |
+| `low` | Low | `4` |
+
+Priority is set automatically based on the triggering event's severity. You can override priority mapping in the project configuration.
+
+## Labels
+
+CodeSpar auto-creates and applies labels to every issue. If a label does not exist in your Linear team, CodeSpar creates it on first use.
+
+### Auto-Created Labels
+
+| Label | Applied When |
+|-------|-------------|
+| `incident` | All auto-created issues from failures |
+| `auto-created` | All issues created by CodeSpar (distinguishes from manual) |
+| `sentry` | Issues originating from Sentry errors |
+| `{project-slug}` | Project name label (e.g., `acme-backend-api`) for filtering |
+
+### Label Colors
+
+CodeSpar uses consistent colors when creating labels:
+
+| Label | Color |
+|-------|-------|
+| `incident` | Red (`#EF4444`) |
+| `auto-created` | Gray (`#6B7280`) |
+| `sentry` | Purple (`#8B5CF6`) |
+| Project labels | Blue (`#3B82F6`) |
+
+## Dashboard: View and Create Issues
+
+### View Issues
+
+The CodeSpar dashboard shows recent Linear issues for each project:
+
+```
+Recent Issues — acme/backend-api
+──────────────────
+URGENT  [Deploy Failure] v2.4.1 — error rate 5.8x baseline    2h ago
+HIGH    [Sentry] TypeError in auth.ts:47                       2h ago
+MEDIUM  [Build Failure] CI build #349 failed on main           5h ago
+```
+
+Each issue links directly to the Linear issue page.
+
+### Create Issues Manually
+
+You can also create Linear issues from the dashboard or via channel commands:
+
+```
+@codespar create-issue "Database connection pool exhausted during peak hours" --priority high
+```
+
+This creates a Linear issue with:
+- Title from your description
+- Project labels auto-applied
+- Assigned to `LINEAR_DEFAULT_ASSIGNEE_ID` if configured
+- Linked to the CodeSpar project in the description
+
+## API Endpoints
+
+### Create a Linear Issue
+
+```bash
+curl -X POST https://your-codespar-instance.com/api/integrations/linear/issues \
+  -H "Authorization: Bearer YOUR_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "projectSlug": "acme/backend-api",
+    "title": "Manual: database connection pool exhausted",
+    "description": "Connection pool at 100% for 5 minutes during peak traffic.",
+    "priority": "high",
+    "labels": ["incident", "database"]
+  }'
+```
+
+Response:
+
+```json
+{
+  "issueId": "PLAT-142",
+  "url": "https://linear.app/acme/issue/PLAT-142",
+  "title": "Manual: database connection pool exhausted",
+  "priority": "High",
+  "labels": ["incident", "database", "acme-backend-api", "auto-created"]
+}
+```
+
+### List Recent Issues
+
+```bash
+curl https://your-codespar-instance.com/api/integrations/linear/issues?projectSlug=acme/backend-api&limit=10 \
+  -H "Authorization: Bearer YOUR_API_KEY"
+```
+
+### Sync Issue Status
+
+CodeSpar periodically syncs issue status from Linear. You can also trigger a manual sync:
+
+```bash
+curl -X POST https://your-codespar-instance.com/api/integrations/linear/sync \
+  -H "Authorization: Bearer YOUR_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{ "projectSlug": "acme/backend-api" }'
+```
+
+## Troubleshooting
+
+### Issues Not Being Created
+
+1. Verify `LINEAR_API_KEY` is valid — test with: `curl -X POST https://api.linear.app/graphql -H "Authorization: YOUR_KEY" -H "Content-Type: application/json" -d '{"query":"{ viewer { id name } }"}'`
+2. Confirm `LINEAR_TEAM_ID` is correct and the API key has access to that team
+3. Check that `LINEAR_AUTO_CREATE` is `true`
+4. Verify the event severity meets the threshold (warnings and below do not create issues)
+5. Check server logs for `linear` entries
+
+### Duplicate Issues Being Created
+
+1. Confirm `LINEAR_DEDUP_ENABLED` is `true`
+2. Check that existing issues have the expected title format (dedup relies on title matching)
+3. If issues were manually renamed, the dedup search will not find them
+
+### Labels Not Created
+
+1. Verify the API key has permission to create labels in the team
+2. Check Linear's label limit (Linear allows up to 50 labels per team on free plans)
+
+### Wrong Priority Assigned
+
+1. Check the triggering event's severity — CodeSpar maps severity to priority directly
+2. Review the priority mapping table above
+3. For custom mapping, override in project configuration
+
+## Next Steps
+
+- [PagerDuty Integration](/docs/guides/pagerduty-integration) -- page on-call for critical issues
+- [Post-Deploy Health Monitor](/docs/guides/health-monitor-rollback) -- understand what triggers auto-tickets
+- [Webhook Monitoring](/docs/guides/webhook-monitoring) -- CI build failure detection
+- [Enterprise Integrations](/docs/guides/enterprise-integrations) -- overview of all integrations

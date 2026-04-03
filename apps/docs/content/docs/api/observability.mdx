@@ -1,0 +1,439 @@
+---
+title: Observability API
+description: API endpoints for health overview, Vercel and Railway metrics, logs, Sentry issues, incident management, and real-time SSE events.
+---
+
+# Observability API
+
+Unified observability across your infrastructure. Query deployment health, service metrics, application logs, error tracking, and incidents from a single API surface. All endpoints require `x-org-id` for multi-tenant scoping.
+
+---
+
+## Endpoints Overview
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/observability` | Health overview across all sources |
+| GET | `/api/observability/vercel` | Vercel deployment metrics |
+| GET | `/api/observability/railway` | Railway service status |
+| GET | `/api/observability/logs` | Aggregated logs |
+| GET | `/api/observability/sentry` | Sentry issues |
+| GET | `/api/observability/incidents` | Grouped incidents |
+| POST | `/api/observability/incidents/:id/acknowledge` | Acknowledge an incident |
+| GET | `/api/events/stream` | SSE real-time event stream |
+
+---
+
+## Health Overview
+
+Aggregate health status from all connected observability sources.
+
+```
+GET /api/observability
+```
+
+### Request
+
+```bash
+curl http://localhost:3000/api/observability \
+  -H "x-org-id: org-acme-corp"
+```
+
+### Response
+
+```json
+{
+  "status": "degraded",
+  "sources": {
+    "vercel": { "status": "healthy", "deployments": 3, "errors": 0 },
+    "railway": { "status": "degraded", "services": 4, "unhealthy": 1 },
+    "sentry": { "status": "warning", "unresolvedIssues": 7 }
+  },
+  "activeIncidents": 1,
+  "lastUpdated": "2026-03-21T14:10:00Z"
+}
+```
+
+### Response Schema
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `status` | string | Overall status: `healthy`, `degraded`, `critical` |
+| `sources` | object | Per-source health summary |
+| `activeIncidents` | number | Count of unresolved incidents |
+| `lastUpdated` | string | ISO 8601 timestamp of last data refresh |
+
+---
+
+## Vercel Metrics
+
+Retrieve deployment status and performance metrics from Vercel.
+
+```
+GET /api/observability/vercel
+```
+
+### Query Parameters
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `projectId` | string | — | Filter by Vercel project ID |
+| `limit` | number | 10 | Max deployments to return |
+
+### Request
+
+```bash
+curl "http://localhost:3000/api/observability/vercel?limit=5" \
+  -H "x-org-id: org-acme-corp"
+```
+
+### Response
+
+```json
+{
+  "deployments": [
+    {
+      "id": "dpl_abc123",
+      "name": "codespar-docs",
+      "url": "https://codespar-docs-abc123.vercel.app",
+      "state": "READY",
+      "target": "production",
+      "branch": "main",
+      "commit": "feat: add A2A docs",
+      "createdAt": "2026-03-21T13:50:00Z",
+      "readyAt": "2026-03-21T13:52:30Z",
+      "buildDuration": 150000
+    }
+  ],
+  "total": 1
+}
+```
+
+---
+
+## Railway Services
+
+Retrieve service health and resource usage from Railway.
+
+```
+GET /api/observability/railway
+```
+
+### Request
+
+```bash
+curl http://localhost:3000/api/observability/railway \
+  -H "x-org-id: org-acme-corp"
+```
+
+### Response
+
+```json
+{
+  "services": [
+    {
+      "id": "srv-core",
+      "name": "codespar-core",
+      "status": "running",
+      "region": "us-west-1",
+      "replicas": 2,
+      "cpu": { "usage": 0.45, "limit": 1.0 },
+      "memory": { "usageMB": 312, "limitMB": 512 },
+      "restarts": 0,
+      "uptime": 259200,
+      "lastDeployedAt": "2026-03-18T10:00:00Z"
+    },
+    {
+      "id": "srv-redis",
+      "name": "redis",
+      "status": "running",
+      "region": "us-west-1",
+      "replicas": 1,
+      "cpu": { "usage": 0.12, "limit": 0.5 },
+      "memory": { "usageMB": 128, "limitMB": 256 },
+      "restarts": 0,
+      "uptime": 604800,
+      "lastDeployedAt": "2026-03-14T08:00:00Z"
+    }
+  ],
+  "total": 2
+}
+```
+
+---
+
+## Logs
+
+Retrieve aggregated logs from all services with filtering.
+
+```
+GET /api/observability/logs
+```
+
+### Query Parameters
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `project` | string | — | Filter by project ID |
+| `service` | string | — | Filter by service name |
+| `level` | string | — | Filter by log level: `info`, `warn`, `error`, `fatal` |
+| `search` | string | — | Full-text search within log messages |
+| `since` | string | 1h ago | ISO 8601 start time |
+| `until` | string | now | ISO 8601 end time |
+| `limit` | number | 100 | Max log entries |
+
+### Request
+
+```bash
+curl "http://localhost:3000/api/observability/logs?project=proj-001&level=error&limit=20" \
+  -H "x-org-id: org-acme-corp"
+```
+
+### Response
+
+```json
+{
+  "logs": [
+    {
+      "timestamp": "2026-03-21T14:05:12.345Z",
+      "level": "error",
+      "service": "codespar-core",
+      "message": "Failed to process webhook: timeout after 30000ms",
+      "metadata": {
+        "requestId": "req-abc123",
+        "webhookSource": "github",
+        "duration": 30012
+      }
+    }
+  ],
+  "total": 1,
+  "truncated": false
+}
+```
+
+---
+
+## Sentry Issues
+
+Retrieve unresolved Sentry issues. This endpoint proxies requests to the Sentry API with CodeSpar's stored credentials.
+
+```
+GET /api/observability/sentry
+```
+
+### Query Parameters
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `project` | string | — | Sentry project slug |
+| `query` | string | `is:unresolved` | Sentry search query |
+| `limit` | number | 25 | Max results |
+
+### Request
+
+```bash
+curl "http://localhost:3000/api/observability/sentry?project=api-gateway&limit=5" \
+  -H "x-org-id: org-acme-corp"
+```
+
+### Response
+
+```json
+{
+  "issues": [
+    {
+      "id": "4812345",
+      "title": "TypeError: Cannot read property 'id' of undefined",
+      "culprit": "src/handlers/checkout.ts in processOrder",
+      "level": "error",
+      "count": 142,
+      "userCount": 38,
+      "firstSeen": "2026-03-20T09:00:00Z",
+      "lastSeen": "2026-03-21T14:01:00Z",
+      "permalink": "https://sentry.io/organizations/acme/issues/4812345/"
+    }
+  ],
+  "total": 1
+}
+```
+
+---
+
+## Incidents
+
+Incidents are auto-created when alerts fire from Sentry, PagerDuty, or deployment failures. They group related events for investigation.
+
+### List Incidents
+
+```
+GET /api/observability/incidents
+```
+
+#### Query Parameters
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `status` | string | `open` | Filter: `open`, `acknowledged`, `resolved` |
+| `severity` | string | — | Filter: `critical`, `high`, `medium`, `low` |
+| `project` | string | — | Filter by project ID |
+| `limit` | number | 25 | Max results |
+
+#### Request
+
+```bash
+curl "http://localhost:3000/api/observability/incidents?status=open&severity=critical" \
+  -H "x-org-id: org-acme-corp"
+```
+
+#### Response
+
+```json
+{
+  "incidents": [
+    {
+      "id": "inc-001",
+      "title": "High error rate on checkout endpoint",
+      "severity": "critical",
+      "status": "open",
+      "source": "sentry",
+      "projectId": "proj-001",
+      "events": [
+        { "type": "sentry.error", "issueId": "4812345", "timestamp": "2026-03-21T14:01:00Z" },
+        { "type": "alert.analyzed", "agentId": "agent-incident-xyz789", "timestamp": "2026-03-21T14:01:30Z" }
+      ],
+      "assignedAgent": "agent-incident-xyz789",
+      "createdAt": "2026-03-21T14:01:00Z",
+      "updatedAt": "2026-03-21T14:01:30Z"
+    }
+  ],
+  "total": 1
+}
+```
+
+### Acknowledge Incident
+
+Mark an incident as acknowledged, stopping further escalation.
+
+```
+POST /api/observability/incidents/:id/acknowledge
+```
+
+#### Request
+
+```bash
+curl -X POST http://localhost:3000/api/observability/incidents/inc-001/acknowledge \
+  -H "Content-Type: application/json" \
+  -H "x-org-id: org-acme-corp" \
+  -d '{"acknowledgedBy": "user-fabiano"}'
+```
+
+#### Response
+
+```json
+{
+  "id": "inc-001",
+  "status": "acknowledged",
+  "acknowledgedBy": "user-fabiano",
+  "acknowledgedAt": "2026-03-21T14:05:00Z"
+}
+```
+
+---
+
+## Real-Time Events (SSE)
+
+Subscribe to a Server-Sent Events stream for live observability updates. The connection stays open and pushes events as they occur.
+
+```
+GET /api/events/stream
+```
+
+### Query Parameters
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `project` | string | — | Filter events by project ID |
+| `types` | string | — | Comma-separated event types to subscribe to |
+
+### Request
+
+```bash
+curl -N "http://localhost:3000/api/events/stream?project=proj-001" \
+  -H "x-org-id: org-acme-corp" \
+  -H "Accept: text/event-stream"
+```
+
+### Event Format
+
+Each event follows the SSE specification:
+
+```
+event: deploy.status
+data: {"deployId":"dpl_abc123","status":"READY","project":"codespar-docs","timestamp":"2026-03-21T14:00:00Z"}
+
+event: sentry.error
+data: {"issueId":"4812345","title":"TypeError: Cannot read property 'id' of undefined","level":"error","timestamp":"2026-03-21T14:01:00Z"}
+
+event: alert.analyzed
+data: {"incidentId":"inc-001","agentId":"agent-incident-xyz789","summary":"High error rate correlated with deploy dpl_abc122","timestamp":"2026-03-21T14:01:30Z"}
+```
+
+### Event Types
+
+| Event Type | Description | Payload Fields |
+|------------|-------------|----------------|
+| `deploy.status` | Deployment state change | `deployId`, `status`, `project`, `branch` |
+| `deploy.healthy` | Post-deploy health check passed | `deployId`, `project`, `checks` |
+| `deploy.unhealthy` | Post-deploy health check failed | `deployId`, `project`, `checks`, `reason` |
+| `sentry.error` | New Sentry issue detected | `issueId`, `title`, `level`, `project` |
+| `sentry.analyzed` | Agent finished analyzing Sentry issue | `issueId`, `agentId`, `summary`, `severity` |
+| `alert.analyzed` | Agent analyzed an alert/incident | `incidentId`, `agentId`, `summary` |
+| `log.entry` | New log entry matching watch criteria | `service`, `level`, `message` |
+
+### Connection Notes
+
+- The stream sends a `:keepalive` comment every 30 seconds to maintain the connection.
+- Clients should implement automatic reconnection with the `Last-Event-ID` header for resumption.
+- Events are scoped to the organization specified in `x-org-id`.
+
+---
+
+## Error Responses
+
+**Source not configured:**
+
+```json
+{
+  "error": "Vercel integration is not configured",
+  "code": "INTEGRATION_NOT_CONFIGURED",
+  "status": 400
+}
+```
+
+**Incident not found:**
+
+```json
+{
+  "error": "Incident not found",
+  "code": "INCIDENT_NOT_FOUND",
+  "status": 404
+}
+```
+
+**Upstream timeout:**
+
+```json
+{
+  "error": "Railway API request timed out",
+  "code": "UPSTREAM_TIMEOUT",
+  "status": 504
+}
+```
+
+---
+
+## Next Steps
+
+- [Integrations API](/docs/api/integrations) -- Configure third-party services
+- [A2A API](/docs/api/a2a) -- Submit tasks via the A2A protocol
+- [Audit API](/docs/api/audit) -- Query the immutable audit trail

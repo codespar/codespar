@@ -3,10 +3,13 @@
   "pages": [
     "index",
     "agents",
+    "a2a",
     "projects",
     "audit",
     "channels",
+    "integrations",
     "memory",
+    "observability",
     "orgs",
     "webhooks",
     "scheduler"

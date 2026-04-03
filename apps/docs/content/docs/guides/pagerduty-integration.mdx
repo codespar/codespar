@@ -1,0 +1,227 @@
+---
+title: PagerDuty Integration
+description: Step-by-step PagerDuty setup — route critical alerts to on-call engineers, auto-resolve incidents when deploys recover, and manage on-call from the dashboard.
+---
+
+# PagerDuty Integration
+
+CodeSpar integrates with PagerDuty to page on-call engineers when critical incidents occur. Build failures, deploy health issues, and high-severity Sentry errors can automatically create PagerDuty incidents. When the issue is resolved (e.g., a rollback succeeds), CodeSpar auto-resolves the PagerDuty incident.
+
+## Prerequisites
+
+Before you start, you need:
+
+1. **PagerDuty account** with at least one service configured
+2. **PagerDuty API v2 token** with write access (Account Settings > API Access Keys)
+3. **Service ID** — the PagerDuty service that will receive incidents
+4. **Escalation Policy ID** — the escalation policy for routing alerts
+5. **From email** — a valid email address associated with your PagerDuty account (required by the API for incident creation)
+
+## Configuration
+
+Set the following environment variables in your CodeSpar instance:
+
+```bash
+# Required
+PAGERDUTY_API_TOKEN=u+abcdef1234567890
+PAGERDUTY_FROM_EMAIL=ops@acme.com
+PAGERDUTY_SERVICE_ID=P1ABC2D
+PAGERDUTY_ESCALATION_POLICY_ID=PABCDEF
+
+# Optional
+PAGERDUTY_ENABLED=true                    # Enable/disable PagerDuty integration (default: true if token is set)
+PAGERDUTY_AUTO_RESOLVE=true               # Auto-resolve incidents on recovery (default: true)
+PAGERDUTY_SEVERITY_THRESHOLD=high         # Minimum severity to page: critical, high, medium, low (default: high)
+PAGERDUTY_DEDUP_KEY_PREFIX=codespar       # Prefix for deduplication keys (default: codespar)
+```
+
+### Finding Your Service ID and Escalation Policy ID
+
+1. **Service ID:** Go to PagerDuty > Services > select your service > the URL contains the ID: `https://acme.pagerduty.com/services/P1ABC2D`
+2. **Escalation Policy ID:** Go to PagerDuty > Escalation Policies > select the policy > URL: `https://acme.pagerduty.com/escalation_policies/PABCDEF`
+
+### Environment Variable Reference
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `PAGERDUTY_API_TOKEN` | Yes | — | PagerDuty API v2 token |
+| `PAGERDUTY_FROM_EMAIL` | Yes | — | Email for the `From` header (must be a valid PD user) |
+| `PAGERDUTY_SERVICE_ID` | Yes | — | PagerDuty service to receive incidents |
+| `PAGERDUTY_ESCALATION_POLICY_ID` | Yes | — | Escalation policy for routing |
+| `PAGERDUTY_ENABLED` | No | `true` | Toggle integration on/off |
+| `PAGERDUTY_AUTO_RESOLVE` | No | `true` | Auto-resolve incidents when issue clears |
+| `PAGERDUTY_SEVERITY_THRESHOLD` | No | `high` | Minimum severity that triggers a page |
+| `PAGERDUTY_DEDUP_KEY_PREFIX` | No | `codespar` | Prefix for PD dedup keys (prevents duplicates) |
+
+## What Triggers a PagerDuty Incident
+
+CodeSpar creates a PagerDuty incident when any of these occur and the severity meets the threshold:
+
+| Trigger | Severity | PagerDuty Incident Title |
+|---------|----------|-------------------------|
+| Deploy health monitor detects critical spike (5x baseline) | `critical` | `[CodeSpar] Critical: acme/backend-api deploy v2.4.1 — error rate 5.8x baseline` |
+| Deploy health monitor detects sustained error increase | `high` | `[CodeSpar] High: acme/backend-api deploy v2.4.1 — sustained error rate 3.2x baseline` |
+| New fatal Sentry errors after deploy | `critical` | `[CodeSpar] Critical: acme/backend-api — 3 new fatal Sentry errors post-deploy` |
+| Build failure on main branch (configurable) | `high` | `[CodeSpar] High: acme/backend-api CI build #349 failed on main` |
+| Incident Agent escalation | Varies | `[CodeSpar] {severity}: acme/backend-api — {incident summary}` |
+
+### Incident Payload
+
+Each PagerDuty incident includes structured details in the body:
+
+```json
+{
+  "incident": {
+    "type": "incident",
+    "title": "[CodeSpar] Critical: acme/backend-api deploy v2.4.1 — error rate 5.8x baseline",
+    "service": {
+      "id": "P1ABC2D",
+      "type": "service_reference"
+    },
+    "escalation_policy": {
+      "id": "PABCDEF",
+      "type": "escalation_policy_reference"
+    },
+    "urgency": "high",
+    "body": {
+      "type": "incident_body",
+      "details": "Project: acme/backend-api\nEnvironment: production\nDeploy: v2.4.1 (abc1234)\nError rate: 5.8x baseline\nNew Sentry issues: TypeError in auth.ts, ConnectionError in db.ts\n\nCodeSpar health monitor detected a critical error spike.\nRollback suggested: @codespar rollback production"
+    },
+    "incident_key": "codespar-acme-backend-api-deploy-v2.4.1"
+  }
+}
+```
+
+### Deduplication
+
+CodeSpar uses PagerDuty's `incident_key` for deduplication. The key is constructed as:
+
+```
+{PAGERDUTY_DEDUP_KEY_PREFIX}-{projectSlug}-{eventType}-{identifier}
+```
+
+Examples:
+- `codespar-acme-backend-api-deploy-v2.4.1`
+- `codespar-acme-backend-api-build-349`
+- `codespar-acme-backend-api-sentry-ISSUE-123`
+
+If multiple alerts fire for the same event, PagerDuty groups them into a single incident.
+
+## Auto-Resolve
+
+When `PAGERDUTY_AUTO_RESOLVE` is `true`, CodeSpar automatically resolves the PagerDuty incident when:
+
+| Recovery Event | Resolution |
+|---------------|------------|
+| Deploy confirmed healthy (10/10 checks pass) | Resolves deploy-related incidents |
+| Rollback succeeds and health monitor passes | Resolves deploy and Sentry incidents |
+| Build passes after a failure on the same branch | Resolves build-related incidents |
+
+Resolution message example:
+
+```
+Resolved by CodeSpar: Deploy v2.4.1 was rolled back to v2.4.0.
+Health monitor confirmed rollback is healthy (10/10 checks passed).
+```
+
+If `PAGERDUTY_AUTO_RESOLVE` is `false`, incidents remain open until manually resolved in PagerDuty.
+
+## Dashboard: On-Call and Acknowledgment
+
+The CodeSpar dashboard shows PagerDuty status for each project:
+
+### View On-Call
+
+The project overview displays the current on-call engineer pulled from PagerDuty:
+
+```
+On-Call: Sarah Chen (until Apr 7, 08:00 UTC)
+Escalation: Platform Team — L1 → L2 after 15 min
+```
+
+### Acknowledge from Dashboard
+
+When a PagerDuty incident is triggered, the dashboard shows an acknowledgment button. Clicking it:
+
+1. Acknowledges the incident in PagerDuty
+2. Logs the acknowledgment in the CodeSpar audit trail
+3. Notifies connected channels that the incident was acknowledged
+
+## API Endpoints
+
+### Trigger a PagerDuty Incident Manually
+
+```bash
+curl -X POST https://your-codespar-instance.com/api/integrations/pagerduty/incidents \
+  -H "Authorization: Bearer YOUR_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "projectSlug": "acme/backend-api",
+    "title": "Manual escalation: database connection pool exhausted",
+    "severity": "critical",
+    "details": "Connection pool at 100% for 5 minutes. No new connections available."
+  }'
+```
+
+### Get Current On-Call
+
+```bash
+curl https://your-codespar-instance.com/api/integrations/pagerduty/on-call \
+  -H "Authorization: Bearer YOUR_API_KEY"
+```
+
+Response:
+
+```json
+{
+  "oncall": [
+    {
+      "user": { "name": "Sarah Chen", "email": "sarah@acme.com" },
+      "escalationLevel": 1,
+      "start": "2026-03-31T08:00:00Z",
+      "end": "2026-04-07T08:00:00Z"
+    }
+  ]
+}
+```
+
+### Resolve an Incident
+
+```bash
+curl -X POST https://your-codespar-instance.com/api/integrations/pagerduty/incidents/resolve \
+  -H "Authorization: Bearer YOUR_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "incidentKey": "codespar-acme-backend-api-deploy-v2.4.1",
+    "resolution": "Confirmed false positive — error rate normalized after cache warm-up"
+  }'
+```
+
+## Troubleshooting
+
+### Incidents Not Creating
+
+1. Verify `PAGERDUTY_API_TOKEN` is valid — test with: `curl -H "Authorization: Token token=YOUR_TOKEN" https://api.pagerduty.com/users/me`
+2. Confirm `PAGERDUTY_FROM_EMAIL` matches a user in your PagerDuty account
+3. Check that `PAGERDUTY_SERVICE_ID` and `PAGERDUTY_ESCALATION_POLICY_ID` are correct
+4. Verify the alert severity meets `PAGERDUTY_SEVERITY_THRESHOLD`
+5. Check server logs for `pagerduty` entries
+
+### Incidents Not Auto-Resolving
+
+1. Confirm `PAGERDUTY_AUTO_RESOLVE` is `true`
+2. Verify the `incident_key` matches between creation and resolution
+3. Check that the recovery event actually fired (health monitor passed, build succeeded)
+
+### Wrong People Getting Paged
+
+1. Review the escalation policy in PagerDuty (not in CodeSpar)
+2. Verify `PAGERDUTY_ESCALATION_POLICY_ID` points to the correct policy
+3. Check the on-call schedule in PagerDuty for the correct rotation
+
+## Next Steps
+
+- [Post-Deploy Health Monitor](/docs/guides/health-monitor-rollback) -- understand what triggers PagerDuty alerts
+- [Linear Integration](/docs/guides/linear-integration) -- create tickets for non-urgent issues
+- [Deploy Pipeline](/docs/guides/deploy-pipeline) -- set up the full deploy workflow
+- [Enterprise Integrations](/docs/guides/enterprise-integrations) -- overview of all integrations

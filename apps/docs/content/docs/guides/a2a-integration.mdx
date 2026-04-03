@@ -1,0 +1,322 @@
+---
+title: A2A Integration
+description: How to set up agent-to-agent (A2A) communication — discover CodeSpar agents, submit tasks, poll for results, and configure outbound A2A policies.
+---
+
+# A2A Integration
+
+Agent-to-Agent (A2A) is an open protocol that lets external AI agents interact with CodeSpar agents programmatically. A CI agent can ask CodeSpar to investigate a build failure. A monitoring agent can request a rollback. Any A2A-compatible agent can discover and invoke CodeSpar skills over HTTP.
+
+## What is A2A
+
+A2A is a standardized protocol for agent interoperability. Each agent publishes a descriptor at `/.well-known/agent.json` that lists its capabilities (skills). Other agents discover these skills, submit tasks, and poll for results — all over REST.
+
+CodeSpar implements A2A as both a **server** (external agents call CodeSpar) and a **client** (CodeSpar calls external agents).
+
+## Discovering CodeSpar Agents
+
+Every CodeSpar instance exposes an agent descriptor at:
+
+```
+GET https://your-codespar-instance.com/.well-known/agent.json
+```
+
+Example response:
+
+```json
+{
+  "name": "CodeSpar",
+  "description": "Autonomous multi-agent platform for code projects",
+  "url": "https://your-codespar-instance.com",
+  "version": "1.0.0",
+  "skills": [
+    {
+      "id": "investigate-build-failure",
+      "name": "Investigate Build Failure",
+      "description": "Analyzes CI logs, correlates with recent commits, posts root cause",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "projectSlug": { "type": "string" },
+          "workflowRunId": { "type": "string" },
+          "branch": { "type": "string" }
+        },
+        "required": ["projectSlug", "workflowRunId"]
+      }
+    },
+    {
+      "id": "review-pull-request",
+      "name": "Review Pull Request",
+      "description": "Reviews a PR for code quality, security, and correctness",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "projectSlug": { "type": "string" },
+          "prNumber": { "type": "integer" }
+        },
+        "required": ["projectSlug", "prNumber"]
+      }
+    },
+    {
+      "id": "deploy",
+      "name": "Deploy",
+      "description": "Triggers a deployment to the specified environment",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "projectSlug": { "type": "string" },
+          "environment": { "type": "string", "enum": ["staging", "production"] },
+          "branch": { "type": "string" }
+        },
+        "required": ["projectSlug", "environment"]
+      }
+    }
+  ],
+  "authentication": {
+    "type": "bearer",
+    "description": "Use an API key from the CodeSpar dashboard"
+  }
+}
+```
+
+## Submitting a Task
+
+To invoke a CodeSpar skill, send a `POST` to the `/a2a/tasks` endpoint with the skill ID and input parameters:
+
+```bash
+curl -X POST https://your-codespar-instance.com/a2a/tasks \
+  -H "Authorization: Bearer YOUR_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "skillId": "investigate-build-failure",
+    "input": {
+      "projectSlug": "acme/backend-api",
+      "workflowRunId": "12345678",
+      "branch": "main"
+    },
+    "callbackUrl": "https://your-agent.com/a2a/callback"
+  }'
+```
+
+Response:
+
+```json
+{
+  "taskId": "a2a_01J8K3M5N7P9Q2R4S6T8",
+  "status": "accepted",
+  "createdAt": "2026-04-03T14:30:00Z"
+}
+```
+
+### Task Fields
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `skillId` | Yes | The skill to invoke (from `agent.json`) |
+| `input` | Yes | Parameters matching the skill's `inputSchema` |
+| `callbackUrl` | No | URL to receive the result when the task completes |
+| `priority` | No | `low`, `medium`, `high` (default: `medium`) |
+| `metadata` | No | Arbitrary key-value pairs passed through to the result |
+
+## Polling for Results
+
+If you did not provide a `callbackUrl`, poll the task status:
+
+```bash
+curl https://your-codespar-instance.com/a2a/tasks/a2a_01J8K3M5N7P9Q2R4S6T8 \
+  -H "Authorization: Bearer YOUR_API_KEY"
+```
+
+Response while in progress:
+
+```json
+{
+  "taskId": "a2a_01J8K3M5N7P9Q2R4S6T8",
+  "status": "in_progress",
+  "skillId": "investigate-build-failure",
+  "createdAt": "2026-04-03T14:30:00Z",
+  "updatedAt": "2026-04-03T14:30:15Z"
+}
+```
+
+Response when complete:
+
+```json
+{
+  "taskId": "a2a_01J8K3M5N7P9Q2R4S6T8",
+  "status": "completed",
+  "skillId": "investigate-build-failure",
+  "result": {
+    "rootCause": "TypeError in user.service.ts:47 — null user after session expiry",
+    "correlatedCommit": "def5678",
+    "suggestedFix": "Add null check before accessing user.email",
+    "severity": "high"
+  },
+  "createdAt": "2026-04-03T14:30:00Z",
+  "completedAt": "2026-04-03T14:31:22Z"
+}
+```
+
+### Task Statuses
+
+| Status | Description |
+|--------|-------------|
+| `accepted` | Task received, queued for processing |
+| `in_progress` | Agent is actively working on the task |
+| `completed` | Task finished successfully, `result` contains output |
+| `failed` | Task failed, `error` contains details |
+| `rejected` | Task rejected by policy (budget, allowlist, permissions) |
+
+If you provided a `callbackUrl`, CodeSpar sends a `POST` with the completed task payload to that URL when the task finishes.
+
+## Outbound A2A: Calling External Agents
+
+CodeSpar can also call external A2A-compatible agents. Configure allowed external agents in your environment:
+
+```bash
+# Comma-separated list of trusted external agent URLs
+A2A_ALLOWED_AGENTS=https://ci-agent.internal.acme.com,https://monitoring.internal.acme.com
+
+# Discovery: CodeSpar fetches /.well-known/agent.json from each on startup
+A2A_DISCOVERY_ON_STARTUP=true
+
+# Timeout for outbound A2A requests (ms)
+A2A_OUTBOUND_TIMEOUT_MS=30000
+```
+
+Once configured, CodeSpar agents can delegate tasks to external agents. For example, the Incident Agent can ask an external monitoring agent for additional metrics when investigating a failure.
+
+### Registering External Agents via API
+
+You can also register external agents dynamically:
+
+```bash
+curl -X POST https://your-codespar-instance.com/api/a2a/agents \
+  -H "Authorization: Bearer YOUR_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "url": "https://ci-agent.internal.acme.com",
+    "name": "CI Agent",
+    "allowedSkills": ["run-tests", "lint-check"]
+  }'
+```
+
+## A2A Policy: Budget, Allowlist, Approval Rules
+
+Control A2A behavior with policy rules to prevent runaway costs and unauthorized interactions.
+
+### Environment Variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `A2A_ENABLED` | `false` | Enable A2A server endpoints |
+| `A2A_ALLOWED_AGENTS` | `""` | Comma-separated URLs of trusted external agents |
+| `A2A_DISCOVERY_ON_STARTUP` | `true` | Auto-discover skills from allowed agents on boot |
+| `A2A_OUTBOUND_TIMEOUT_MS` | `30000` | Timeout for outbound A2A calls |
+| `A2A_MAX_TASKS_PER_HOUR` | `100` | Rate limit: max inbound A2A tasks per hour |
+| `A2A_MAX_COST_PER_TASK_USD` | `1.00` | Budget cap per individual A2A task |
+| `A2A_MAX_DAILY_BUDGET_USD` | `50.00` | Daily budget cap for all A2A tasks |
+| `A2A_REQUIRE_APPROVAL_SKILLS` | `""` | Comma-separated skill IDs that require human approval |
+
+### ABAC Policy Example
+
+Add an A2A policy rule in your project's YAML policy file:
+
+```yaml
+- name: a2a-production-deploy-approval
+  description: Require human approval for A2A deploy tasks targeting production
+  conditions:
+    source: a2a
+    skillId: deploy
+    input.environment: production
+  action: require_approval
+  quorum: 2
+
+- name: a2a-budget-limit
+  description: Reject A2A tasks when daily budget exceeded
+  conditions:
+    source: a2a
+    dailyCostUsd:
+      gt: 50
+  action: deny
+  message: "A2A daily budget exceeded"
+```
+
+### Approval Flow for A2A Tasks
+
+When an A2A task triggers an approval requirement:
+
+1. CodeSpar creates an approval request and notifies the team via connected channels
+2. The A2A task status moves to `pending_approval`
+3. Team members approve or deny via channel (Slack, WhatsApp, etc.)
+4. Once approved, the task resumes. If denied or expired, the task is rejected.
+5. The external agent receives the final status via callback or polling.
+
+## Example: External CI Agent Investigates a Build Failure
+
+A common A2A scenario: your CI system has an agent that detects build failures and asks CodeSpar to investigate.
+
+### Step 1: CI Agent Discovers CodeSpar
+
+```bash
+curl https://your-codespar-instance.com/.well-known/agent.json
+```
+
+The CI agent finds the `investigate-build-failure` skill.
+
+### Step 2: CI Agent Submits a Task
+
+```bash
+curl -X POST https://your-codespar-instance.com/a2a/tasks \
+  -H "Authorization: Bearer CI_AGENT_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "skillId": "investigate-build-failure",
+    "input": {
+      "projectSlug": "acme/backend-api",
+      "workflowRunId": "98765432",
+      "branch": "main"
+    },
+    "callbackUrl": "https://ci-agent.internal.acme.com/a2a/callback",
+    "metadata": {
+      "ciSystem": "github-actions",
+      "triggeredBy": "push"
+    }
+  }'
+```
+
+### Step 3: CodeSpar Investigates
+
+The Incident Agent activates, fetches workflow logs, correlates with recent commits, and produces a root cause analysis.
+
+### Step 4: CI Agent Receives the Result
+
+CodeSpar posts to the callback URL:
+
+```json
+{
+  "taskId": "a2a_01J8K3M5N7P9Q2R4S6T8",
+  "status": "completed",
+  "skillId": "investigate-build-failure",
+  "result": {
+    "rootCause": "TypeError in user.service.ts:47 — null user after session expiry",
+    "correlatedCommit": "def5678",
+    "suggestedFix": "Add null check before accessing user.email",
+    "severity": "high",
+    "fixPrUrl": "https://github.com/acme/backend-api/pull/87"
+  },
+  "metadata": {
+    "ciSystem": "github-actions",
+    "triggeredBy": "push"
+  }
+}
+```
+
+The CI agent can then update the build status, post a comment on the commit, or trigger a rerun after the fix is merged.
+
+## Next Steps
+
+- [Webhook Monitoring](/docs/guides/webhook-monitoring) -- set up GitHub webhooks for real-time events
+- [Approval System](/docs/guides/approval-system) -- configure approval rules and quorum
+- [Plugin System](/docs/guides/plugin-system) -- extend CodeSpar with custom plugins
+- [API Reference](/docs/api) -- full API endpoint documentation

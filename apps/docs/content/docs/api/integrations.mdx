@@ -1,0 +1,542 @@
+---
+title: Integrations API
+description: API endpoints for PagerDuty, Linear, Sentry, channel routing, and integration configuration.
+---
+
+# Integrations API
+
+Connect CodeSpar to third-party services for incident management, issue tracking, error monitoring, and alert routing. All integration endpoints require a valid `x-org-id` header for multi-tenant scoping.
+
+---
+
+## Integration Status
+
+Check which integrations are configured and active for the current organization.
+
+```
+GET /api/integrations/status
+```
+
+### Request
+
+```bash
+curl http://localhost:3000/api/integrations/status \
+  -H "x-org-id: org-acme-corp"
+```
+
+### Response
+
+```json
+{
+  "integrations": [
+    { "id": "pagerduty", "configured": true, "status": "active", "lastSync": "2026-03-21T14:00:00Z" },
+    { "id": "linear", "configured": true, "status": "active", "lastSync": "2026-03-21T13:55:00Z" },
+    { "id": "sentry", "configured": true, "status": "active", "lastSync": "2026-03-21T14:01:00Z" },
+    { "id": "slack", "configured": false, "status": "inactive", "lastSync": null }
+  ]
+}
+```
+
+---
+
+## Configure Integration
+
+Set or update credentials and settings for a specific integration.
+
+```
+POST /api/integrations/configure
+```
+
+### Request Body
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `integration` | string | Yes | Integration ID: `pagerduty`, `linear`, `sentry`, `slack` |
+| `config` | object | Yes | Integration-specific configuration |
+
+### Request
+
+```bash
+curl -X POST http://localhost:3000/api/integrations/configure \
+  -H "Content-Type: application/json" \
+  -H "x-org-id: org-acme-corp" \
+  -d '{
+    "integration": "pagerduty",
+    "config": {
+      "apiKey": "u+abcdef1234567890",
+      "serviceId": "P1ABC2D"
+    }
+  }'
+```
+
+### Response
+
+```json
+{
+  "integration": "pagerduty",
+  "status": "active",
+  "configuredAt": "2026-03-21T14:10:00Z"
+}
+```
+
+---
+
+## PagerDuty
+
+### Get On-Call Schedule
+
+Retrieve the current on-call user for a PagerDuty service.
+
+```
+GET /api/integrations/pagerduty/oncall
+```
+
+#### Request
+
+```bash
+curl http://localhost:3000/api/integrations/pagerduty/oncall \
+  -H "x-org-id: org-acme-corp"
+```
+
+#### Response
+
+```json
+{
+  "oncall": {
+    "userId": "PUSER123",
+    "name": "Fabiano Cruz",
+    "email": "fabiano@acme.com",
+    "escalationLevel": 1,
+    "since": "2026-03-21T08:00:00Z",
+    "until": "2026-03-22T08:00:00Z"
+  }
+}
+```
+
+### List Incidents
+
+Retrieve open PagerDuty incidents.
+
+```
+GET /api/integrations/pagerduty/incidents
+```
+
+#### Query Parameters
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `status` | string | `triggered,acknowledged` | Comma-separated statuses |
+| `limit` | number | 25 | Max results |
+
+#### Request
+
+```bash
+curl "http://localhost:3000/api/integrations/pagerduty/incidents?status=triggered" \
+  -H "x-org-id: org-acme-corp"
+```
+
+#### Response
+
+```json
+{
+  "incidents": [
+    {
+      "id": "P1INC001",
+      "title": "High error rate on /api/checkout",
+      "status": "triggered",
+      "urgency": "high",
+      "service": "api-gateway",
+      "createdAt": "2026-03-21T14:05:00Z",
+      "assignee": {
+        "name": "Fabiano Cruz",
+        "email": "fabiano@acme.com"
+      }
+    }
+  ],
+  "total": 1
+}
+```
+
+### Acknowledge Incident
+
+Acknowledge a PagerDuty incident from CodeSpar.
+
+```
+POST /api/integrations/pagerduty/incidents/:id/acknowledge
+```
+
+#### Request
+
+```bash
+curl -X POST http://localhost:3000/api/integrations/pagerduty/incidents/P1INC001/acknowledge \
+  -H "Content-Type: application/json" \
+  -H "x-org-id: org-acme-corp" \
+  -d '{"acknowledgedBy": "agent-proj-abc123"}'
+```
+
+#### Response
+
+```json
+{
+  "id": "P1INC001",
+  "status": "acknowledged",
+  "acknowledgedAt": "2026-03-21T14:06:00Z"
+}
+```
+
+---
+
+## Linear
+
+### List Teams
+
+Retrieve Linear teams visible to the integration.
+
+```
+GET /api/integrations/linear/teams
+```
+
+#### Request
+
+```bash
+curl http://localhost:3000/api/integrations/linear/teams \
+  -H "x-org-id: org-acme-corp"
+```
+
+#### Response
+
+```json
+{
+  "teams": [
+    { "id": "team-eng", "name": "Engineering", "key": "ENG", "issueCount": 142 },
+    { "id": "team-platform", "name": "Platform", "key": "PLT", "issueCount": 87 }
+  ]
+}
+```
+
+### List Issues
+
+Retrieve Linear issues with optional filtering.
+
+```
+GET /api/integrations/linear/issues
+```
+
+#### Query Parameters
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `team` | string | — | Filter by team ID |
+| `status` | string | — | Filter by status (e.g., `In Progress`, `Todo`) |
+| `assignee` | string | — | Filter by assignee ID |
+| `limit` | number | 25 | Max results |
+
+#### Request
+
+```bash
+curl "http://localhost:3000/api/integrations/linear/issues?team=team-eng&status=In%20Progress" \
+  -H "x-org-id: org-acme-corp"
+```
+
+#### Response
+
+```json
+{
+  "issues": [
+    {
+      "id": "ENG-347",
+      "title": "Add rate limiting to public API",
+      "status": "In Progress",
+      "priority": 2,
+      "assignee": { "name": "Maria Silva" },
+      "labels": ["backend", "security"],
+      "createdAt": "2026-03-19T10:00:00Z"
+    }
+  ],
+  "total": 1
+}
+```
+
+### Create Issue
+
+Create a new Linear issue. Used by agents to track work items.
+
+```
+POST /api/integrations/linear/issues
+```
+
+#### Request Body
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `title` | string | Yes | Issue title |
+| `teamId` | string | Yes | Target team ID |
+| `description` | string | No | Markdown description |
+| `priority` | number | No | Priority (0=none, 1=urgent, 2=high, 3=medium, 4=low) |
+| `labels` | string[] | No | Label names |
+
+#### Request
+
+```bash
+curl -X POST http://localhost:3000/api/integrations/linear/issues \
+  -H "Content-Type: application/json" \
+  -H "x-org-id: org-acme-corp" \
+  -d '{
+    "title": "Investigate flaky test in auth module",
+    "teamId": "team-eng",
+    "description": "Test `auth.spec.ts:42` has failed 3 times in the last 24h.",
+    "priority": 3,
+    "labels": ["bug", "flaky-test"]
+  }'
+```
+
+#### Response
+
+```json
+{
+  "id": "ENG-348",
+  "title": "Investigate flaky test in auth module",
+  "status": "Todo",
+  "url": "https://linear.app/acme/issue/ENG-348"
+}
+```
+
+---
+
+## Sentry
+
+### Get Sentry Issues
+
+Proxy endpoint that retrieves unresolved issues from Sentry.
+
+```
+GET /api/observability/sentry
+```
+
+#### Query Parameters
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `project` | string | — | Sentry project slug |
+| `query` | string | `is:unresolved` | Sentry search query |
+| `limit` | number | 25 | Max results |
+
+#### Request
+
+```bash
+curl "http://localhost:3000/api/observability/sentry?project=api-gateway&limit=10" \
+  -H "x-org-id: org-acme-corp"
+```
+
+#### Response
+
+```json
+{
+  "issues": [
+    {
+      "id": "4812345",
+      "title": "TypeError: Cannot read property 'id' of undefined",
+      "culprit": "src/handlers/checkout.ts in processOrder",
+      "level": "error",
+      "count": 142,
+      "userCount": 38,
+      "firstSeen": "2026-03-20T09:00:00Z",
+      "lastSeen": "2026-03-21T14:01:00Z",
+      "permalink": "https://sentry.io/organizations/acme/issues/4812345/"
+    }
+  ],
+  "total": 1
+}
+```
+
+### Sentry Webhook
+
+Receive Sentry alerts and route them to the appropriate Incident Agent.
+
+```
+POST /api/webhooks/sentry
+```
+
+This endpoint is called by Sentry when alert rules fire. The payload follows Sentry's webhook format and is automatically parsed and routed.
+
+#### Request
+
+```bash
+curl -X POST http://localhost:3000/api/webhooks/sentry \
+  -H "Content-Type: application/json" \
+  -H "sentry-hook-signature: <hmac-sha256>" \
+  -d '{
+    "action": "created",
+    "data": {
+      "issue": {
+        "id": "4812345",
+        "title": "TypeError: Cannot read property id of undefined",
+        "project": { "slug": "api-gateway" }
+      }
+    }
+  }'
+```
+
+#### Response
+
+```json
+{
+  "received": true,
+  "routed": true,
+  "agentId": "agent-incident-xyz789"
+}
+```
+
+---
+
+## Channel Routing
+
+Manage alert routing rules that determine which channels receive specific event types.
+
+### List Routes
+
+```
+GET /api/channel-routes
+```
+
+#### Request
+
+```bash
+curl http://localhost:3000/api/channel-routes \
+  -H "x-org-id: org-acme-corp"
+```
+
+#### Response
+
+```json
+{
+  "routes": [
+    {
+      "id": "route-001",
+      "eventType": "incident.*",
+      "channel": "slack",
+      "channelId": "C0ALERTS",
+      "projectId": "proj-001",
+      "enabled": true
+    },
+    {
+      "id": "route-002",
+      "eventType": "deploy.*",
+      "channel": "slack",
+      "channelId": "C0DEPLOY",
+      "projectId": "proj-001",
+      "enabled": true
+    }
+  ]
+}
+```
+
+### Create Route
+
+```
+POST /api/channel-routes
+```
+
+#### Request Body
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `eventType` | string | Yes | Event pattern (supports `*` wildcard) |
+| `channel` | string | Yes | Channel type: `slack`, `whatsapp`, `telegram`, `discord` |
+| `channelId` | string | Yes | Channel/group identifier |
+| `projectId` | string | No | Scope to specific project |
+
+#### Request
+
+```bash
+curl -X POST http://localhost:3000/api/channel-routes \
+  -H "Content-Type: application/json" \
+  -H "x-org-id: org-acme-corp" \
+  -d '{
+    "eventType": "sentry.*",
+    "channel": "slack",
+    "channelId": "C0ERRORS",
+    "projectId": "proj-001"
+  }'
+```
+
+#### Response
+
+```json
+{
+  "id": "route-003",
+  "eventType": "sentry.*",
+  "channel": "slack",
+  "channelId": "C0ERRORS",
+  "projectId": "proj-001",
+  "enabled": true,
+  "createdAt": "2026-03-21T14:15:00Z"
+}
+```
+
+### Delete Route
+
+```
+DELETE /api/channel-routes/:id
+```
+
+#### Request
+
+```bash
+curl -X DELETE http://localhost:3000/api/channel-routes/route-003 \
+  -H "x-org-id: org-acme-corp"
+```
+
+#### Response
+
+```json
+{
+  "id": "route-003",
+  "deleted": true
+}
+```
+
+---
+
+## Error Responses
+
+All integration endpoints return consistent error shapes.
+
+**Integration not configured:**
+
+```json
+{
+  "error": "PagerDuty integration is not configured",
+  "code": "INTEGRATION_NOT_CONFIGURED",
+  "status": 400
+}
+```
+
+**Upstream service error:**
+
+```json
+{
+  "error": "Failed to fetch from Sentry API",
+  "code": "UPSTREAM_ERROR",
+  "status": 502,
+  "details": "Request timeout after 10000ms"
+}
+```
+
+**Route not found:**
+
+```json
+{
+  "error": "Channel route not found",
+  "code": "ROUTE_NOT_FOUND",
+  "status": 404
+}
+```
+
+---
+
+## Next Steps
+
+- [Observability API](/docs/api/observability) -- Health metrics and real-time events
+- [Webhooks API](/docs/api/webhooks) -- Incoming webhook configuration
+- [A2A API](/docs/api/a2a) -- Agent-to-agent task submission

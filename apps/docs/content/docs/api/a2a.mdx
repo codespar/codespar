@@ -1,0 +1,360 @@
+---
+title: Agent-to-Agent (A2A) API
+description: Submit tasks to CodeSpar agents from external systems using the A2A protocol.
+---
+
+# Agent-to-Agent (A2A) API
+
+CodeSpar implements [Google's A2A protocol](https://google.github.io/A2A/) for agent-to-agent communication. External agents and automation tools can discover CodeSpar agents, submit tasks, and track their lifecycle through a standard interface.
+
+---
+
+## Agent Discovery
+
+### Well-Known Agent Card
+
+Returns the primary agent card following the A2A discovery spec.
+
+```
+GET /.well-known/agent.json
+```
+
+#### Request
+
+```bash
+curl http://localhost:3000/.well-known/agent.json
+```
+
+#### Response
+
+```json
+{
+  "name": "CodeSpar",
+  "description": "Autonomous multi-agent platform for software projects",
+  "url": "http://localhost:3000",
+  "version": "1.0.0",
+  "capabilities": {
+    "streaming": false,
+    "pushNotifications": false
+  },
+  "skills": [
+    {
+      "id": "build-status",
+      "name": "Build Status",
+      "description": "Check CI/CD build status for a project",
+      "agentType": "project"
+    }
+  ]
+}
+```
+
+### List All Agent Cards
+
+Retrieve metadata for all registered agent types.
+
+```
+GET /api/agent-cards
+```
+
+#### Request
+
+```bash
+curl http://localhost:3000/api/agent-cards
+```
+
+#### Response
+
+```json
+[
+  {
+    "type": "project",
+    "name": "Project Agent",
+    "lifecycle": "persistent",
+    "description": "Monitors repo, CI/CD, channels",
+    "skills": ["build-status", "diff-summary", "instruct-task", "deploy-trigger", "log-tail"]
+  },
+  {
+    "type": "task",
+    "name": "Task Agent",
+    "lifecycle": "ephemeral",
+    "description": "Executes coding tasks in isolated containers",
+    "skills": ["code-edit", "code-generate", "test-write", "refactor"]
+  },
+  {
+    "type": "review",
+    "name": "Review Agent",
+    "lifecycle": "ephemeral",
+    "description": "PR analysis and code quality review",
+    "skills": ["pr-review", "risk-classify", "review-summary"]
+  }
+]
+```
+
+### Get Single Agent Card
+
+Retrieve the card for a specific agent type.
+
+```
+GET /api/agent-cards/:type
+```
+
+#### Request
+
+```bash
+curl http://localhost:3000/api/agent-cards/project
+```
+
+#### Response
+
+```json
+{
+  "type": "project",
+  "name": "Project Agent",
+  "lifecycle": "persistent",
+  "description": "Monitors repo, CI/CD, channels",
+  "skills": ["build-status", "diff-summary", "instruct-task", "deploy-trigger", "log-tail"]
+}
+```
+
+---
+
+## Task Submission
+
+Submit a task to a CodeSpar agent. The system routes the task to the appropriate agent based on the `skill` field.
+
+```
+POST /a2a/tasks
+```
+
+### Request Body
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `id` | string | No | Client-provided task ID (UUID v7 generated if omitted) |
+| `skill` | string | Yes | Skill to invoke (see Skills Reference below) |
+| `input` | object | Yes | Task input payload |
+| `input.text` | string | Yes | Natural language instruction or query |
+| `input.attachments` | object[] | No | File references or inline content |
+| `metadata` | object | No | Arbitrary key-value pairs passed to the agent |
+
+### Request
+
+```bash
+curl -X POST http://localhost:3000/a2a/tasks \
+  -H "Content-Type: application/json" \
+  -d '{
+    "skill": "code-edit",
+    "input": {
+      "text": "Add input validation to the /api/users endpoint"
+    },
+    "metadata": {
+      "projectId": "proj-001",
+      "priority": "high"
+    }
+  }'
+```
+
+### Response
+
+```json
+{
+  "id": "task-01JA1B2C3D4E5F6G7H8J9K0L",
+  "status": "submitted",
+  "skill": "code-edit",
+  "agentType": "task",
+  "createdAt": "2026-03-21T14:00:00Z"
+}
+```
+
+### Response Schema
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `id` | string | Unique task identifier |
+| `status` | string | Initial status (always `submitted`) |
+| `skill` | string | Skill that was matched |
+| `agentType` | string | Agent type handling the task |
+| `createdAt` | string | ISO 8601 timestamp |
+
+---
+
+## Task Management
+
+### List Tasks
+
+Retrieve submitted tasks with optional filtering.
+
+```
+GET /a2a/tasks
+```
+
+#### Query Parameters
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `limit` | number | 20 | Max results (1-100) |
+| `offset` | number | 0 | Pagination offset |
+| `project` | string | — | Filter by project ID |
+| `status` | string | — | Filter by status |
+
+#### Request
+
+```bash
+curl "http://localhost:3000/a2a/tasks?limit=10&project=proj-001"
+```
+
+#### Response
+
+```json
+{
+  "tasks": [
+    {
+      "id": "task-01JA1B2C3D4E5F6G7H8J9K0L",
+      "status": "completed",
+      "skill": "code-edit",
+      "agentType": "task",
+      "createdAt": "2026-03-21T14:00:00Z",
+      "updatedAt": "2026-03-21T14:05:32Z"
+    }
+  ],
+  "total": 1,
+  "limit": 10,
+  "offset": 0
+}
+```
+
+### Get Task Status
+
+Retrieve the current status and output of a specific task.
+
+```
+GET /a2a/tasks/:id
+```
+
+#### Request
+
+```bash
+curl http://localhost:3000/a2a/tasks/task-01JA1B2C3D4E5F6G7H8J9K0L
+```
+
+#### Response
+
+```json
+{
+  "id": "task-01JA1B2C3D4E5F6G7H8J9K0L",
+  "status": "completed",
+  "skill": "code-edit",
+  "agentType": "task",
+  "input": {
+    "text": "Add input validation to the /api/users endpoint"
+  },
+  "output": {
+    "text": "Added Zod validation schema to POST /api/users. Created PR #42.",
+    "artifacts": [
+      {
+        "type": "pull_request",
+        "url": "https://github.com/acme/api/pull/42"
+      }
+    ]
+  },
+  "metadata": {
+    "projectId": "proj-001",
+    "priority": "high"
+  },
+  "createdAt": "2026-03-21T14:00:00Z",
+  "updatedAt": "2026-03-21T14:05:32Z"
+}
+```
+
+### Cancel a Task
+
+Cancel a task that is `submitted` or `working`.
+
+```
+POST /a2a/tasks/:id/cancel
+```
+
+#### Request
+
+```bash
+curl -X POST http://localhost:3000/a2a/tasks/task-01JA1B2C3D4E5F6G7H8J9K0L/cancel
+```
+
+#### Response
+
+```json
+{
+  "id": "task-01JA1B2C3D4E5F6G7H8J9K0L",
+  "status": "cancelled",
+  "cancelledAt": "2026-03-21T14:02:15Z"
+}
+```
+
+### Error Response
+
+```json
+{
+  "error": "Task not found",
+  "code": "TASK_NOT_FOUND",
+  "status": 404
+}
+```
+
+---
+
+## Task Lifecycle
+
+Tasks follow a linear lifecycle:
+
+```
+submitted → working → completed
+                   → failed
+                   → cancelled
+```
+
+| Status | Description |
+|--------|-------------|
+| `submitted` | Task received and queued |
+| `working` | Agent is actively processing |
+| `completed` | Task finished successfully with output |
+| `failed` | Task failed (error details in output) |
+| `cancelled` | Task cancelled by client or timeout |
+
+---
+
+## Skills Reference
+
+All available skills grouped by agent type.
+
+| Agent Type | Skill | Description |
+|------------|-------|-------------|
+| **project** | `build-status` | Check CI/CD build status |
+| **project** | `diff-summary` | Summarize branch or PR diff |
+| **project** | `instruct-task` | Delegate a coding task to Task Agent |
+| **project** | `deploy-trigger` | Initiate a deployment |
+| **project** | `log-tail` | Retrieve recent activity logs |
+| **task** | `code-edit` | Edit existing code files |
+| **task** | `code-generate` | Generate new code from spec |
+| **task** | `test-write` | Write or update tests |
+| **task** | `refactor` | Refactor code for quality |
+| **review** | `pr-review` | Full pull request review |
+| **review** | `risk-classify` | Classify PR risk level |
+| **review** | `review-summary` | Concise review summary |
+| **deploy** | `deploy-staging` | Deploy to staging environment |
+| **deploy** | `deploy-production` | Deploy to production (requires approval) |
+| **deploy** | `rollback` | Rollback last deployment |
+| **deploy** | `health-check` | Post-deploy health verification |
+| **incident** | `investigate` | Investigate production error |
+| **incident** | `correlate` | Correlate error with recent changes |
+| **incident** | `hotfix` | Propose a hotfix |
+| **coordinator** | `cascade-deploy` | Orchestrate multi-project deploy |
+| **coordinator** | `resource-lock` | Acquire/release shared resource locks |
+| **coordinator** | `cross-project-query` | Query across multiple projects |
+
+---
+
+## Next Steps
+
+- [Agent API](/docs/api/agents) -- Manage agent lifecycle
+- [Webhooks API](/docs/api/webhooks) -- Incoming event webhooks
+- [Integrations API](/docs/api/integrations) -- Third-party service integrations
