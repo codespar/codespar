@@ -412,18 +412,26 @@ export class ProjectAgent implements Agent {
       case "instruct":
       case "fix": {
         const instruction = intent.params.instruction || intent.params.issue || intent.rawText;
+        const instructionStr = typeof instruction === "string" ? instruction.toLowerCase() : "";
 
-        // Self-healing commands from deploy alert buttons
-        if (typeof instruction === "string" && instruction.startsWith("investigate-deploy")) {
-          // Deep investigation using repo context
+        // Deploy investigation commands (from Observability "Investigate in Chat" button)
+        if (instructionStr.includes("investigate") && instructionStr.includes("deploy")) {
           const ctx = await this.buildAgentContext();
-          const imageUrls: { url: string; mimeType?: string }[] = [];
           const smartResponse = await generateSmartResponse(
-            `Investigate this deploy failure in detail. Check the recent commits, error logs, and suggest a specific code fix. Context: ${instruction}`,
-            ctx, imageUrls
+            `The user asked to investigate a deploy. Based ONLY on the audit data and commits you have, answer:
+1. What was deployed? (commit, branch, author)
+2. Did it succeed or fail? If failed, what was the error?
+3. What changed in that commit?
+4. Are there related errors in the activity log after this deploy?
+
+DO NOT invent code fixes. DO NOT propose file changes. Only report what the data shows.
+If the deploy was successful, say so clearly.
+
+User query: ${instruction}`,
+            ctx, []
           );
           response = {
-            text: `[${this.config.id}] ${smartResponse || "Investigation inconclusive. Manual review recommended."}`,
+            text: `[${this.config.id}] ${smartResponse || "No deploy data found for this query."}`,
           };
           break;
         }

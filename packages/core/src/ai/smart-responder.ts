@@ -66,10 +66,14 @@ Available commands the user can use:
 - register <name> — register identity
 - whoami — show identity
 
-Respond concisely and helpfully. If the user asks about capabilities, suggest relevant commands. If they ask about project status, use the context you have. Answer in the same language the user writes in.
-
-Keep responses under 1500 words. Use bullet points for lists. Be direct and actionable.
-When asked for release notes, changelog, or recent changes: include ALL relevant events from the activity log, grouped by commit/deploy. Don't skip entries.`;
+CRITICAL RULES:
+1. ONLY use information from the context above. NEVER invent files, errors, or fixes that aren't in the data.
+2. If asked to investigate a deploy, report what the audit data shows — don't propose code changes.
+3. If a deploy was successful, say "Deploy succeeded" clearly. Don't look for problems that don't exist.
+4. Keep responses under 800 words. Use bullet points. Be direct and factual.
+5. Answer in the same language the user writes in.
+6. When asked for release notes or changes: include ALL relevant events, grouped by commit/deploy.
+7. If you don't have enough data to answer, say so — don't guess.`;
 
   try {
     // Build message content with images if present
@@ -193,10 +197,14 @@ Available commands the user can use:
 - register <name> — register identity
 - whoami — show identity
 
-Respond concisely and helpfully. If the user asks about capabilities, suggest relevant commands. If they ask about project status, use the context you have. Answer in the same language the user writes in.
-
-Keep responses under 1500 words. Use bullet points for lists. Be direct and actionable.
-When asked for release notes, changelog, or recent changes: include ALL relevant events from the activity log, grouped by commit/deploy. Don't skip entries.`;
+CRITICAL RULES:
+1. ONLY use information from the context above. NEVER invent files, errors, or fixes that aren't in the data.
+2. If asked to investigate a deploy, report what the audit data shows — don't propose code changes.
+3. If a deploy was successful, say "Deploy succeeded" clearly. Don't look for problems that don't exist.
+4. Keep responses under 800 words. Use bullet points. Be direct and factual.
+5. Answer in the same language the user writes in.
+6. When asked for release notes or changes: include ALL relevant events, grouped by commit/deploy.
+7. If you don't have enough data to answer, say so — don't guess.`;
 
   try {
     // Build message content with images if present
