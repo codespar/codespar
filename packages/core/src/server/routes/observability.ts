@@ -562,6 +562,7 @@ export function registerObservabilityRoutes(route: RouteFn, ctx: ServerContext):
             action: e.action,
             message: String(meta.detail || meta.commitMessage || e.action),
             detail: String(meta.project || meta.agentId || ""),
+            project: String(meta.project || ""),
           });
         }
       } catch { /* no audit data */ }
@@ -595,6 +596,7 @@ export function registerObservabilityRoutes(route: RouteFn, ctx: ServerContext):
                 action: `deploy.${state.toLowerCase()}`,
                 message: `${d.name} — ${String(meta.githubCommitMessage || "").slice(0, 60)}`,
                 detail: String(meta.githubCommitSha || "").slice(0, 7),
+                project: String(d.name || ""),
               });
             }
           }
@@ -605,8 +607,11 @@ export function registerObservabilityRoutes(route: RouteFn, ctx: ServerContext):
       const projectFilter = String((request.query as Record<string, string>).project || "");
       const filteredLogs = projectFilter
         ? allLogs.filter((entry) => {
-            const entryDetail = String(entry.detail || "");
-            return entryDetail === projectFilter || entryDetail.includes(projectFilter);
+            const entryProject = String(entry.project || entry.detail || "");
+            const entryMessage = String(entry.message || "");
+            return entryProject === projectFilter
+              || entryProject.includes(projectFilter)
+              || entryMessage.startsWith(projectFilter);
           })
         : allLogs;
 
