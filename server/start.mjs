@@ -15,7 +15,7 @@
  *   PROJECT_NAME      — Project identifier (default "default")
  */
 
-import { MessageRouter, WebhookServer, FileStorage, createStorage, ApprovalManager, VectorStore, IdentityStore, analyzeDeployFailure, formatSmartAlert, parseIntent, broadcastEvent } from "@codespar/core";
+import { MessageRouter, WebhookServer, FileStorage, createStorage, ApprovalManager, VectorStore, IdentityStore, analyzeDeployFailure, formatSmartAlert, parseIntent, broadcastEvent, DeployHealthMonitor, ChannelRouter } from "@codespar/core";
 import { AgentSupervisor } from "@codespar/agent-supervisor";
 import { ProjectAgent } from "@codespar/agent-project";
 import { CoordinatorAgent } from "@codespar/agent-coordinator";
@@ -35,7 +35,20 @@ const storage = createStorage();
 console.log(`[server] Storage: ${process.env.DATABASE_URL ? "PostgreSQL" : "FileStorage"}`);
 const approvalManager = new ApprovalManager();
 const vectorStore = new VectorStore();
+const healthMonitor = new DeployHealthMonitor(storage);
 const supervisor = new AgentSupervisor(router);
+
+// 1c. Channel router — per-channel alert routing (e.g., #devops gets deploy alerts)
+const channelRouter = new ChannelRouter();
+try {
+  await channelRouter.loadFromStorage(storage);
+  const routeCount = channelRouter.list().length;
+  if (routeCount > 0) {
+    console.log(`[server] Loaded ${routeCount} channel route(s)`);
+  }
+} catch (err) {
+  console.error("[server] Failed to load channel routes:", err.message);
+}
 
 // 1b. Identity store — persistent cross-channel user resolution
 const identityStore = new IdentityStore(storage);
@@ -244,8 +257,8 @@ webhookServer.setAlertHandler(async (alert) => {
 
     if (analysis) {
       const message = formatSmartAlert(analysis);
-      // Broadcast to all channels
-      await supervisor.broadcastToAllChannels({ text: message });
+      // Route to targeted channels (falls back to broadcast if no routes configured)
+      await supervisor.broadcastToTargetedChannels({ text: message }, "deploy", alert.project, channelRouter);
       console.log(`[alert] Smart alert sent: ${analysis.severity} severity, ${analysis.confidence} confidence`);
 
       // Broadcast analyzed alert to dashboard via SSE + EventBus
@@ -274,7 +287,7 @@ webhookServer.setAlertHandler(async (alert) => {
     } else {
       // Fallback: send basic alert
       const basicMsg = `\u26a0\ufe0f Deploy failed: ${alert.project}\n  Branch: ${alert.branch}\n  Error: ${alert.errorMessage || "Unknown"}`;
-      await supervisor.broadcastToAllChannels({ text: basicMsg });
+      await supervisor.broadcastToTargetedChannels({ text: basicMsg }, "deploy", alert.project, channelRouter);
     }
 
     // Phase 3: Autonomous healing based on agent autonomy level
@@ -314,9 +327,10 @@ webhookServer.setAlertHandler(async (alert) => {
           const fixIntent = await parseIntent(fixMessage.text);
           const fixResponse = await fixAgent.handleMessage(fixMessage, fixIntent);
           if (fixResponse) {
-            await supervisor.broadcastToAllChannels({
-              text: `\uD83D\uDD27 **Auto-fix initiated** for ${alert.project}\n\n${fixResponse.text}`,
-            });
+            await supervisor.broadcastToTargetedChannels(
+              { text: `\uD83D\uDD27 **Auto-fix initiated** for ${alert.project}\n\n${fixResponse.text}` },
+              "deploy", alert.project, channelRouter,
+            );
           }
         } catch (err) {
           console.error(`[alert] Auto-fix failed for ${alert.project}:`, err.message);
@@ -328,7 +342,7 @@ webhookServer.setAlertHandler(async (alert) => {
     const analysis = await analyzeDeployFailure(alert);
     if (analysis) {
       const message = formatSmartAlert(analysis);
-      await supervisor.broadcastToAllChannels({ text: message });
+      await supervisor.broadcastToTargetedChannels({ text: message }, "error", alert.project, channelRouter);
       console.log(`[alert] Sentry alert sent: ${analysis.severity} severity`);
 
       broadcastEvent({ type: "sentry.analyzed", data: { ...analysis, project: alert.project, orgId: alert.orgId } }, alert.orgId);
@@ -340,10 +354,83 @@ webhookServer.setAlertHandler(async (alert) => {
       } catch { /* ignore */ }
     }
   } else if (alert.type === "deploy-success") {
-    const msg = `\u2705 Deploy succeeded: ${alert.project}\n  ${alert.commitMessage ? alert.commitMessage.slice(0, 80) : ""}${alert.url ? `\n  ${alert.url}` : ""}`;
-    // Only broadcast success for production deploys (less noise)
-    // await supervisor.broadcastToAllChannels({ text: msg });
-    console.log(`[alert] Deploy success: ${alert.project}`);
+    console.log(`[alert] Deploy success: ${alert.project} — starting health monitor`);
+
+    // Determine autonomy level for the project agent
+    const agentStatuses = supervisor.getAgentStatuses();
+    const matchedAgent = agentStatuses.find(a =>
+      a.projectId === alert.project || a.id.includes(alert.project)
+    );
+    const autonomyLevel = matchedAgent?.autonomyLevel ?? 1;
+
+    // Start post-deploy health monitoring (non-blocking)
+    healthMonitor.monitor(
+      alert.project,
+      alert.deploymentId || `deploy-${Date.now()}`,
+      {
+        checkIntervalMs: 30_000,
+        monitorDurationMs: 300_000,
+        errorThreshold: 0.10,
+        minSamples: 5,
+      },
+      // onUnhealthy — fires when error rate exceeds threshold for 2 consecutive checks
+      async (result) => {
+        const pct = (result.errorRate * 100).toFixed(1);
+        console.log(`[alert] Deploy unhealthy: ${alert.project} — ${pct}% error rate`);
+
+        if (autonomyLevel >= 4) {
+          // L4+: auto-rollback via Vercel API (redeploy previous deployment)
+          const rollbackMsg = `\u26a0\ufe0f **Auto-rollback triggered** for ${alert.project}\n  Error rate: ${pct}% (threshold: 10%)\n  Checked ${result.checkCount} times over ${result.duration}\n  Errors: ${result.errorCount}/${result.totalRequests} requests\n  Rolling back to previous deployment...`;
+          await supervisor.broadcastToTargetedChannels({ text: rollbackMsg }, "incident", alert.project, channelRouter);
+
+          // Attempt Vercel rollback if token is available
+          const vercelToken = process.env.VERCEL_TOKEN;
+          if (vercelToken && alert.deploymentId) {
+            try {
+              const resp = await fetch(`https://api.vercel.com/v13/deployments`, {
+                method: "POST",
+                headers: {
+                  Authorization: `Bearer ${vercelToken}`,
+                  "Content-Type": "application/json",
+                },
+                body: JSON.stringify({
+                  name: alert.project,
+                  deploymentId: alert.deploymentId,
+                  target: "production",
+                }),
+              });
+              if (resp.ok) {
+                await supervisor.broadcastToTargetedChannels({ text: `\u2705 Rollback initiated for ${alert.project}. Vercel is redeploying the previous version.` }, "incident", alert.project, channelRouter);
+              } else {
+                const body = await resp.text();
+                await supervisor.broadcastToTargetedChannels({ text: `\u274c Rollback API call failed for ${alert.project}: ${resp.status} ${body.slice(0, 200)}` }, "incident", alert.project, channelRouter);
+              }
+            } catch (err) {
+              console.error(`[alert] Vercel rollback failed:`, err.message);
+              await supervisor.broadcastToTargetedChannels({ text: `\u274c Vercel rollback failed for ${alert.project}: ${err.message}` }, "incident", alert.project, channelRouter);
+            }
+          }
+        } else if (autonomyLevel >= 3) {
+          // L3: notify + suggest rollback
+          const msg = `\u26a0\ufe0f **Deploy may be unhealthy** — ${alert.project}\n  Error rate: ${pct}% (threshold: 10%)\n  Checked ${result.checkCount} times over ${result.duration}\n  Errors: ${result.errorCount}/${result.totalRequests} requests\n  Consider rolling back. Use: @codespar rollback production`;
+          await supervisor.broadcastToTargetedChannels({ text: msg }, "incident", alert.project, channelRouter);
+        } else {
+          // L1-L2: notify only
+          const msg = `\u26a0\ufe0f **Deploy may be unhealthy** — ${alert.project}\n  Error rate: ${pct}% (threshold: 10%)\n  Checked ${result.checkCount} times over ${result.duration}\n  Errors: ${result.errorCount}/${result.totalRequests} requests\n  Consider investigating.`;
+          await supervisor.broadcastToTargetedChannels({ text: msg }, "incident", alert.project, channelRouter);
+        }
+
+        // Broadcast unhealthy event to SSE
+        broadcastEvent({ type: "deploy.unhealthy", data: { project: alert.project, errorRate: result.errorRate, errorCount: result.errorCount, totalRequests: result.totalRequests, duration: result.duration, orgId: alert.orgId } }, alert.orgId);
+      },
+      // onComplete — fires when monitoring window ends with healthy status
+      (result) => {
+        console.log(`[alert] Deploy healthy: ${alert.project} — ${result.checkCount} checks over ${result.duration}`);
+        broadcastEvent({ type: "deploy.healthy", data: { project: alert.project, checkCount: result.checkCount, duration: result.duration, orgId: alert.orgId } }, alert.orgId);
+      },
+    ).catch((err) => {
+      console.error(`[alert] Health monitor error for ${alert.project}:`, err.message);
+    });
   }
 });
 
