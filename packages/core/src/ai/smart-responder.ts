@@ -10,6 +10,20 @@ import { createLogger } from "../observability/logger.js";
 
 const log = createLogger("smart");
 
+export interface DeployRecord {
+  id: string;
+  project: string;
+  state: string;
+  commitSha: string;
+  commitMessage: string;
+  author: string;
+  branch: string;
+  buildTimeS: number;
+  timestamp: string;
+  url?: string;
+  error?: string;
+}
+
 export interface AgentContext {
   agentId: string;
   projectId: string;
@@ -19,6 +33,7 @@ export interface AgentContext {
   uptimeMinutes: number;
   recentAudit: Array<{ action: string; detail: string; timestamp: string; repo?: string; branch?: string; commitSha?: string; commitMessage?: string }>;
   recentCommits?: Array<{ sha: string; message: string; author: string; date: string }>;
+  recentDeploys?: DeployRecord[];
   memoryStats: { total: number; byCategory: Record<string, number> };
   linkedChannels: string[];
 }
@@ -50,6 +65,9 @@ ${context.recentAudit.slice(0, 30).map((a) => {
 
 Recent Git commits (from GitHub API):
 ${context.recentCommits?.slice(0, 20).map((c) => `- ${c.sha} ${c.message} (by ${c.author}, ${c.date})`).join("\n") || "No commits available"}
+
+Recent deployments (from Vercel):
+${context.recentDeploys?.slice(0, 15).map((d) => `- [${d.state}] ${d.project} commit ${d.commitSha?.slice(0, 7)} "${d.commitMessage?.slice(0, 60)}" by ${d.author} (${d.branch}, ${d.buildTimeS}s, ${d.timestamp})${d.error ? ` ERROR: ${d.error}` : ""}`).join("\n") || "No deployment data available"}
 
 Available commands the user can use:
 - status — check project/agent status
@@ -181,6 +199,9 @@ ${context.recentAudit.slice(0, 30).map((a) => {
 
 Recent Git commits (from GitHub API):
 ${context.recentCommits?.slice(0, 20).map((c) => `- ${c.sha} ${c.message} (by ${c.author}, ${c.date})`).join("\n") || "No commits available"}
+
+Recent deployments (from Vercel):
+${context.recentDeploys?.slice(0, 15).map((d) => `- [${d.state}] ${d.project} commit ${d.commitSha?.slice(0, 7)} "${d.commitMessage?.slice(0, 60)}" by ${d.author} (${d.branch}, ${d.buildTimeS}s, ${d.timestamp})${d.error ? ` ERROR: ${d.error}` : ""}`).join("\n") || "No deployment data available"}
 
 Available commands the user can use:
 - status — check project/agent status

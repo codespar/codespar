@@ -1685,6 +1685,50 @@ Focus on: ${perfTarget}`;
       } catch { /* skip if GitHub unavailable */ }
     }
 
+    // Fetch recent Vercel deploys for this project
+    let recentDeploys: Array<{ id: string; project: string; state: string; commitSha: string; commitMessage: string; author: string; branch: string; buildTimeS: number; timestamp: string; url?: string; error?: string }> = [];
+    if (this.storage) {
+      try {
+        let vercelToken = process.env.VERCEL_API_TOKEN;
+        let teamId = process.env.VERCEL_TEAM_ID;
+        const vercelConfig = await this.storage.getChannelConfig("vercel-api");
+        if (vercelConfig?.token) vercelToken = vercelConfig.token;
+        if (vercelConfig?.teamId) teamId = vercelConfig.teamId;
+        if (vercelToken) {
+          const teamParam = teamId ? `&teamId=${teamId}` : "";
+          const res = await fetch(`https://api.vercel.com/v6/deployments?limit=20${teamParam}`, {
+            headers: { Authorization: `Bearer ${vercelToken}` },
+            signal: AbortSignal.timeout(8000),
+          });
+          if (res.ok) {
+            const data = await res.json() as { deployments?: Array<Record<string, unknown>> };
+            const projName = repoName || this.config.projectId || "";
+            recentDeploys = (data.deployments || [])
+              .filter((d) => !projName || String(d.name || "").includes(projName))
+              .slice(0, 15)
+              .map((d) => {
+                const m = (d.meta || {}) as Record<string, unknown>;
+                const building = Number(d.buildingAt || 0);
+                const ready = Number(d.ready || 0);
+                return {
+                  id: String(d.uid || d.id || ""),
+                  project: String(d.name || ""),
+                  state: String(d.state || d.readyState || ""),
+                  commitSha: String(m.githubCommitSha || ""),
+                  commitMessage: String(m.githubCommitMessage || ""),
+                  author: String(m.githubCommitAuthorName || ""),
+                  branch: String(d.target || m.githubCommitRef || ""),
+                  buildTimeS: building && ready ? Math.round((ready - building) / 1000) : 0,
+                  timestamp: new Date(Number(d.created || 0)).toISOString(),
+                  url: String(d.url || ""),
+                  error: String(d.errorMessage || d.errorCode || ""),
+                };
+              });
+          }
+        }
+      } catch { /* Vercel unavailable */ }
+    }
+
     return {
       agentId: this.config.id,
       projectId: this.config.projectId || "unknown",
@@ -1694,6 +1738,7 @@ Focus on: ${perfTarget}`;
       uptimeMinutes: Math.floor(uptimeMs / 60000),
       recentAudit,
       recentCommits,
+      recentDeploys,
       memoryStats,
       linkedChannels: [],
     };
