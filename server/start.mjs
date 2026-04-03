@@ -36,6 +36,26 @@ console.log(`[server] Storage: ${process.env.DATABASE_URL ? "PostgreSQL" : "File
 const approvalManager = new ApprovalManager();
 const vectorStore = new VectorStore();
 const healthMonitor = new DeployHealthMonitor(storage);
+
+// 1d. Optional Sentry integration — enhances health monitor with direct API error correlation
+if (process.env.SENTRY_AUTH_TOKEN && process.env.SENTRY_ORG) {
+  try {
+    const sentryClient = new SentryClient(process.env.SENTRY_AUTH_TOKEN, process.env.SENTRY_ORG);
+    const sentryProjectMap = new Map();
+    // Map project names to Sentry project slugs (e.g., PROJECT_SENTRY_MAP="my-app:my-sentry-project,api:api-sentry")
+    if (process.env.PROJECT_SENTRY_MAP) {
+      for (const pair of process.env.PROJECT_SENTRY_MAP.split(",")) {
+        const [proj, sentrySlug] = pair.split(":");
+        if (proj && sentrySlug) sentryProjectMap.set(proj.trim(), sentrySlug.trim());
+      }
+    }
+    healthMonitor.setSentryClient(sentryClient, sentryProjectMap);
+    console.log(`[server] Sentry integration: enabled (org: ${process.env.SENTRY_ORG})`);
+  } catch (err) {
+    console.error("[server] Failed to initialize Sentry client:", err.message);
+  }
+}
+
 const supervisor = new AgentSupervisor(router);
 
 // 1c. Channel router — per-channel alert routing (e.g., #devops gets deploy alerts)

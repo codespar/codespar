@@ -41,6 +41,8 @@ export interface ServerContext {
   storageBaseDir: string;
   /** Vercel deploy dedup map */
   _vercelDedup: Map<string, number>;
+  /** Sentry webhook dedup map (issueKey → last seen timestamp) */
+  _sentryDedup: Map<string, number>;
   /** SSE broadcast */
   broadcastEvent(event: { type: string; data: unknown }, orgId?: string): void;
   /** SSE connections set */

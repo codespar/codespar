@@ -451,48 +451,184 @@ export function registerWebhookRoutes(route: RouteFn, ctx: ServerContext): void 
       reply.send({ received: true, status });
     });
 
-    // ── Sentry webhook — receives error/issue events ──────────────
+    // ── Sentry webhook — receives error/issue/metric_alert events ─
+    // Sentry in-memory dedup map (project+issueId → last seen timestamp)
+    if (!ctx._sentryDedup) ctx._sentryDedup = new Map<string, number>();
+    const SENTRY_DEDUP_WINDOW_MS = 5 * 60 * 1000; // 5 minutes
+
     route("post", "/webhooks/sentry", async (request: any, reply: any) => {
       const orgId = (request.query as Record<string, string>).orgId || (request.headers["x-org-id"] as string) || "default";
 
+      // ── Step 1: HMAC-SHA256 signature verification ──────────────
+      let sentryWebhookSecret: string | undefined;
+      if (ctx.storageProvider && orgId !== "default") {
+        try {
+          const orgStorage = ctx.getOrgStorage(orgId);
+          const sentryConfig = await orgStorage.getChannelConfig("sentry");
+          if (sentryConfig?.webhookSecret) {
+            sentryWebhookSecret = sentryConfig.webhookSecret;
+          }
+        } catch (err) {
+          log.warn("Failed to load org Sentry webhook secret, using env fallback", { orgId, error: String(err) });
+        }
+      }
+      if (!sentryWebhookSecret) {
+        sentryWebhookSecret = process.env["SENTRY_WEBHOOK_SECRET"];
+      }
+
+      if (sentryWebhookSecret) {
+        const signature = request.headers["sentry-hook-signature"] as string;
+        if (!signature) {
+          return reply.status(401).send({ error: "Missing sentry-hook-signature header" });
+        }
+        const rawBody = typeof request.body === "string"
+          ? request.body
+          : JSON.stringify(request.body);
+        const expected = createHmac("sha256", sentryWebhookSecret).update(rawBody).digest("hex");
+        if (expected.length !== signature.length || !timingSafeEqual(Buffer.from(expected), Buffer.from(signature))) {
+          log.warn("Sentry webhook signature mismatch");
+          return reply.status(401).send({ error: "Invalid webhook signature" });
+        }
+      } else {
+        log.warn("SENTRY_WEBHOOK_SECRET is not set — skipping Sentry signature verification");
+      }
+
+      // ── Step 2: Parse payload ───────────────────────────────────
       const payload = request.body as Record<string, unknown>;
-      const action = String(payload.action || ""); // "created", "resolved", "assigned"
+      const action = String(payload.action || ""); // "created", "resolved", "assigned", "ignored", "triggered"
+      const resourceType = String(request.headers["sentry-hook-resource"] || "event_alert"); // "event_alert", "issue", "metric_alert"
       const data = (payload.data || {}) as Record<string, unknown>;
       const issue = (data.issue || data.event || {}) as Record<string, unknown>;
 
-      const title = String(issue.title || "Unknown error");
+      const title = String(issue.title || payload.title || "Unknown error");
       const culprit = String(issue.culprit || "");
       const level = String(issue.level || "error");
       const platform = String(issue.platform || "");
       const firstSeen = String(issue.firstSeen || "");
       const count = Number(issue.count || 1);
       const userCount = Number(issue.userCount || 0);
+      const issueId = String(issue.id || "");
       const project = ((issue.project || {}) as Record<string, unknown>);
       const projectName = String(project.name || project.slug || "unknown");
+      const environment = String(issue.environment || (issue.tags as Record<string, unknown>)?.environment || "");
+      const releaseVersion = String((issue.release as Record<string, unknown>)?.version || (issue.tags as Record<string, unknown>)?.release || "");
+      const affectedUrl = String((issue.tags as Record<string, unknown>)?.url || (issue.metadata as Record<string, unknown>)?.url || "");
 
-      // Extract stack trace if available
+      // ── Step 3: Extract stack trace (first 3 frames) ───────────
       const entries = ((issue.entries || []) as Array<Record<string, unknown>>);
       const exceptionEntry = entries.find(e => e.type === "exception");
       let stackTrace = "";
       if (exceptionEntry) {
         const values = ((exceptionEntry.data as Record<string, unknown>)?.values as Array<Record<string, unknown>>) || [];
-        for (const exc of values.slice(0, 1)) {
+        for (const exc of values.slice(0, 2)) {
+          const excType = String(exc.type || "");
+          const excValue = String(exc.value || "");
           const frames = ((exc.stacktrace as Record<string, unknown>)?.frames as Array<Record<string, unknown>>) || [];
-          const relevantFrames = frames.filter(f => f.inApp).slice(-5);
-          stackTrace = relevantFrames.map(f =>
-            `  ${f.filename}:${f.lineNo} in ${f.function}`
+          const relevantFrames = frames.filter(f => f.inApp).slice(-3);
+          const frameStr = relevantFrames.map(f =>
+            `  ${f.filename}:${f.lineNo}${f.colNo ? `:${f.colNo}` : ""} in ${f.function || "<anonymous>"}`
           ).join("\n");
+          if (excType || excValue) {
+            stackTrace += `${excType}: ${excValue}\n`;
+          }
+          if (frameStr) {
+            stackTrace += frameStr + "\n";
+          }
         }
+        stackTrace = stackTrace.trim();
       }
 
-      log.info("Sentry webhook received", { action, title, project: projectName, level });
+      log.info("Sentry webhook received", { action, resourceType, title, project: projectName, level, issueId });
 
-      // Only process new errors
+      // ── Step 4: Handle resolved/ignored actions ─────────────────
+      if (action === "resolved") {
+        const sentryStorage = ctx.getOrgStorage(orgId);
+        await sentryStorage.appendAudit({
+          actorType: "system",
+          actorId: "sentry",
+          action: "error.resolved",
+          result: "success",
+          metadata: {
+            project: projectName,
+            risk: "low",
+            detail: `Issue resolved: ${title}`,
+            errorTitle: title,
+            issueId,
+            source: "sentry",
+            orgId,
+          },
+        });
+
+        broadcastEvent({
+          type: "sentry.resolved",
+          data: { title, project: projectName, issueId },
+        }, orgId);
+        broadcastEvent({ type: "log.entry", data: { time: new Date().toISOString(), level: "info", source: "sentry", action: "error.resolved", message: `Issue resolved: ${title}` } }, orgId);
+
+        return reply.send({ received: true, processed: true, action: "resolved" });
+      }
+
+      if (action === "ignored" || action === "assigned") {
+        log.info("Sentry issue state change", { action, title, issueId });
+        return reply.send({ received: true, processed: false, reason: `action_${action}_logged` });
+      }
+
+      // Only process new errors and triggered alerts
       if (action !== "created" && action !== "triggered") {
         return reply.send({ received: true, processed: false, reason: "action_not_relevant" });
       }
 
-      // Log to audit
+      // ── Step 5: Deduplicate within 5-minute window ──────────────
+      const sentryDedupMap = ctx._sentryDedup;
+      if (issueId) {
+        const dedupKey = `${projectName}:${issueId}`;
+        const lastSeen = sentryDedupMap.get(dedupKey);
+        const now = Date.now();
+        if (lastSeen && now - lastSeen < SENTRY_DEDUP_WINDOW_MS) {
+          log.info("Sentry webhook deduplicated", { issueId, projectName });
+
+          // Still group via incidentGrouper for count tracking
+          try {
+            const { incidentGrouper } = await import("../../observability/incident-grouper.js");
+            incidentGrouper.maybeGroup(
+              { project: projectName, errorMessage: title, type: "sentry-error" },
+              { severity: level === "fatal" ? "critical" : level === "error" ? "high" : "medium" },
+            );
+          } catch { /* ignore grouper errors */ }
+
+          return reply.send({ received: true, processed: false, reason: "duplicate" });
+        }
+        sentryDedupMap.set(dedupKey, now);
+
+        // Cleanup old entries periodically (keep map bounded)
+        if (sentryDedupMap.size > 500) {
+          const cutoff = now - SENTRY_DEDUP_WINDOW_MS;
+          for (const [key, ts] of sentryDedupMap) {
+            if (ts < cutoff) sentryDedupMap.delete(key);
+          }
+        }
+      }
+
+      // ── Step 6: Group via incidentGrouper ───────────────────────
+      let isNewIncident = true;
+      try {
+        const { incidentGrouper } = await import("../../observability/incident-grouper.js");
+        const groupResult = incidentGrouper.maybeGroup(
+          { project: projectName, errorMessage: title, type: "sentry-error" },
+          { severity: level === "fatal" ? "critical" : level === "error" ? "high" : "medium" },
+        );
+        isNewIncident = groupResult.isNew;
+      } catch { /* ignore grouper errors */ }
+
+      // ── Step 7: Build enriched detail string ────────────────────
+      const detailParts: string[] = [title];
+      if (culprit) detailParts.push(`in ${culprit}`);
+      if (environment) detailParts.push(`[${environment}]`);
+      if (releaseVersion) detailParts.push(`(${releaseVersion})`);
+      if (affectedUrl) detailParts.push(`@ ${affectedUrl}`);
+      const detail = detailParts.join(" ");
+
+      // ── Step 8: Audit log ───────────────────────────────────────
       const sentryStorage = ctx.getOrgStorage(orgId);
       await sentryStorage.appendAudit({
         actorType: "system",
@@ -502,45 +638,60 @@ export function registerWebhookRoutes(route: RouteFn, ctx: ServerContext): void 
         metadata: {
           project: projectName,
           risk: level === "fatal" ? "critical" : level === "error" ? "high" : "medium",
-          detail: `${title}${culprit ? ` in ${culprit}` : ""}`,
+          detail,
           errorTitle: title,
           culprit,
-          stackTrace,
+          stackTrace: stackTrace.slice(0, 2000),
           platform,
           count,
           userCount,
           firstSeen,
+          issueId,
+          environment,
+          releaseVersion,
+          affectedUrl,
+          resourceType,
           source: "sentry",
           orgId,
         },
       });
 
-      // Feed into self-healing pipeline via alert handler
-      if (ctx.alertHandler && (level === "error" || level === "fatal")) {
+      // ── Step 9: Alert handler (only for new incidents) ──────────
+      if (ctx.alertHandler && isNewIncident && (level === "error" || level === "fatal")) {
         await ctx.alertHandler({
           project: projectName,
           branch: "main",
           commitSha: "",
           commitMessage: "",
           commitAuthor: "",
-          errorMessage: `${title}\n${stackTrace}`,
+          errorMessage: `${title}${stackTrace ? `\n${stackTrace}` : ""}`,
           url: String(issue.permalink || ""),
           repo: "",
           type: "sentry-error",
           orgId,
           inspectorUrl: String(issue.permalink || ""),
-          deploymentId: String(issue.id || ""),
+          deploymentId: issueId,
         });
       }
 
-      // Broadcast to SSE
+      // ── Step 10: SSE broadcast ──────────────────────────────────
       broadcastEvent({
         type: "sentry.error",
-        data: { title, culprit, level, project: projectName, count, userCount },
+        data: { title, culprit, level, project: projectName, count, userCount, issueId, environment, releaseVersion },
       }, orgId);
-      broadcastEvent({ type: "log.entry", data: { time: new Date().toISOString(), level: level === "fatal" ? "error" : level, source: "sentry", action: `error.${level}`, message: `${title}${culprit ? ` in ${culprit}` : ""}` } }, orgId);
+      broadcastEvent({ type: "log.entry", data: { time: new Date().toISOString(), level: level === "fatal" ? "error" : level, source: "sentry", action: `error.${level}`, message: detail } }, orgId);
 
-      reply.send({ received: true, processed: true });
+      // Publish to event bus for cross-service subscribers
+      if (ctx.eventBus) {
+        ctx.eventBus.publish("sentry:error", {
+          type: "sentry:error",
+          projectId: projectName,
+          timestamp: Date.now(),
+          payload: { title, level, issueId, project: projectName, environment, orgId },
+        }).catch(() => {});
+      }
+
+      reply.send({ received: true, processed: true, isNewIncident });
     });
 
     // ── Webhook URL generator (org-scoped) ────────────────────────

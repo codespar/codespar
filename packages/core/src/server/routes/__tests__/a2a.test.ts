@@ -33,6 +33,7 @@ function createTestApp() {
     alertHandler: null,
     storageBaseDir: ".codespar",
     _vercelDedup: new Map(),
+    _sentryDedup: new Map(),
     sseConnections: new Set(),
     getOrgId: () => "default",
     getOrgStorage: () => ({}),

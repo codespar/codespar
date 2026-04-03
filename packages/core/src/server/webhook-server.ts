@@ -196,6 +196,7 @@ export class WebhookServer {
   private chatHandler: ((message: import("../types/normalized-message.js").NormalizedMessage, orgId?: string) => Promise<import("../types/channel-adapter.js").ChannelResponse | null>) | null = null;
   private alertHandler: ((alert: DeployAlert) => Promise<void>) | null = null;
   private _vercelDedup: Map<string, number> = new Map();
+  private _sentryDedup: Map<string, number> = new Map();
   private _containerPool: ContainerPool | null = null;
 
   constructor(config?: WebhookServerConfig) {
