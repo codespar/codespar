@@ -484,9 +484,10 @@ export function registerObservabilityRoutes(route: RouteFn, ctx: ServerContext):
 
       try {
         // Railway uses GraphQL API — filter by projectId if configured
+        const serviceFields = `id name deployments(first: 5) { edges { node { id status createdAt updatedAt } } }`;
         const query = railwayProjectId
-          ? `query { project(id: "${railwayProjectId}") { id name services { edges { node { id name } } } } }`
-          : `query { me { projects(first: 3) { edges { node { id name services { edges { node { id name } } } } } } } }`;
+          ? `query { project(id: "${railwayProjectId}") { id name services { edges { node { ${serviceFields} } } } } }`
+          : `query { me { projects(first: 3) { edges { node { id name services { edges { node { ${serviceFields} } } } } } } } }`;
 
         const res = await fetch("https://backboard.railway.app/graphql/v2", {
           method: "POST",
