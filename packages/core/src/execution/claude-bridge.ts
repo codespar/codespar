@@ -1113,7 +1113,7 @@ Be precise and production-ready.`;
  *   (complete file content)
  *   ===END===
  */
-function parseFileChanges(
+export function parseFileChanges(
   output: string,
 ): Array<{ path: string; content: string }> {
   const changes: Array<{ path: string; content: string }> = [];
@@ -1136,7 +1136,7 @@ function parseFileChanges(
  *   (replacement lines)
  *   ===END===
  */
-function parseDiffChanges(
+export function parseDiffChanges(
   output: string,
   originalFiles: Array<{ path: string; content: string; sha: string }>,
 ): Array<{ path: string; content: string }> {

@@ -113,7 +113,7 @@ export {
 export type { AgentFactory as AgentPluginFactory } from "./agents/index.js";
 
 // Execution
-export { ClaudeBridge } from "./execution/index.js";
+export { ClaudeBridge, parseFileChanges, parseDiffChanges } from "./execution/index.js";
 export type {
   ProgressEvent,
   ExecutionRequest,
@@ -145,6 +145,8 @@ export { GitHubClient } from "./github/index.js";
 // Observability
 export { createLogger, metrics } from "./observability/index.js";
 export type { LogLevel, Logger } from "./observability/index.js";
+export { DeployHealthMonitor } from "./observability/index.js";
+export type { HealthCheckConfig, HealthCheckResult } from "./observability/index.js";
 
 // Scheduler
 export { scheduler, scheduleBuildStatusReport, scheduleHealthCheck, scheduleAuditCleanup } from "./scheduler/index.js";
@@ -164,6 +166,10 @@ export type {
 
 // Storage (PostgreSQL)
 export { PgStorage, createStorage } from "./storage/index.js";
+
+// Routing (per-channel alert routing)
+export { ChannelRouter } from "./routing/index.js";
+export type { ChannelRoute } from "./routing/index.js";
 
 // Security
 export { PromptGuard, promptGuard } from "./security/prompt-guard.js";

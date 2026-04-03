@@ -1,4 +1,4 @@
-export { ClaudeBridge } from "./claude-bridge.js";
+export { ClaudeBridge, parseFileChanges, parseDiffChanges } from "./claude-bridge.js";
 export type {
   ProgressEvent,
   ExecutionRequest,
