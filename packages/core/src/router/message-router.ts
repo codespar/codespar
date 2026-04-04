@@ -164,7 +164,9 @@ export class MessageRouter {
       if (orgId && agent.config.orgId && agent.config.orgId !== orgId) continue;
       agents.push(agent);
     }
-    return agents;
+    // If there are real project agents (not "default"), hide the default agent
+    const realAgents = agents.filter(a => a.config.projectId !== "default" && a.config.id !== "agent-default");
+    return realAgents.length > 0 ? realAgents : agents;
   }
 
   /** Get all registered agents */

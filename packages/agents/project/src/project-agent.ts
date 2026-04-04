@@ -2056,7 +2056,9 @@ Focus on: ${perfTarget}`;
     if (this.storage) {
       const { entries: allStatusEntries } = await this.storage.queryAudit("", 20);
       const statusPid = this.config.projectId || "";
-      const entries = (statusPid ? allStatusEntries.filter(e => { const p = String((e.metadata as Record<string, unknown>)?.project || ""); return !p || p === statusPid || p.includes(statusPid); }) : allStatusEntries).slice(0, 3);
+      const entries = (statusPid ? allStatusEntries.filter(e => { const p = String((e.metadata as Record<string, unknown>)?.project || ""); return !p || p === statusPid || p.includes(statusPid); }) : allStatusEntries)
+        .filter(e => !String(e.action || "").includes("health_snapshot"))
+        .slice(0, 5);
       if (entries.length > 0) {
         const lines = entries.map((e) => {
           const action = e.metadata?.detail || e.action;
