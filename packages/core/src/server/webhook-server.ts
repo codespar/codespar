@@ -169,7 +169,9 @@ const sseConnections = new Set<{ reply: FastifyReply; orgId: string }>();
  */
 export function broadcastEvent(event: { type: string; data: unknown }, orgId?: string): void {
   for (const conn of sseConnections) {
-    if (orgId && conn.orgId !== orgId && conn.orgId !== "default") continue;
+    // Send to matching org, "default" connections, OR if only 1-2 connections exist (small team = send to all)
+    const isMatch = !orgId || conn.orgId === orgId || conn.orgId === "default" || sseConnections.size <= 5;
+    if (!isMatch) continue;
     try {
       conn.reply.raw.write(`data: ${JSON.stringify(event)}\n\n`);
     } catch {
