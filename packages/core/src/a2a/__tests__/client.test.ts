@@ -7,6 +7,7 @@ import type { A2ATaskRequest } from "../../types/a2a.js";
 const mockFetch = vi.fn();
 
 beforeEach(() => {
+  mockFetch.mockReset();
   vi.stubGlobal("fetch", mockFetch);
 });
 
@@ -96,7 +97,7 @@ describe("A2AClient", () => {
     });
 
     it("throws A2AClientError on 404", async () => {
-      mockFetch.mockResolvedValueOnce(textResponse("Not Found", 404));
+      mockFetch.mockResolvedValue(textResponse("Not Found", 404));
 
       const client = new A2AClient({ retries: 0 });
 
@@ -112,8 +113,9 @@ describe("A2AClient", () => {
 
       const client = new A2AClient({ timeout: 50, retries: 0 });
 
-      await expect(client.discover(AGENT_URL)).rejects.toThrow(A2AClientError);
-      await expect(client.discover(AGENT_URL)).rejects.toThrow(/timed out/);
+      const err = await client.discover(AGENT_URL).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(A2AClientError);
+      expect((err as Error).message).toMatch(/timed out/);
     });
 
     it("defaults name to 'unknown' when missing", async () => {
