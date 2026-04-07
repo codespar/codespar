@@ -1,5 +1,5 @@
 ---
-status: Proposed
+status: Accepted
 problem: |
   PromptGuard is fully implemented (12 pattern rules, structural analysis,
   composite risk scoring, configurable threshold) and well-tested (26 unit
