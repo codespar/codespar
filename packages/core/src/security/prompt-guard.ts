@@ -241,5 +241,10 @@ export class PromptGuard {
   }
 }
 
-/** Default singleton instance */
-export const promptGuard = new PromptGuard();
+/** Default singleton instance — reads PROMPT_GUARD_THRESHOLD from environment */
+const envThreshold = parseFloat(process.env.PROMPT_GUARD_THRESHOLD || "");
+const clamp = (v: number, min: number, max: number) => Math.max(min, Math.min(max, v));
+
+export const promptGuard = new PromptGuard(
+  Number.isFinite(envThreshold) ? clamp(envThreshold, 0, 1) : BLOCK_THRESHOLD,
+);

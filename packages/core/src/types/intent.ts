@@ -33,6 +33,15 @@ export type IntentType =
 
 export type RiskLevel = "low" | "medium" | "high" | "critical";
 
+/** Intents that forward user text to an LLM. Only these are screened by PromptGuard. */
+export const LLM_BOUND_INTENTS: ReadonlySet<IntentType> = new Set([
+  "instruct", "fix", "plan", "spec", "lens", "unknown",
+]);
+
+/** Minimum autonomy level at which PromptGuard blocks (vs. log-only).
+ *  L3 (Auto-Low) — agents auto-execute without human review, so pre-screening matters. */
+export const PROMPT_GUARD_BLOCK_AUTONOMY = 3 as const;
+
 export interface ParsedIntent {
   /** Classified intent */
   type: IntentType;

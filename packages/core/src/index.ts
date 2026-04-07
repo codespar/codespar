@@ -25,7 +25,7 @@ export type {
 } from "./types/agent.js";
 
 export type { ParsedIntent, IntentType, RiskLevel } from "./types/intent.js";
-export { INTENT_RISK } from "./types/intent.js";
+export { INTENT_RISK, LLM_BOUND_INTENTS, PROMPT_GUARD_BLOCK_AUTONOMY } from "./types/intent.js";
 
 export type {
   A2ATaskRequest,

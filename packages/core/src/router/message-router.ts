@@ -7,16 +7,31 @@
 import type { NormalizedMessage } from "../types/normalized-message.js";
 import type { Agent } from "../types/agent.js";
 import type { ChannelResponse } from "../types/channel-adapter.js";
+import type { ParsedIntent } from "../types/intent.js";
+import type { StorageProvider } from "../storage/types.js";
 import { parseIntent } from "./intent-parser.js";
 import { canExecuteIntent, getRequiredRole } from "../auth/rbac.js";
 import { IdentityResolver } from "../auth/identity.js";
+import { LLM_BOUND_INTENTS, PROMPT_GUARD_BLOCK_AUTONOMY } from "../types/intent.js";
+import { type PromptAnalysis, PromptGuard, promptGuard as defaultGuard } from "../security/prompt-guard.js";
+import { createLogger } from "../observability/logger.js";
+
+const log = createLogger("message-router");
 
 export class MessageRouter {
   private agents: Map<string, Agent> = new Map();
   private identityResolver: IdentityResolver | null;
+  private storage: StorageProvider | null;
+  private guard: PromptGuard;
 
-  constructor(identityResolver?: IdentityResolver) {
+  constructor(
+    identityResolver?: IdentityResolver,
+    storage?: StorageProvider,
+    guard?: PromptGuard,
+  ) {
     this.identityResolver = identityResolver ?? null;
+    this.storage = storage ?? null;
+    this.guard = guard ?? defaultGuard;
   }
 
   /** Register an agent for routing */
@@ -67,7 +82,7 @@ export class MessageRouter {
       const coordinator = this.findCoordinator();
       if (coordinator) {
         // Pass "all <command>" as-is so coordinator handles aggregation
-        return coordinator.handleMessage(message, intent);
+        return this.guardAndDispatch(coordinator, message, intent);
       }
     }
 
@@ -78,13 +93,15 @@ export class MessageRouter {
       if (!subText) {
         // Bare alias with no command -- treat as status
         const subIntent = await parseIntent("status");
-        return agentByAlias.handleMessage(
+        return this.guardAndDispatch(
+          agentByAlias,
           { ...message, text: "status" },
           subIntent,
         );
       }
       const subIntent = await parseIntent(subText);
-      return agentByAlias.handleMessage(
+      return this.guardAndDispatch(
+        agentByAlias,
         { ...message, text: subText },
         subIntent,
       );
@@ -93,7 +110,7 @@ export class MessageRouter {
     // Single project -> route directly (skip coordinator)
     const projectAgents = this.getProjectAgents(orgId);
     if (projectAgents.length === 1) {
-      return projectAgents[0].handleMessage(message, intent);
+      return this.guardAndDispatch(projectAgents[0], message, intent);
     }
 
     // Multiple projects, no alias specified -> ask for clarification
@@ -111,6 +128,59 @@ export class MessageRouter {
     return {
       text: "[codespar] No projects configured. Use the dashboard to add one.",
     };
+  }
+
+  /** Run prompt guard (LLM-bound intents only) then dispatch to agent */
+  private async guardAndDispatch(
+    agent: Agent,
+    message: NormalizedMessage,
+    intent: ParsedIntent,
+  ): Promise<ChannelResponse | null> {
+    if (LLM_BOUND_INTENTS.has(intent.type)) {
+      const analysis = this.guard.analyze(message.text);
+      const actuallyBlocked = analysis.blocked && agent.config.autonomyLevel >= PROMPT_GUARD_BLOCK_AUTONOMY;
+
+      if (analysis.triggers.length > 0) {
+        await this.auditPromptGuard(message, analysis, intent, agent, actuallyBlocked);
+      }
+
+      if (actuallyBlocked) {
+        return {
+          text: "[codespar] Message blocked by security policy.",
+        };
+      }
+    }
+
+    return agent.handleMessage(message, intent);
+  }
+
+  /** Log prompt guard triggers to the audit trail (best-effort) */
+  private async auditPromptGuard(
+    message: NormalizedMessage,
+    analysis: PromptAnalysis,
+    intent: ParsedIntent,
+    agent: Agent,
+    actuallyBlocked: boolean,
+  ): Promise<void> {
+    if (!this.storage) return;
+    try {
+      await this.storage.appendAudit({
+        actorType: "user",
+        actorId: message.channelUserId,
+        action: actuallyBlocked ? "prompt_guard.blocked" : "prompt_guard.flagged",
+        result: actuallyBlocked ? "denied" : "success",
+        metadata: {
+          riskScore: analysis.riskScore,
+          triggers: analysis.triggers,
+          intent: intent.type,
+          autonomyLevel: agent.config.autonomyLevel,
+          channel: message.channelType,
+          textPreview: message.text.slice(0, 100),
+        },
+      });
+    } catch {
+      // Audit logging is best-effort
+    }
   }
 
   /** Find the coordinator agent (registered under "_coordinator") */
