@@ -1,0 +1,11 @@
+{
+  "topic": "prompt-guard-wiring",
+  "decisions": [
+    {"id": 0, "question": "Is wiring PromptGuard into runtime actually needed?", "status": "complete", "complexity": "critical", "chosen": "Implement selectively", "report": "wip/design_prompt-guard-wiring_decision_0_report.md"},
+    {"id": 1, "question": "Where does promptGuard.analyze() run, and how do blocked messages get recorded?", "status": "complete", "complexity": "standard", "chosen": "Guard in MessageRouter, add StorageProvider", "report": "wip/design_prompt-guard-wiring_decision_1_report.md"},
+    {"id": 2, "question": "What test layers and cases verify the wiring?", "status": "complete", "complexity": "standard", "chosen": "Focused integration testing (20 tests)", "report": "wip/design_prompt-guard-wiring_decision_2_report.md"}
+  ],
+  "cross_validation": "passed",
+  "cross_validation_notes": "Conflict resolved: D1 placed guard before intent parsing, but D0 requires intent type for selective enforcement. Guard now runs after parseIntent() and agent resolution.",
+  "round": 1
+}
