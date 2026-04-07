@@ -30,8 +30,8 @@ console.log("  ─────────────────────�
 console.log("");
 
 // 1. Core services
-const router = new MessageRouter();
 const storage = createStorage();
+const router = new MessageRouter(undefined, storage);
 console.log(`[server] Storage: ${process.env.DATABASE_URL ? "PostgreSQL" : "FileStorage"}`);
 const approvalManager = new ApprovalManager();
 const vectorStore = new VectorStore();

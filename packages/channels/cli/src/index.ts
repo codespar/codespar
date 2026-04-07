@@ -27,18 +27,18 @@ async function main() {
   console.log("  ─────────────────────────────");
   console.log("");
 
-  // 1. Create the message router
-  const router = new MessageRouter();
+  // 1. Create file-based storage for agent memory and audit
+  const storage = new FileStorage();
 
-  // 2. Create the supervisor
+  // 2. Create the message router (with storage for prompt guard audit logging)
+  const router = new MessageRouter(undefined, storage);
+
+  // 3. Create the supervisor
   const supervisor = new AgentSupervisor(router);
 
-  // 3. Create and register the CLI adapter
+  // 4. Create and register the CLI adapter
   const cli = new CLIAdapter();
   supervisor.addAdapter(cli);
-
-  // 4. Create file-based storage for agent memory and audit
-  const storage = new FileStorage();
 
   // 4b. Create shared ApprovalManager for deploy/rollback workflows
   const approvalManager = new ApprovalManager();
