@@ -1,5 +1,5 @@
 ---
-status: Proposed
+status: Accepted
 problem: |
   The webhook handlers for GitHub, Vercel, and Sentry all implement HMAC
   signature verification, but when no secret is configured verification is
