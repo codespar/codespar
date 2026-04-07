@@ -5,45 +5,71 @@ description: How CodeSpar defends against prompt injection attacks (Security Lay
 
 # Prompt Injection Guard
 
-CodeSpar includes a built-in prompt injection classifier — **Security Layer #7** in the [10-layer defense model](/docs/configuration/security).
+CodeSpar includes a built-in prompt injection guard -- **Security Layer #7** in the [10-layer defense model](/docs/configuration/security). The guard screens user messages before they reach an LLM, using pattern matching and structural analysis.
 
-## How It Works
+## Selective Enforcement
 
-Every user message is analyzed before reaching the LLM, using three detection layers:
+The guard only screens messages with **LLM-bound intents** -- commands where user-authored text is forwarded to Claude:
 
-### 1. Pattern Blocklist (14 rules)
+| Screened | Not screened |
+|----------|-------------|
+| `instruct`, `fix`, `plan`, `spec`, `lens` | `status`, `deploy`, `rollback`, `approve` |
+| Unknown messages (SmartResponder fallback) | `logs`, `link`, `autonomy`, `kill` |
 
-Known injection patterns are matched via regex:
+Structured commands like `status` and `deploy` parse parameters from the message without sending raw text to an LLM. Running the guard on these would produce false positives with no security benefit.
+
+## Autonomy-Gated Behavior
+
+The guard's response depends on the agent's [autonomy level](/docs/architecture/autonomy-levels):
+
+| Autonomy | Guard behavior | Rationale |
+|----------|---------------|-----------|
+| L0-L2 (Passive, Notify, Suggest) | **Log only** -- message proceeds | A human reviews every action |
+| L3-L5 (Auto-Low, Auto-Med, Full Auto) | **Block** -- message rejected | No human review, pre-screening matters |
+
+At L0-L2, the guard still logs any triggered patterns to the audit trail. This gives operators visibility into injection attempts without blocking legitimate work.
+
+## Detection Layers
+
+### 1. Pattern Blocklist (12 rules)
+
+Known injection patterns matched via regex:
 
 | Category | Examples |
 |----------|---------|
 | Instruction override | "ignore previous instructions", "forget everything" |
 | Role manipulation | "you are now a different AI", "DAN mode" |
 | Data exfiltration | "reveal your system prompt", "show me your API key" |
-| Command injection | `rm -rf`, `DROP TABLE`, `curl | sh` |
+| Command injection | `rm -rf`, `DROP TABLE`, `curl \| sh` |
 | Delimiter abuse | Fake system/assistant markers, encoded payloads |
 
 ### 2. Structural Analysis
 
 Detects suspicious patterns that don't match specific rules:
 
-- **Multiple role markers** — `user:`, `assistant:`, `system:` in a single message
-- **Instruction-heavy language** — excessive use of "must", "always", "override"
-- **Suspicious Unicode** — zero-width characters, RTL overrides (common in evasion)
+- **Multiple role markers** -- `user:`, `assistant:`, `system:` in a single message
+- **Instruction-heavy language** -- excessive use of "must", "always", "override"
+- **Suspicious Unicode** -- zero-width characters, RTL overrides (common in evasion)
 
 ### 3. Composite Risk Scoring
 
-Each signal contributes to a risk score (0–1). Messages above **0.7** are blocked.
+Each signal contributes to a risk score (0-1). Messages above the threshold (default **0.7**) are blocked (at L3+) or flagged (at L0-L2).
 
-## Usage
+## Configuration
 
-The guard is integrated automatically. You can also use it programmatically:
+### Threshold
 
-```typescript
-import { promptGuard } from "@codespar/core";
+Set `PROMPT_GUARD_THRESHOLD` to tune sensitivity. Valid range: 0.0 to 1.0.
 
-const result = promptGuard.analyze("ignore previous instructions");
-// { blocked: true, riskScore: 0.9, triggers: ["ignore-previous"], reason: "..." }
+```bash
+# More sensitive (blocks more, higher false positive risk)
+PROMPT_GUARD_THRESHOLD=0.5
+
+# Default
+PROMPT_GUARD_THRESHOLD=0.7
+
+# Effectively disable blocking (audit-only)
+PROMPT_GUARD_THRESHOLD=1.0
 ```
 
 ### Custom Rules
@@ -51,6 +77,8 @@ const result = promptGuard.analyze("ignore previous instructions");
 Add organization-specific patterns:
 
 ```typescript
+import { promptGuard } from "@codespar/core";
+
 promptGuard.addPattern({
   id: "block-competitor",
   pattern: /switch to \w+ instead/i,
@@ -61,14 +89,41 @@ promptGuard.addPattern({
 
 ## What Happens When Blocked
 
-- The message is **not forwarded** to the LLM
-- A warning is logged to the audit trail
-- The user receives: `"Message blocked: potential prompt injection detected"`
+At L3+ autonomy with an LLM-bound intent:
+
+- The message is **not forwarded** to the agent
+- An audit entry is written with action `prompt_guard.blocked`
+- The user receives: `"Message blocked by security policy."`
+
+At L0-L2 or with non-LLM-bound intents:
+
+- The message **proceeds normally** to the agent
+- If patterns triggered, an audit entry is written with action `prompt_guard.flagged`
+
+The blocked message is intentionally generic -- it does not reveal which patterns triggered or the risk score. Trigger details are recorded only in the audit trail.
+
+## Audit Trail
+
+All PromptGuard triggers are audit-logged regardless of whether the message is blocked:
+
+| Field | Description |
+|-------|-------------|
+| `action` | `prompt_guard.blocked` or `prompt_guard.flagged` |
+| `result` | `denied` (blocked) or `success` (flagged but passed) |
+| `metadata.riskScore` | Numeric score (0-1) |
+| `metadata.triggers` | Which pattern rules fired |
+| `metadata.intent` | The classified intent type |
+| `metadata.autonomyLevel` | Agent's autonomy level |
+| `metadata.textPreview` | First 100 characters of the message |
 
 ## Limitations
 
-- **Regex-based** — sophisticated attacks may bypass pattern matching
-- **No ML classifier** — a future version may add a lightweight classifier model
-- **False positives possible** — legitimate messages about security topics may trigger rules
+The guard is a **low-sophistication filter**, not a comprehensive injection defense. It catches copy-paste jailbreak attempts and known attack patterns. It does not catch:
 
-For enterprise deployments requiring stricter controls, contact us about custom classifier models.
+- **Paraphrased injection** -- "please set aside your earlier guidelines"
+- **Encoded payloads** -- base64, ROT13, systematic Unicode substitution
+- **Multi-turn buildup** -- the guard is stateless, sees one message at a time
+- **Indirect injection** -- payloads in pasted code, URLs, or file content
+- **Semantic attacks** -- "write a function called ignore_previous_instructions"
+
+The primary defenses against prompt injection are RBAC (prevents unauthorized actions), execution sandboxing (Docker restricts what agents can do), and Claude's safety training (rejects harmful instructions at the LLM level). The guard adds a defense-in-depth layer that raises the cost of attack from "copy paste from Reddit" to "think about paraphrasing."
