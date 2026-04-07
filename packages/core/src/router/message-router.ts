@@ -138,12 +138,13 @@ export class MessageRouter {
   ): Promise<ChannelResponse | null> {
     if (LLM_BOUND_INTENTS.has(intent.type)) {
       const analysis = this.guard.analyze(message.text);
+      const actuallyBlocked = analysis.blocked && agent.config.autonomyLevel >= PROMPT_GUARD_BLOCK_AUTONOMY;
 
       if (analysis.triggers.length > 0) {
-        await this.auditPromptGuard(message, analysis, intent, agent);
+        await this.auditPromptGuard(message, analysis, intent, agent, actuallyBlocked);
       }
 
-      if (analysis.blocked && agent.config.autonomyLevel >= PROMPT_GUARD_BLOCK_AUTONOMY) {
+      if (actuallyBlocked) {
         return {
           text: "[codespar] Message blocked by security policy.",
         };
@@ -159,14 +160,15 @@ export class MessageRouter {
     analysis: PromptAnalysis,
     intent: ParsedIntent,
     agent: Agent,
+    actuallyBlocked: boolean,
   ): Promise<void> {
     if (!this.storage) return;
     try {
       await this.storage.appendAudit({
         actorType: "user",
         actorId: message.channelUserId,
-        action: analysis.blocked ? "prompt_guard.blocked" : "prompt_guard.flagged",
-        result: analysis.blocked ? "denied" : "success",
+        action: actuallyBlocked ? "prompt_guard.blocked" : "prompt_guard.flagged",
+        result: actuallyBlocked ? "denied" : "success",
         metadata: {
           riskScore: analysis.riskScore,
           triggers: analysis.triggers,
