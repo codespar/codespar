@@ -266,6 +266,11 @@ export class WebhookServer {
     return sseConnections;
   }
 
+  /** Delegate to Fastify's inject() for integration testing */
+  inject(opts: import("fastify").InjectOptions) {
+    return this.app.inject(opts);
+  }
+
   /** Set the base directory used for org-scoped file storage */
   setStorageBaseDir(baseDir: string): void {
     this.storageBaseDir = baseDir;

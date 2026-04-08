@@ -1,78 +1,40 @@
 /**
- * Integration tests for API bearer token authentication and CORS.
+ * Integration tests for API bearer token authentication.
  *
- * Tests use a minimal Fastify instance with the same auth hook logic
- * as WebhookServer.registerApiAuth().
+ * Tests use the real WebhookServer with its actual registerApiAuth() hook,
+ * not a recreated version. The inject() method delegates to Fastify's
+ * inject() so we test the full request pipeline.
  */
 
-import { describe, it, expect, vi, afterEach } from "vitest";
-import Fastify from "fastify";
+import { describe, it, expect, afterAll, beforeAll } from "vitest";
 import { createHash, timingSafeEqual } from "node:crypto";
-
-// ── Helpers ──────────────────────────────────────────────────────────
-
-/** Reproduce the auth hook from WebhookServer.registerApiAuth() */
-function createTestApp(token?: string) {
-  const app = Fastify({ logger: false });
-
-  if (token) {
-    const tokenHash = createHash("sha256").update(token).digest();
-
-    const EXCLUDED_PATHS = new Set([
-      "/health", "/v1/health",
-      "/.well-known/agent.json",
-      "/api/slack/install", "/v1/api/slack/install",
-      "/api/slack/callback", "/v1/api/slack/callback",
-      "/api/discord/install", "/v1/api/discord/install",
-      "/api/github/install", "/v1/api/github/install",
-      "/api/github/callback", "/v1/api/github/callback",
-    ]);
-
-    app.addHook("onRequest", async (request, reply) => {
-      const url = request.url.split("?")[0];
-      if (!url.startsWith("/api/") && !url.startsWith("/v1/api/")) return;
-      if (EXCLUDED_PATHS.has(url)) return;
-
-      const auth = request.headers.authorization;
-      if (!auth || !auth.startsWith("Bearer ")) {
-        return reply.status(401).send({ error: "Unauthorized" });
-      }
-
-      const providedHash = createHash("sha256").update(auth.slice(7)).digest();
-      if (!timingSafeEqual(providedHash, tokenHash)) {
-        return reply.status(401).send({ error: "Unauthorized" });
-      }
-    });
-  }
-
-  // Register test routes that mirror the real server's path patterns
-  app.get("/api/agents", async () => ({ agents: [] }));
-  app.get("/v1/api/agents", async () => ({ agents: [] }));
-  app.post("/webhooks/github", async () => ({ ok: true }));
-  app.get("/health", async () => ({ status: "ok" }));
-  app.get("/api/slack/callback", async () => ({ ok: true }));
-  app.get("/api/discord/install", async () => ({ ok: true }));
-  app.get("/api/events", async () => ({ events: [] })); // SSE placeholder
-
-  return app;
-}
+import { WebhookServer } from "../webhook-server.js";
 
 const TEST_TOKEN = "test-secret-token-abc123";
 
-// ── Auth enforcement tests ───────────────────────────────────────────
+// ── Auth enabled tests ───────────────────────────────────────────────
 
-describe("API auth hook", () => {
+describe("API auth hook (real WebhookServer)", () => {
   describe("with ENGINE_API_TOKEN set", () => {
-    const app = createTestApp(TEST_TOKEN);
+    let server: WebhookServer;
+
+    beforeAll(() => {
+      process.env.ENGINE_API_TOKEN = TEST_TOKEN;
+      server = new WebhookServer({ port: 0 });
+    });
+
+    afterAll(() => {
+      delete process.env.ENGINE_API_TOKEN;
+    });
 
     it("returns 401 without Authorization header", async () => {
-      const res = await app.inject({ method: "GET", url: "/api/agents" });
+      const res = await server.inject({ method: "GET", url: "/api/agents" });
       expect(res.statusCode).toBe(401);
       expect(JSON.parse(res.body).error).toBe("Unauthorized");
     });
 
     it("returns 401 with wrong token", async () => {
-      const res = await app.inject({
+      const res = await server.inject({
         method: "GET",
         url: "/api/agents",
         headers: { authorization: "Bearer wrong-token" },
@@ -81,7 +43,7 @@ describe("API auth hook", () => {
     });
 
     it("returns 401 with malformed header (no Bearer prefix)", async () => {
-      const res = await app.inject({
+      const res = await server.inject({
         method: "GET",
         url: "/api/agents",
         headers: { authorization: `Basic ${TEST_TOKEN}` },
@@ -90,54 +52,66 @@ describe("API auth hook", () => {
     });
 
     it("succeeds with correct Bearer token", async () => {
-      const res = await app.inject({
+      const res = await server.inject({
         method: "GET",
         url: "/api/agents",
         headers: { authorization: `Bearer ${TEST_TOKEN}` },
       });
       expect(res.statusCode).toBe(200);
-      expect(JSON.parse(res.body).agents).toEqual([]);
     });
 
     it("does not affect /webhooks/github", async () => {
-      const res = await app.inject({ method: "POST", url: "/webhooks/github" });
-      expect(res.statusCode).toBe(200);
+      // Webhook routes have their own auth (signature verification).
+      // Without a valid payload this will fail at the handler level, not at auth.
+      const res = await server.inject({
+        method: "POST",
+        url: "/webhooks/github",
+        payload: {},
+        headers: { "content-type": "application/json" },
+      });
+      // Any status other than 401 means the auth hook didn't block it.
+      // The handler may return 200 or 400 depending on payload — both are fine.
+      expect(res.statusCode).not.toBe(401);
     });
 
     it("does not affect /health", async () => {
-      const res = await app.inject({ method: "GET", url: "/health" });
-      expect(res.statusCode).toBe(200);
+      const res = await server.inject({ method: "GET", url: "/health" });
+      expect(res.statusCode).not.toBe(401);
     });
 
     it("does not affect /api/slack/callback (OAuth exclusion)", async () => {
-      const res = await app.inject({ method: "GET", url: "/api/slack/callback" });
-      expect(res.statusCode).toBe(200);
+      const res = await server.inject({ method: "GET", url: "/api/slack/callback" });
+      // OAuth callback may redirect or return an error — just verify no 401 from auth hook
+      expect(res.statusCode).not.toBe(401);
     });
 
     it("requires token for /api/events (SSE)", async () => {
-      const res = await app.inject({ method: "GET", url: "/api/events" });
+      const res = await server.inject({ method: "GET", url: "/api/events" });
       expect(res.statusCode).toBe(401);
     });
   });
 
   describe("without ENGINE_API_TOKEN", () => {
-    const app = createTestApp(); // no token
+    let server: WebhookServer;
 
-    it("allows all requests without auth", async () => {
-      const res = await app.inject({ method: "GET", url: "/api/agents" });
-      expect(res.statusCode).toBe(200);
+    beforeAll(() => {
+      delete process.env.ENGINE_API_TOKEN;
+      server = new WebhookServer({ port: 0 });
+    });
+
+    it("allows requests without auth", async () => {
+      const res = await server.inject({ method: "GET", url: "/api/agents" });
+      // Should not be 401 — auth hook is not registered when token is unset
+      expect(res.statusCode).not.toBe(401);
     });
   });
 
   describe("token comparison security", () => {
-    it("uses SHA-256 hash to prevent length oracle", () => {
-      // Both a short and long token produce the same 32-byte hash,
-      // so timingSafeEqual always compares equal-length buffers.
+    it("SHA-256 hash produces fixed-length buffers (prevents length oracle)", () => {
       const short = createHash("sha256").update("abc").digest();
       const long = createHash("sha256").update("a".repeat(1000)).digest();
       expect(short.length).toBe(32);
       expect(long.length).toBe(32);
-      // Different tokens produce different hashes
       expect(timingSafeEqual(short, long)).toBe(false);
     });
   });
