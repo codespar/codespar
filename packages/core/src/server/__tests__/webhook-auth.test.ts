@@ -73,11 +73,50 @@ describe("verifyWebhookSignature", () => {
 // ── enforceWebhookSecret (strict mode) ───────────────────────────────
 
 describe("enforceWebhookSecret", () => {
-  // Note: strict mode is read at module load time (const STRICT_MODE = ...).
-  // Testing strict mode on would require module re-import hacks. The strict
-  // path is a simple conditional branch — if enforceWebhookSecret works
-  // correctly for the non-strict case and "secret present" case, the strict
-  // branch (which calls reply.status(401).send()) is straightforward.
+  describe("strict mode on (via module re-import)", () => {
+    async function importStrictEnforce() {
+      // STRICT_MODE is captured at module load time. To test the strict
+      // path, reset vitest's module registry and re-import with the env
+      // var set so the top-level const re-evaluates.
+      vi.resetModules();
+      process.env.WEBHOOK_STRICT_MODE = "true";
+      const mod = await import("../webhook-auth.js");
+      return mod.enforceWebhookSecret;
+    }
+
+    afterEach(() => {
+      delete process.env.WEBHOOK_STRICT_MODE;
+      vi.resetModules();
+    });
+
+    it("rejects with 401 when no secret is configured", async () => {
+      const enforce = await importStrictEnforce();
+      const { reply, sent } = createMockReply();
+      const log = createMockLogger();
+      const result = enforce(undefined, "GitHub", reply, log);
+      expect(result).toBe(false);
+      expect(sent.code).toBe(401);
+      expect((sent.body as any).error).toContain("GitHub webhook secret not configured");
+    });
+
+    it("includes provider name in 401 response", async () => {
+      const enforce = await importStrictEnforce();
+      const { reply, sent } = createMockReply();
+      const log = createMockLogger();
+      enforce(undefined, "Sentry", reply, log);
+      expect((sent.body as any).error).toContain("Sentry");
+    });
+
+    it("logs rejection warning with strict mode label", async () => {
+      const enforce = await importStrictEnforce();
+      const { reply } = createMockReply();
+      const log = createMockLogger();
+      enforce(undefined, "Vercel", reply, log);
+      expect(log.warn).toHaveBeenCalledWith(
+        expect.stringContaining("strict mode"),
+      );
+    });
+  });
 
   describe("with secret present", () => {
     it("returns true when secret is provided", () => {
