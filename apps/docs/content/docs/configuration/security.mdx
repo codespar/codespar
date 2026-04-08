@@ -334,6 +334,57 @@ The only exception is `emergency_admin` for the `kill` command, which can be exe
 
 ---
 
+## API Authentication
+
+The engine's REST API can be protected with a bearer token. When
+`ENGINE_API_TOKEN` is set, all `/api/*` routes require an
+`Authorization: Bearer <token>` header.
+
+### Configuration
+
+```bash
+# Generate a token
+ENGINE_API_TOKEN=$(openssl rand -hex 32)
+
+# Restrict CORS to your dashboard origin
+CORS_ORIGIN=https://dashboard.example.com
+```
+
+### What's Protected
+
+| Protected (`/api/*`) | Excluded |
+|---------------------|----------|
+| Agent management, chat, SSE events | `/webhooks/*` (use signature verification) |
+| Projects, integrations, audit | `/health`, `/.well-known/agent.json` |
+| Newsletter, scheduler, observability | OAuth install/callback routes |
+
+When `ENGINE_API_TOKEN` is not set, all routes accept unauthenticated
+requests (with a startup warning). This keeps local development simple.
+
+### CORS
+
+When `CORS_ORIGIN` is set, only that origin (or comma-separated list of
+origins) can make cross-origin requests. When not set, all origins are
+allowed (with a startup warning).
+
+```bash
+# Single origin
+CORS_ORIGIN=https://dashboard.example.com
+
+# Multiple origins
+CORS_ORIGIN=https://dashboard.example.com,https://staging.example.com
+```
+
+### Operational Notes
+
+- Token rotation requires a server restart
+- SSE connections (`/api/events`) validate the token at connection time;
+  existing connections persist through a token change until they reconnect
+- The `spar` CLI (when available) reads the token from its config file
+  and includes it in all API calls automatically
+
+---
+
 ## Rate Limiting
 
 > **Note:** Rate limiting is not yet implemented. This is a roadmap item planned for a future release.
@@ -355,9 +406,11 @@ Rate limiting will be configurable per organization and will apply to both chat 
 
 When deploying CodeSpar to production:
 
+- [ ] Set `ENGINE_API_TOKEN` to protect API routes (`openssl rand -hex 32`)
+- [ ] Set `CORS_ORIGIN` to your dashboard URL
+- [ ] Set `WEBHOOK_STRICT_MODE=true` to reject unsigned webhooks
 - [ ] Set `ANTHROPIC_API_KEY` and `GITHUB_TOKEN` as environment variables (never in code)
 - [ ] Use HTTPS for `WEBHOOK_BASE_URL`
-- [ ] Configure reverse proxy or API gateway for authentication
 - [ ] Set appropriate autonomy level (L1 recommended for production)
 - [ ] Assign RBAC roles to all team members
 - [ ] Verify audit trail is being written (check `.codespar/audit/`)
