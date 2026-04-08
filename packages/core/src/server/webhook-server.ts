@@ -17,7 +17,7 @@
 
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { randomUUID } from "node:crypto";
+import { randomUUID, createHash, timingSafeEqual } from "node:crypto";
 import Fastify, { type FastifyInstance, type FastifyReply } from "fastify";
 import cors from "@fastify/cors";
 import { parseGitHubWebhook, type CIEvent } from "../webhooks/github-handler.js";
@@ -202,9 +202,20 @@ export class WebhookServer {
     this.startedAt = new Date();
 
     this.app = Fastify({ logger: false });
-    this.app.register(cors, { origin: true });
+
+    // CORS: restrict to CORS_ORIGIN when set, allow all when unset
+    const corsOrigin = process.env.CORS_ORIGIN;
+    if (corsOrigin) {
+      const origins = corsOrigin.split(",").map(o => o.trim()).filter(Boolean);
+      this.app.register(cors, { origin: origins.length === 1 ? origins[0] : origins });
+    } else {
+      log.warn("CORS_ORIGIN not set — allowing all origins");
+      this.app.register(cors, { origin: true });
+    }
+
     registerAllAgentMetadata();
     this.registerRequestTracking();
+    this.registerApiAuth();
     this.registerVersionHeader();
     this.registerRateLimiting();
     this.registerRoutes();
@@ -409,6 +420,46 @@ export class WebhookServer {
       const start = (request as unknown as Record<string, unknown>).__startTime;
       if (typeof start === "number") {
         metrics.observe("api.latency_ms", Date.now() - start);
+      }
+    });
+  }
+
+  /** Require bearer token on /api/* routes when ENGINE_API_TOKEN is set */
+  private registerApiAuth(): void {
+    const token = process.env.ENGINE_API_TOKEN;
+    if (!token) {
+      log.warn("ENGINE_API_TOKEN not set — API routes are unauthenticated");
+      return;
+    }
+
+    log.info("API auth enabled — all /api/* routes require bearer token");
+    const tokenHash = createHash("sha256").update(token).digest();
+
+    const EXCLUDED_PATHS = new Set([
+      "/health", "/v1/health",
+      "/.well-known/agent.json",
+      "/api/slack/install", "/v1/api/slack/install",
+      "/api/slack/callback", "/v1/api/slack/callback",
+      "/api/discord/install", "/v1/api/discord/install",
+      "/api/github/install", "/v1/api/github/install",
+      "/api/github/callback", "/v1/api/github/callback",
+    ]);
+
+    this.app.addHook("onRequest", async (request, reply) => {
+      const url = request.url.split("?")[0];
+
+      // Only protect /api/* routes (webhooks have their own signature auth)
+      if (!url.startsWith("/api/") && !url.startsWith("/v1/api/")) return;
+      if (EXCLUDED_PATHS.has(url)) return;
+
+      const auth = request.headers.authorization;
+      if (!auth || !auth.startsWith("Bearer ")) {
+        return reply.status(401).send({ error: "Unauthorized" });
+      }
+
+      const providedHash = createHash("sha256").update(auth.slice(7)).digest();
+      if (!timingSafeEqual(providedHash, tokenHash)) {
+        return reply.status(401).send({ error: "Unauthorized" });
       }
     });
   }
