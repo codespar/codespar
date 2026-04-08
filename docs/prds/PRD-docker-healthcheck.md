@@ -1,5 +1,5 @@
 ---
-status: Draft
+status: Accepted
 problem: |
   The core engine service in all docker-compose files has no healthcheck
   and no restart policy. If the engine crashes or hangs, the container
