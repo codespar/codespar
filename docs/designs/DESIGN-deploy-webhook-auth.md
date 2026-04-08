@@ -1,5 +1,5 @@
 ---
-status: Proposed
+status: Planned
 upstream: docs/prds/PRD-deploy-webhook-auth.md
 problem: |
   The generic deploy webhook handler (POST /webhooks/deploy) accepts arbitrary
@@ -23,7 +23,7 @@ rationale: |
 
 ## Status
 
-Proposed
+Planned
 
 ## Context and Problem Statement
 
