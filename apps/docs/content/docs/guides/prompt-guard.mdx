@@ -116,6 +116,44 @@ All PromptGuard triggers are audit-logged regardless of whether the message is b
 | `metadata.autonomyLevel` | Agent's autonomy level |
 | `metadata.textPreview` | First 100 characters of the message |
 
+## Indirect Source Screening
+
+Beyond direct user messages, agents also process untrusted content from external
+sources. The guard screens this content before it enters Claude prompts, redacting
+any injection patterns it finds:
+
+| Source | What's screened | Where |
+|--------|----------------|-------|
+| PR titles | Title text from GitHub API | ReviewAgent |
+| PR diffs | Patch content per file | ReviewAgent |
+| Commit messages | From Vercel webhooks and GitHub API | SmartAlert, SmartResponder |
+| CI error messages | `errorMessage`, `buildError` from webhooks | SmartAlert |
+| Audit context | `detail` field from audit trail entries | SmartResponder |
+| Deploy data | Commit messages and errors in deploy records | SmartResponder |
+
+### Redaction vs. Blocking
+
+Indirect content is **redacted**, not blocked. When a pattern triggers, the
+matched text is replaced with `[redacted: <rule-id>]` and the agent continues
+processing. This is different from direct messages, where the guard can block
+the entire operation at L3+.
+
+The rationale: blocking a PR review because the PR title looks suspicious would
+prevent the agent from doing its job. Redaction removes the injection attempt
+while preserving enough context for useful analysis.
+
+### Audit Trail
+
+Flagged indirect content produces audit entries with action
+`prompt_guard.indirect_flag`. The entry includes:
+
+| Field | Description |
+|-------|-------------|
+| `metadata.source` | Source type (`pr_title`, `pr_diff`, `commit_message`, `ci_error`, `audit_context`, `deploy_data`) |
+| `metadata.riskScore` | Numeric score (0-1) |
+| `metadata.triggers` | Which pattern rules fired |
+| `metadata.textPreview` | First 100 characters of the original content |
+
 ## Limitations
 
 The guard is a **low-sophistication filter**, not a comprehensive injection defense. It catches copy-paste jailbreak attempts and known attack patterns. It does not catch:
@@ -123,7 +161,6 @@ The guard is a **low-sophistication filter**, not a comprehensive injection defe
 - **Paraphrased injection** -- "please set aside your earlier guidelines"
 - **Encoded payloads** -- base64, ROT13, systematic Unicode substitution
 - **Multi-turn buildup** -- the guard is stateless, sees one message at a time
-- **Indirect injection** -- payloads in pasted code, URLs, or file content
 - **Semantic attacks** -- "write a function called ignore_previous_instructions"
 
 The primary defenses against prompt injection are RBAC (prevents unauthorized actions), execution sandboxing (Docker restricts what agents can do), and Claude's safety training (rejects harmful instructions at the LLM level). The guard adds a defense-in-depth layer that raises the cost of attack from "copy paste from Reddit" to "think about paraphrasing."

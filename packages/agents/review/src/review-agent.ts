@@ -22,7 +22,7 @@ import type {
   StorageProvider,
 } from "@codespar/core";
 
-import { GitHubClient } from "@codespar/core";
+import { GitHubClient, sanitizeForPrompt } from "@codespar/core";
 
 export interface PRReview {
   prNumber: number;
@@ -281,11 +281,13 @@ export class ReviewAgent implements Agent {
       patch: string;
     }>,
   ): Promise<string> {
+    // Sanitize untrusted PR content before it enters the Claude prompt
+    const safePrTitle = sanitizeForPrompt(prTitle, "pr_title").text;
     const diffContext = files
       .slice(0, 10)
       .map(
         (f) =>
-          `### ${f.filename} (${f.status}, +${f.additions} -${f.deletions})\n\`\`\`diff\n${f.patch.slice(0, 3000)}\n\`\`\``,
+          `### ${f.filename} (${f.status}, +${f.additions} -${f.deletions})\n\`\`\`diff\n${sanitizeForPrompt(f.patch.slice(0, 3000), "pr_diff").text}\n\`\`\``,
       )
       .join("\n\n");
 
@@ -303,7 +305,7 @@ export class ReviewAgent implements Agent {
           system:
             "You are a senior code reviewer. Analyze the PR diff and provide a concise review. Focus on: bugs, security issues, code quality, and suggestions. Be direct. Use bullet points. Keep it under 200 words.",
           messages: [
-            { role: "user", content: `PR: ${prTitle}\n\n${diffContext}` },
+            { role: "user", content: `PR: ${safePrTitle}\n\n${diffContext}` },
           ],
         }),
         signal: AbortSignal.timeout(30000),
