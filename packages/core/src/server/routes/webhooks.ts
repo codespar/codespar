@@ -354,6 +354,38 @@ export function registerWebhookRoutes(route: RouteFn, ctx: ServerContext): void 
     // ── Generic deploy webhook ─────────────────────────────────────
     route("post", "/webhooks/deploy", async (request: any, reply: any) => {
       const orgId = (request.query as Record<string, string>).orgId || (request.headers["x-org-id"] as string) || "default";
+
+      // ── HMAC-SHA256 signature verification ──────────────────────
+      let deploySecret: string | undefined;
+      if (ctx.storageProvider && orgId !== "default") {
+        try {
+          const orgStorage = ctx.getOrgStorage(orgId);
+          const deployConfig = await orgStorage.getChannelConfig("deploy");
+          if (deployConfig?.webhookSecret) {
+            deploySecret = deployConfig.webhookSecret;
+          }
+        } catch (err) {
+          log.warn("Failed to load org deploy webhook secret, using env fallback", { orgId, error: String(err) });
+        }
+      }
+      if (!deploySecret) {
+        deploySecret = process.env["DEPLOY_WEBHOOK_SECRET"];
+      }
+
+      if (enforceWebhookSecret(deploySecret, "Deploy", reply, log)) {
+        const signature = request.headers["x-deploy-signature"] as string;
+        if (!signature) {
+          return reply.status(401).send({ error: "Missing x-deploy-signature header" });
+        }
+        const rawBody = typeof request.body === "string"
+          ? request.body
+          : JSON.stringify(request.body);
+        if (!verifyWebhookSignature(rawBody, signature, deploySecret!, "sha256")) {
+          log.warn("Deploy webhook signature mismatch");
+          return reply.status(401).send({ error: "Invalid webhook signature" });
+        }
+      }
+
       const body = request.body as {
         project?: string;
         status: "success" | "failure" | "pending";
@@ -707,7 +739,7 @@ export function registerWebhookRoutes(route: RouteFn, ctx: ServerContext): void 
         instructions: {
           vercel: "Add this URL in Vercel > Settings > Webhooks. Select: Deployment Created, Succeeded, Error.",
           github: "Add this URL in GitHub > Repo > Settings > Webhooks. Select: push, pull_request, workflow_run.",
-          deploy: "POST to this URL with { project, status, message, error, url, source }.",
+          deploy: "POST to this URL with { project, status, message, error, url, source }. Sign the JSON body with HMAC-SHA256 using DEPLOY_WEBHOOK_SECRET and send the hex digest in the x-deploy-signature header.",
           sentry: "Add this URL in Sentry > Settings > Webhooks. Select: issue, error.",
         },
       });

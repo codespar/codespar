@@ -409,6 +409,7 @@ When deploying CodeSpar to production:
 - [ ] Set `ENGINE_API_TOKEN` to protect API routes (`openssl rand -hex 32`)
 - [ ] Set `CORS_ORIGIN` to your dashboard URL
 - [ ] Set `WEBHOOK_STRICT_MODE=true` to reject unsigned webhooks
+- [ ] Set `DEPLOY_WEBHOOK_SECRET` if using the generic deploy webhook
 - [ ] Set `ANTHROPIC_API_KEY` and `GITHUB_TOKEN` as environment variables (never in code)
 - [ ] Use HTTPS for `WEBHOOK_BASE_URL`
 - [ ] Set appropriate autonomy level (L1 recommended for production)
