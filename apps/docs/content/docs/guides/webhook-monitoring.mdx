@@ -215,13 +215,14 @@ If deliveries show errors:
 ### Signature Verification
 
 CodeSpar verifies HMAC signatures on incoming webhooks when a secret is
-configured. All three providers are supported:
+configured. All four webhook endpoints are supported:
 
 | Provider | Header | Algorithm | Env var |
 |----------|--------|-----------|---------|
 | GitHub | `X-Hub-Signature-256` | SHA256 | `GITHUB_WEBHOOK_SECRET` |
 | Vercel | `X-Vercel-Signature` | SHA1 | `VERCEL_WEBHOOK_SECRET` |
 | Sentry | `Sentry-Hook-Signature` | SHA256 | `SENTRY_WEBHOOK_SECRET` |
+| Deploy (generic) | `x-deploy-signature` | SHA256 | `DEPLOY_WEBHOOK_SECRET` |
 
 All verification uses constant-time comparison to prevent timing attacks.
 
@@ -254,6 +255,7 @@ WEBHOOK_STRICT_MODE=true
 GITHUB_WEBHOOK_SECRET=your-github-secret
 VERCEL_WEBHOOK_SECRET=your-vercel-secret
 SENTRY_WEBHOOK_SECRET=your-sentry-secret
+DEPLOY_WEBHOOK_SECRET=your-deploy-secret
 ```
 
 ### Limitations
@@ -299,6 +301,7 @@ GitHub may retry webhook deliveries if the first response times out. Ensure your
 | `GITHUB_WEBHOOK_SECRET` | No | Shared secret for GitHub webhook signature verification |
 | `VERCEL_WEBHOOK_SECRET` | No | Shared secret for Vercel deploy webhook verification |
 | `SENTRY_WEBHOOK_SECRET` | No | Shared secret for Sentry alert webhook verification |
+| `DEPLOY_WEBHOOK_SECRET` | No | Shared secret for generic deploy webhook verification |
 
 ## Next Steps
 
