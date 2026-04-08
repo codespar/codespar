@@ -214,13 +214,57 @@ If deliveries show errors:
 
 ### Signature Verification
 
-If you set a webhook secret in GitHub, CodeSpar will verify the `X-Hub-Signature-256` header on each delivery. This prevents spoofed webhook events.
+CodeSpar verifies HMAC signatures on incoming webhooks when a secret is
+configured. All three providers are supported:
 
-Configure the secret via environment variable:
+| Provider | Header | Algorithm | Env var |
+|----------|--------|-----------|---------|
+| GitHub | `X-Hub-Signature-256` | SHA256 | `GITHUB_WEBHOOK_SECRET` |
+| Vercel | `X-Vercel-Signature` | SHA1 | `VERCEL_WEBHOOK_SECRET` |
+| Sentry | `Sentry-Hook-Signature` | SHA256 | `SENTRY_WEBHOOK_SECRET` |
+
+All verification uses constant-time comparison to prevent timing attacks.
+
+### Strict Mode
+
+By default, if no webhook secret is configured, CodeSpar logs a warning
+on each incoming webhook and processes the event without verification.
+This keeps local development simple.
+
+For internet-facing deployments, enable strict mode to reject unsigned
+webhooks:
 
 ```bash
-GITHUB_WEBHOOK_SECRET=your-secret-here
+WEBHOOK_STRICT_MODE=true
 ```
+
+When strict mode is on and no secret is configured for a provider,
+webhooks from that provider are rejected with HTTP 401. When strict mode
+is off (default), each unverified webhook logs a warning.
+
+### Recommended Setup
+
+For production deployments:
+
+```bash
+# Required: reject unsigned webhooks
+WEBHOOK_STRICT_MODE=true
+
+# Configure secrets per provider (set whichever providers you use)
+GITHUB_WEBHOOK_SECRET=your-github-secret
+VERCEL_WEBHOOK_SECRET=your-vercel-secret
+SENTRY_WEBHOOK_SECRET=your-sentry-secret
+```
+
+### Limitations
+
+- **Raw body reconstruction**: Fastify parses JSON before the handler
+  sees it. The handler re-serializes with `JSON.stringify`, which may
+  differ from the original bytes. If you see signature mismatches, verify
+  your webhook provider sends JSON without trailing whitespace.
+- **No replay protection**: HMAC verification proves the sender but does
+  not prevent replay of captured webhooks. GitHub's `X-GitHub-Delivery`
+  header can be used for deduplication if needed.
 
 ### IP Filtering
 
@@ -251,7 +295,10 @@ GitHub may retry webhook deliveries if the first response times out. Ensure your
 |----------|----------|-------------|
 | `WEBHOOK_BASE_URL` | For auto-config | Public URL of your CodeSpar instance |
 | `GITHUB_TOKEN` | Yes | Token with `repo` and optionally `admin:repo_hook` scope |
-| `GITHUB_WEBHOOK_SECRET` | No | Shared secret for webhook signature verification |
+| `WEBHOOK_STRICT_MODE` | No | Set `true` to reject webhooks when no secret is configured (default: `false`) |
+| `GITHUB_WEBHOOK_SECRET` | No | Shared secret for GitHub webhook signature verification |
+| `VERCEL_WEBHOOK_SECRET` | No | Shared secret for Vercel deploy webhook verification |
+| `SENTRY_WEBHOOK_SECRET` | No | Shared secret for Sentry alert webhook verification |
 
 ## Next Steps
 

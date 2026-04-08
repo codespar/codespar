@@ -176,6 +176,8 @@ export type { ChannelRoute } from "./routing/index.js";
 // Security
 export { PromptGuard, promptGuard } from "./security/prompt-guard.js";
 export type { PromptAnalysis } from "./security/prompt-guard.js";
+export { verifyWebhookSignature, enforceWebhookSecret } from "./server/webhook-auth.js";
+export type { WebhookAlgorithm } from "./server/webhook-auth.js";
 
 // Integrations (third-party API clients)
 export { SentryClient, SentryClientError } from "./integrations/index.js";

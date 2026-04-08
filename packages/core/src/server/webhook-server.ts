@@ -17,7 +17,7 @@
 
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { createHmac, randomUUID, timingSafeEqual } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import Fastify, { type FastifyInstance, type FastifyReply } from "fastify";
 import cors from "@fastify/cors";
 import { parseGitHubWebhook, type CIEvent } from "../webhooks/github-handler.js";
@@ -126,13 +126,6 @@ const rateLimitCleanupInterval = setInterval(() => {
 // Allow the process to exit without waiting for the cleanup timer
 if (typeof rateLimitCleanupInterval === "object" && "unref" in rateLimitCleanupInterval) {
   rateLimitCleanupInterval.unref();
-}
-
-// ── GitHub webhook signature verification ────────────────────────────
-function verifyGitHubSignature(payload: string, signature: string, secret: string): boolean {
-  const expected = "sha256=" + createHmac("sha256", secret).update(payload).digest("hex");
-  if (expected.length !== signature.length) return false;
-  return timingSafeEqual(Buffer.from(expected), Buffer.from(signature));
 }
 
 // ── Resend welcome email ──────────────────────────────────────────
