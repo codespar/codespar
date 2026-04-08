@@ -7,6 +7,7 @@
  */
 
 import { createLogger } from "../observability/logger.js";
+import { sanitizeForPrompt } from "../security/prompt-guard.js";
 
 const log = createLogger("smart");
 
@@ -59,15 +60,17 @@ Current state:
 
 Recent activity (last 30 events):
 ${context.recentAudit.slice(0, 30).map((a) => {
-  const extra = [a.repo, a.branch, a.commitSha?.slice(0, 7), a.commitMessage].filter(Boolean).join(" | ");
-  return `- ${a.action}: ${a.detail}${extra ? ` [${extra}]` : ""}`;
+  const detail = sanitizeForPrompt(a.detail || "", "audit_context").text;
+  const commitMsg = a.commitMessage ? sanitizeForPrompt(a.commitMessage, "commit_message").text : "";
+  const extra = [a.repo, a.branch, a.commitSha?.slice(0, 7), commitMsg].filter(Boolean).join(" | ");
+  return `- ${a.action}: ${detail}${extra ? ` [${extra}]` : ""}`;
 }).join("\n") || "No recent activity"}
 
 Recent Git commits (from GitHub API):
-${context.recentCommits?.slice(0, 20).map((c) => `- ${c.sha} ${c.message} (by ${c.author}, ${c.date})`).join("\n") || "No commits available"}
+${context.recentCommits?.slice(0, 20).map((c) => `- ${c.sha} ${sanitizeForPrompt(c.message || "", "commit_message").text} (by ${c.author}, ${c.date})`).join("\n") || "No commits available"}
 
 Recent deployments (from Vercel):
-${context.recentDeploys?.slice(0, 15).map((d) => `- [${d.state}] ${d.project} commit ${d.commitSha?.slice(0, 7)} "${d.commitMessage?.slice(0, 60)}" by ${d.author} (${d.branch}, ${d.buildTimeS}s, ${d.timestamp})${d.error ? ` ERROR: ${d.error}` : ""}`).join("\n") || "No deployment data available"}
+${context.recentDeploys?.slice(0, 15).map((d) => `- [${d.state}] ${d.project} commit ${d.commitSha?.slice(0, 7)} "${sanitizeForPrompt(d.commitMessage?.slice(0, 60) || "", "deploy_data").text}" by ${d.author} (${d.branch}, ${d.buildTimeS}s, ${d.timestamp})${d.error ? ` ERROR: ${sanitizeForPrompt(d.error, "ci_error").text}` : ""}`).join("\n") || "No deployment data available"}
 
 Available commands the user can use:
 - status — check project/agent status
@@ -193,15 +196,17 @@ Current state:
 
 Recent activity (last 30 events):
 ${context.recentAudit.slice(0, 30).map((a) => {
-  const extra = [a.repo, a.branch, a.commitSha?.slice(0, 7), a.commitMessage].filter(Boolean).join(" | ");
-  return `- ${a.action}: ${a.detail}${extra ? ` [${extra}]` : ""}`;
+  const detail = sanitizeForPrompt(a.detail || "", "audit_context").text;
+  const commitMsg = a.commitMessage ? sanitizeForPrompt(a.commitMessage, "commit_message").text : "";
+  const extra = [a.repo, a.branch, a.commitSha?.slice(0, 7), commitMsg].filter(Boolean).join(" | ");
+  return `- ${a.action}: ${detail}${extra ? ` [${extra}]` : ""}`;
 }).join("\n") || "No recent activity"}
 
 Recent Git commits (from GitHub API):
-${context.recentCommits?.slice(0, 20).map((c) => `- ${c.sha} ${c.message} (by ${c.author}, ${c.date})`).join("\n") || "No commits available"}
+${context.recentCommits?.slice(0, 20).map((c) => `- ${c.sha} ${sanitizeForPrompt(c.message || "", "commit_message").text} (by ${c.author}, ${c.date})`).join("\n") || "No commits available"}
 
 Recent deployments (from Vercel):
-${context.recentDeploys?.slice(0, 15).map((d) => `- [${d.state}] ${d.project} commit ${d.commitSha?.slice(0, 7)} "${d.commitMessage?.slice(0, 60)}" by ${d.author} (${d.branch}, ${d.buildTimeS}s, ${d.timestamp})${d.error ? ` ERROR: ${d.error}` : ""}`).join("\n") || "No deployment data available"}
+${context.recentDeploys?.slice(0, 15).map((d) => `- [${d.state}] ${d.project} commit ${d.commitSha?.slice(0, 7)} "${sanitizeForPrompt(d.commitMessage?.slice(0, 60) || "", "deploy_data").text}" by ${d.author} (${d.branch}, ${d.buildTimeS}s, ${d.timestamp})${d.error ? ` ERROR: ${sanitizeForPrompt(d.error, "ci_error").text}` : ""}`).join("\n") || "No deployment data available"}
 
 Available commands the user can use:
 - status — check project/agent status

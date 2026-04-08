@@ -174,8 +174,8 @@ export { ChannelRouter } from "./routing/index.js";
 export type { ChannelRoute } from "./routing/index.js";
 
 // Security
-export { PromptGuard, promptGuard } from "./security/prompt-guard.js";
-export type { PromptAnalysis } from "./security/prompt-guard.js";
+export { PromptGuard, promptGuard, sanitizeForPrompt } from "./security/prompt-guard.js";
+export type { PromptAnalysis, SanitizeResult, ContentSource } from "./security/prompt-guard.js";
 export { verifyWebhookSignature, enforceWebhookSecret } from "./server/webhook-auth.js";
 export type { WebhookAlgorithm } from "./server/webhook-auth.js";
 

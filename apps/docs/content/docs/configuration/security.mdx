@@ -334,6 +334,14 @@ The only exception is `emergency_admin` for the `kill` command, which can be exe
 
 ---
 
+## Prompt Injection Guard
+
+CodeSpar screens both direct user messages and indirect content (PR diffs, commit messages, CI error logs) for prompt injection patterns before they reach Claude. Direct messages are blocked at L3+ autonomy. Indirect content is redacted -- injection patterns are replaced with placeholders while preserving surrounding context.
+
+See the [Prompt Guard guide](/docs/guides/prompt-guard) for detection layers, configuration, and audit trail details.
+
+---
+
 ## API Authentication
 
 The engine's REST API can be protected with a bearer token. When

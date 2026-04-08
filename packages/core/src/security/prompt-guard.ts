@@ -19,6 +19,27 @@ import { createLogger } from "../observability/logger.js";
 
 const log = createLogger("prompt-guard");
 
+/** Source type for indirect content screening */
+export type ContentSource =
+  | "pr_title"
+  | "pr_diff"
+  | "commit_message"
+  | "ci_error"
+  | "audit_context"
+  | "deploy_data";
+
+/** Result of sanitizing untrusted content */
+export interface SanitizeResult {
+  /** The text with injection patterns redacted (or original if clean) */
+  text: string;
+  /** Whether any patterns were triggered */
+  flagged: boolean;
+  /** Source type for audit logging */
+  source: ContentSource;
+  /** Full analysis details */
+  analysis: PromptAnalysis;
+}
+
 export interface PromptAnalysis {
   /** Whether the message should be blocked */
   blocked: boolean;
@@ -239,6 +260,37 @@ export class PromptGuard {
         : undefined,
     };
   }
+
+  /**
+   * Sanitize untrusted external content by redacting injection patterns.
+   * Unlike analyze() which decides block/allow, sanitize() always returns
+   * usable text — flagged patterns are replaced with [redacted: <rule-id>].
+   */
+  sanitize(text: string, source: ContentSource): SanitizeResult {
+    const analysis = this.analyze(text);
+
+    if (analysis.triggers.length === 0) {
+      return { text, flagged: false, source, analysis };
+    }
+
+    // Redact each matched pattern
+    let redacted = text;
+    const allPatterns = [...INJECTION_PATTERNS, ...this.customPatterns];
+    for (const rule of allPatterns) {
+      if (analysis.triggers.includes(rule.id)) {
+        redacted = redacted.replace(rule.pattern, `[redacted: ${rule.id}]`);
+      }
+    }
+
+    log.warn("Indirect content flagged", {
+      source,
+      riskScore: analysis.riskScore.toFixed(2),
+      triggers: analysis.triggers,
+      textPreview: text.slice(0, 100),
+    });
+
+    return { text: redacted, flagged: true, source, analysis };
+  }
 }
 
 /** Default singleton instance — reads PROMPT_GUARD_THRESHOLD from environment */
@@ -248,3 +300,12 @@ const clamp = (v: number, min: number, max: number) => Math.max(min, Math.min(ma
 export const promptGuard = new PromptGuard(
   Number.isFinite(envThreshold) ? clamp(envThreshold, 0, 1) : BLOCK_THRESHOLD,
 );
+
+/** Convenience function for sanitizing indirect content with the default guard */
+export function sanitizeForPrompt(
+  text: string,
+  source: ContentSource,
+  guard: PromptGuard = promptGuard,
+): SanitizeResult {
+  return guard.sanitize(text, source);
+}

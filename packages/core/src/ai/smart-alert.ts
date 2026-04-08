@@ -5,6 +5,7 @@
 
 import { createLogger } from "../observability/logger.js";
 import { metrics } from "../observability/metrics.js";
+import { sanitizeForPrompt } from "../security/prompt-guard.js";
 import type { DeployAlert } from "../server/webhook-server.js";
 
 const log = createLogger("smart-alert");
@@ -25,14 +26,18 @@ export async function analyzeDeployFailure(alert: DeployAlert): Promise<SmartAle
     return null;
   }
 
+  // Sanitize untrusted fields before they enter the Claude prompt
+  const commitMessage = sanitizeForPrompt(alert.commitMessage || "", "commit_message").text;
+  const errorMessage = sanitizeForPrompt(alert.errorMessage || "", "ci_error").text;
+
   const model = process.env.NLU_MODEL || "claude-haiku-4-5-20251001";
   const prompt = `You are a DevOps expert analyzing a deploy failure.
 
 Project: ${alert.project}
 Branch: ${alert.branch}
 Commit: ${alert.commitSha} by ${alert.commitAuthor}
-Commit message: ${alert.commitMessage}
-Error: ${alert.errorMessage}
+Commit message: ${commitMessage}
+Error: ${errorMessage}
 Repository: ${alert.repo}
 
 Analyze this deploy failure and respond in JSON:
