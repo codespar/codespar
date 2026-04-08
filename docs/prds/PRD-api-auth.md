@@ -1,5 +1,5 @@
 ---
-status: Draft
+status: Accepted
 problem: |
   The engine's REST API exposes 60+ endpoints under /api/* with zero
   authentication. Anyone who can reach the network port can create and
