@@ -1,5 +1,5 @@
 ---
-status: Accepted
+status: Planned
 upstream: docs/prds/PRD-api-auth.md
 problem: |
   The engine's 60+ REST API endpoints have zero authentication. Anyone who
