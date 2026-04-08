@@ -5,7 +5,7 @@
  * the shared helpers produce correct results.
  */
 
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, afterEach } from "vitest";
 import { createHmac } from "node:crypto";
 import { verifyWebhookSignature, enforceWebhookSecret } from "../webhook-auth.js";
 
