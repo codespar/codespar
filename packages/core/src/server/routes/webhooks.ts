@@ -2,21 +2,15 @@
  * Webhook routes — GitHub, Vercel, deploy, Sentry incoming webhooks + status/URL endpoints.
  */
 
-import { createHmac, timingSafeEqual } from "node:crypto";
 import { parseGitHubWebhook } from "../../webhooks/github-handler.js";
 import { createLogger } from "../../observability/logger.js";
 import { metrics } from "../../observability/metrics.js";
 import { GitHubClient } from "../../github/github-client.js";
 import { broadcastEvent } from "../webhook-server.js";
+import { verifyWebhookSignature, enforceWebhookSecret } from "../webhook-auth.js";
 import type { RouteFn, ServerContext } from "./types.js";
 
 const log = createLogger("routes/webhooks");
-
-function verifyGitHubSignature(payload: string, signature: string, secret: string): boolean {
-  const expected = "sha256=" + createHmac("sha256", secret).update(payload).digest("hex");
-  if (expected.length !== signature.length) return false;
-  return timingSafeEqual(Buffer.from(expected), Buffer.from(signature));
-}
 
 export function registerWebhookRoutes(route: RouteFn, ctx: ServerContext): void {
     // GitHub webhook receiver
@@ -50,21 +44,17 @@ export function registerWebhookRoutes(route: RouteFn, ctx: ServerContext): void 
           : undefined;
         webhookSecret = orgSpecificSecret || process.env["GITHUB_WEBHOOK_SECRET"];
       }
-      if (webhookSecret) {
+      if (enforceWebhookSecret(webhookSecret, "GitHub", reply, log)) {
         const signature = headers["x-hub-signature-256"];
         if (!signature) {
           return reply.status(401).send({ error: "Missing x-hub-signature-256 header" });
         }
-
         const rawBody = typeof request.body === "string"
           ? request.body
           : JSON.stringify(request.body);
-
-        if (!verifyGitHubSignature(rawBody, signature, webhookSecret)) {
+        if (!verifyWebhookSignature(rawBody, signature, webhookSecret!, "sha256", "sha256=")) {
           return reply.status(401).send({ error: "Invalid webhook signature" });
         }
-      } else {
-        log.warn("GITHUB_WEBHOOK_SECRET is not set — skipping signature verification");
       }
 
       const event = parseGitHubWebhook(headers, request.body);
@@ -161,7 +151,7 @@ export function registerWebhookRoutes(route: RouteFn, ctx: ServerContext): void 
           log.warn("Failed to load org Vercel webhook secret, using global", { orgId, error: String(err) });
         }
       }
-      if (vercelSecret) {
+      if (enforceWebhookSecret(vercelSecret, "Vercel", reply, log)) {
         const signature = request.headers["x-vercel-signature"] as string;
         if (!signature) {
           reply.code(401).send({ error: "Missing x-vercel-signature header" });
@@ -170,8 +160,7 @@ export function registerWebhookRoutes(route: RouteFn, ctx: ServerContext): void 
         const rawBody = typeof request.body === "string"
           ? request.body
           : JSON.stringify(request.body);
-        const expected = createHmac("sha1", vercelSecret).update(rawBody).digest("hex");
-        if (signature !== expected) {
+        if (!verifyWebhookSignature(rawBody, signature, vercelSecret!, "sha1")) {
           log.warn("Vercel signature mismatch");
           reply.code(401).send({ error: "Invalid signature" });
           return;
@@ -476,7 +465,7 @@ export function registerWebhookRoutes(route: RouteFn, ctx: ServerContext): void 
         sentryWebhookSecret = process.env["SENTRY_WEBHOOK_SECRET"];
       }
 
-      if (sentryWebhookSecret) {
+      if (enforceWebhookSecret(sentryWebhookSecret, "Sentry", reply, log)) {
         const signature = request.headers["sentry-hook-signature"] as string;
         if (!signature) {
           return reply.status(401).send({ error: "Missing sentry-hook-signature header" });
@@ -484,13 +473,10 @@ export function registerWebhookRoutes(route: RouteFn, ctx: ServerContext): void 
         const rawBody = typeof request.body === "string"
           ? request.body
           : JSON.stringify(request.body);
-        const expected = createHmac("sha256", sentryWebhookSecret).update(rawBody).digest("hex");
-        if (expected.length !== signature.length || !timingSafeEqual(Buffer.from(expected), Buffer.from(signature))) {
+        if (!verifyWebhookSignature(rawBody, signature, sentryWebhookSecret!, "sha256")) {
           log.warn("Sentry webhook signature mismatch");
           return reply.status(401).send({ error: "Invalid webhook signature" });
         }
-      } else {
-        log.warn("SENTRY_WEBHOOK_SECRET is not set — skipping Sentry signature verification");
       }
 
       // ── Step 2: Parse payload ───────────────────────────────────
