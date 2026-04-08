@@ -1,5 +1,5 @@
 ---
-status: Draft
+status: In Progress
 problem: |
   The prompt injection guard (PromptGuard) only screens direct user messages in
   the message router. Agents also process untrusted content from external sources
@@ -16,7 +16,7 @@ goals: |
 
 ## Status
 
-Draft
+In Progress
 
 ## Problem Statement
 
