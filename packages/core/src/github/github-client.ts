@@ -137,6 +137,40 @@ export class GitHubClient {
     return res.ok;
   }
 
+  /** Update or create a file, returning the new blob SHA (or null on failure). */
+  async updateFileWithSha(
+    owner: string,
+    repo: string,
+    path: string,
+    content: string,
+    message: string,
+    branch: string,
+    sha?: string,
+  ): Promise<string | null> {
+    const body: Record<string, unknown> = {
+      message,
+      content: Buffer.from(content).toString("base64"),
+      branch,
+    };
+    if (sha) body.sha = sha;
+
+    const res = await fetch(
+      `${this.baseUrl}/repos/${owner}/${repo}/contents/${path}`,
+      {
+        method: "PUT",
+        headers: this.headers,
+        body: JSON.stringify(body),
+      },
+    );
+    if (!res.ok) {
+      const err = await res.text().catch(() => "");
+      log.error("updateFile failed", { path, status: res.status, err: err.slice(0, 200) });
+      return null;
+    }
+    const data = (await res.json()) as any;
+    return (data.content?.sha as string) ?? null;
+  }
+
   /** Create a pull request. */
   async createPR(
     owner: string,
@@ -154,7 +188,11 @@ export class GitHubClient {
         body: JSON.stringify({ title, body, head, base }),
       },
     );
-    if (!res.ok) return null;
+    if (!res.ok) {
+      const err = await res.text().catch(() => "");
+      log.error("createPR failed", { status: res.status, err: err.slice(0, 200) });
+      return null;
+    }
     const data = (await res.json()) as any;
     return { number: data.number as number, url: data.html_url as string };
   }
