@@ -110,7 +110,7 @@ Each project gets its own persistent agent that monitors builds, investigates fa
 - **Claude API instrumentation** -- token usage and cost tracking per request, per agent, and per organization.
 - **Observability dashboards** -- Vercel and Railway API integration for deploy metrics, with Recharts-powered dashboards.
 - **Per-org integration tokens** -- organization-scoped tokens for Vercel, Railway, Sentry, and Datadog integrations.
-- **4 new commands** -- `docs` (search documentation), `scan` (codebase analysis for security/lint/type issues), `perf` (performance metrics and regression detection), `spec` (generate structured specs using EARS notation — requirements, design, tasks). 25 commands total.
+- **4 new commands** -- `docs` (search documentation), `scan` (codebase analysis for security/lint/type issues), `perf` (performance metrics and regression detection), `spec` (3-phase spec-driven development: requirements → design → implementation plan, inspired by Kiro). 25 commands total.
 - **Webhook server decomposition** -- the monolithic webhook handler was decomposed into 8 route modules (480-line orchestrator + 8 focused modules) for maintainability and testability.
 - **Context-aware agents** -- language detection and project context gathering for smarter responses across all channels.
 - **CONTRIBUTING.md and CHANGELOG.md** -- contribution guidelines and a detailed changelog are now included in the repository.
