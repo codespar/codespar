@@ -773,56 +773,138 @@ User query: ${instruction}`,
       }
 
       case "spec": {
-        const specDescription = intent.params.description || intent.rawText;
-        const specPrompt = `Generate a structured feature specification using EARS (Easy Approach to Requirements Syntax) notation for: "${specDescription}"
+        const phase = intent.params.phase as string | undefined;
+        const specDescription = intent.params.description as string | undefined;
 
-Output the spec in three sections:
+        if (phase === "status") {
+          // Show current spec state
+          response = { text: `[${this.config.id}] Use \`spec <feature name>\` to start a new spec, then \`spec design\` and \`spec tasks\` to advance through phases.\n\nPhases:\n  1. \`spec <feature>\` → generates requirements.md\n  2. \`spec design\` → reads requirements, generates design.md\n  3. \`spec tasks\` → reads design, generates tasks.md (implementation checklist)` };
+          break;
+        }
+
+        if (phase === "design") {
+          // Phase 2: Generate design from requirements
+          const designPrompt = `You are generating Phase 2 of a spec-driven development process.
+
+The user has already created requirements for a feature. Now generate a TECHNICAL DESIGN document.
+
+Read the requirements context provided and output a design.md with these sections:
+
+## Data Model
+Define the key entities, their fields, and relationships. Use TypeScript interfaces.
+
+## API Design
+Define the API endpoints or tool interfaces needed. Include method, path, request/response shapes.
+
+## Architecture Decisions
+List 3-5 key decisions with:
+- **Decision**: What we chose
+- **Rationale**: Why
+- **Alternatives**: What we considered
+
+## Component Breakdown
+List the files/modules that need to be created or modified.
+
+## Dependencies
+New packages or services required.
+
+Be specific. Reference real patterns from this codebase. No generic advice.`;
+
+          const designMessage: NormalizedMessage = { ...message, text: `instruct ${designPrompt}` };
+          const designIntent: ParsedIntent = { ...intent, type: "instruct", params: { instruction: designPrompt } };
+          response = await this.delegateToTaskAgent(designMessage, designIntent);
+          break;
+        }
+
+        if (phase === "tasks") {
+          // Phase 3: Generate implementation tasks from design
+          const tasksPrompt = `You are generating Phase 3 of a spec-driven development process.
+
+The user has requirements and a technical design. Now generate an IMPLEMENTATION PLAN.
+
+Output a tasks.md with an ordered checklist. Each task should:
+- Be small enough for a single PR
+- Reference specific files to create or modify
+- Have an effort estimate (S = <1h, M = 1-4h, L = 4-8h)
+- Be ordered by dependency (prerequisite tasks first)
+
+Format:
+\`\`\`
+- [ ] Task description (effort: S/M/L)
+  - File: \`src/path/to/file.ts\`
+  - Depends on: Task #N (if applicable)
+\`\`\`
+
+Group tasks into phases:
+1. **Foundation** — types, schemas, migrations
+2. **Core Logic** — business logic, services
+3. **API Layer** — routes, handlers, validation
+4. **UI** — components, pages (if applicable)
+5. **Testing** — unit tests, integration tests
+6. **Documentation** — docs, README updates
+
+Be specific and practical. Every task should be directly actionable.`;
+
+          const tasksMessage: NormalizedMessage = { ...message, text: `instruct ${tasksPrompt}` };
+          const tasksIntent: ParsedIntent = { ...intent, type: "instruct", params: { instruction: tasksPrompt } };
+          response = await this.delegateToTaskAgent(tasksMessage, tasksIntent);
+          break;
+        }
+
+        // Phase 1: Generate requirements from description
+        if (specDescription) {
+          const reqPrompt = `You are generating Phase 1 of a spec-driven development process for: "${specDescription}"
+
+Output a requirements.md with these sections:
+
+## Overview
+One paragraph describing the feature and its purpose.
+
+## User Stories
+3-5 user stories in "As a <role>, I want <action>, so that <benefit>" format.
 
 ## Requirements
-Use EARS "shall" statements in these patterns:
+Use EARS (Easy Approach to Requirements Syntax) notation:
 - **Ubiquitous:** The system shall <action>.
 - **Event-driven:** When <event>, the system shall <action>.
 - **State-driven:** While <state>, the system shall <action>.
 - **Optional:** Where <condition>, the system shall <action>.
 - **Unwanted behavior:** If <condition>, then the system shall <action>.
 
-Number each requirement (REQ-001, REQ-002, etc.).
+Number each (REQ-001, REQ-002, etc.). Aim for 8-15 requirements.
 
-## Design
-List 3-5 key architecture decisions needed for this feature. For each decision, state:
-- The decision
-- The rationale
-- Alternatives considered (brief)
+## Acceptance Criteria
+For each user story, list 2-3 testable acceptance criteria.
 
-## Tasks
-Create an implementation checklist with checkboxes. Order tasks by dependency (prerequisite tasks first). Each task should be small enough to implement in a single PR. Format as:
-- [ ] Task description (estimated effort: S/M/L)
+## Out of Scope
+List 3-5 things this feature explicitly does NOT include.
 
-Be specific and practical. Reference real patterns, libraries, and file structures. Do NOT be generic.`;
+## Open Questions
+List 2-3 decisions that need human input before proceeding to design.
 
-        // Rewrite the message to send the spec prompt as an instruct command
-        const specMessage: NormalizedMessage = {
-          ...message,
-          text: `instruct ${specPrompt}`,
-        };
-        const specIntent: ParsedIntent = {
-          ...intent,
-          type: "instruct",
-          params: { instruction: specPrompt },
-        };
-        response = await this.delegateToTaskAgent(specMessage, specIntent);
+Be specific to this codebase and project context. Reference real patterns and constraints.
+
+---
+After generating, tell the user: "Requirements generated. Review and edit, then run \`spec design\` to generate the technical design."`;
+
+          const reqMessage: NormalizedMessage = { ...message, text: `instruct ${reqPrompt}` };
+          const reqIntent: ParsedIntent = { ...intent, type: "instruct", params: { instruction: reqPrompt } };
+          response = await this.delegateToTaskAgent(reqMessage, reqIntent);
+        } else {
+          response = { text: `[${this.config.id}] Usage:\n  \`spec <feature description>\` — Phase 1: Generate requirements\n  \`spec design\` — Phase 2: Generate technical design\n  \`spec tasks\` — Phase 3: Generate implementation plan\n  \`spec status\` — Show spec workflow` };
+        }
 
         if (this.storage) {
           await this.storage.appendAudit({
             actorType: "user",
             actorId: message.channelUserId,
-            action: "spec.generated",
+            action: `spec.${phase || "requirements"}`,
             result: "success",
             metadata: {
               agentId: this.config.id,
               project: this.config.projectId || "unknown",
               risk: intent.risk,
-              detail: `Spec: ${specDescription.slice(0, 100)}`,
+              detail: `Spec: ${(specDescription || phase || "").slice(0, 100)}`,
               channel: message.channelType,
               latency_ms: Date.now() - handlerStart,
             },

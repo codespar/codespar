@@ -1,0 +1,135 @@
+---
+title: Spec-Driven Development
+description: Use the @codespar spec command to go from idea to implementation plan in three structured phases.
+---
+
+# Spec-Driven Development
+
+The `spec` command implements a three-phase development workflow inspired by [Kiro](https://kiro.dev). Instead of sending a vague prompt and hoping for good code, you refine your feature through structured phases — each reviewable and editable before advancing.
+
+## The Three Phases
+
+```
+Phase 1: Requirements    →  "What are we building?"
+Phase 2: Design          →  "How will we build it?"
+Phase 3: Tasks           →  "What do we do first?"
+```
+
+Each phase generates a structured document. You review and edit before moving to the next phase. This progressive refinement ensures the final implementation plan is grounded in reviewed requirements and approved design decisions.
+
+## Usage
+
+### Phase 1 — Requirements
+
+```
+@codespar spec add payment gateway with budget limits
+```
+
+Generates:
+- Overview (one paragraph)
+- User stories (3-5)
+- EARS requirements (REQ-001 through REQ-015)
+- Acceptance criteria per user story
+- Out of scope
+- Open questions
+
+### Phase 2 — Design
+
+```
+@codespar spec design
+```
+
+Reads the requirements from Phase 1 and generates:
+- Data model (TypeScript interfaces)
+- API design (endpoints, request/response shapes)
+- Architecture decisions (3-5 with rationale and alternatives)
+- Component breakdown (files to create/modify)
+- Dependencies (new packages needed)
+
+### Phase 3 — Tasks
+
+```
+@codespar spec tasks
+```
+
+Reads the design from Phase 2 and generates:
+- Ordered implementation checklist
+- Each task references specific files
+- Effort estimates (S/M/L)
+- Dependency ordering
+- Grouped by phase: Foundation → Core Logic → API → UI → Testing → Docs
+
+### Check Status
+
+```
+@codespar spec status
+```
+
+Shows the current workflow and which phase comes next.
+
+## Why This Works
+
+| Approach | Problem |
+|----------|---------|
+| Raw prompt → code | AI decides scope, architecture, and tasks with no review |
+| PRD document → code | Too high-level, AI fills in gaps unpredictably |
+| Spec-driven (this) | Human reviews scope, design, and plan at each gate |
+
+The key insight: **each phase constrains the next**. Requirements limit the design space. Design limits the implementation options. Tasks become predictable because they trace back to reviewed decisions.
+
+## Example
+
+```
+> @codespar spec user authentication with OAuth2
+
+[agent] ## Requirements (Phase 1)
+
+### Overview
+Implement OAuth2 authentication allowing users to sign in via
+Google and GitHub, replacing the current email/password flow.
+
+### Requirements
+- REQ-001: When a user clicks "Sign in with Google", the system
+  shall redirect to Google OAuth2 consent screen.
+- REQ-002: When Google returns an auth code, the system shall
+  exchange it for tokens and create/update the user record.
+...
+
+Requirements generated. Review and edit, then run `spec design`.
+
+> @codespar spec design
+
+[agent] ## Design (Phase 2)
+
+### Data Model
+interface OAuthConnection {
+  id: string;
+  userId: string;
+  provider: "google" | "github";
+  providerUserId: string;
+  ...
+}
+
+### API Design
+POST /auth/oauth/google/callback
+POST /auth/oauth/github/callback
+...
+
+Design generated. Review and edit, then run `spec tasks`.
+
+> @codespar spec tasks
+
+[agent] ## Tasks (Phase 3)
+
+### Foundation
+- [ ] Create OAuthConnection migration (effort: S)
+  - File: `migrations/003_oauth_connections.ts`
+- [ ] Add OAuthConnection Drizzle schema (effort: S)
+  - File: `packages/core/src/db/schema.ts`
+
+### Core Logic
+- [ ] Implement Google OAuth2 flow (effort: M)
+  - File: `packages/core/src/auth/google-oauth.ts`
+  - Depends on: Migration
+...
+```

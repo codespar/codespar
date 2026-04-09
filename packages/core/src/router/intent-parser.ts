@@ -133,6 +133,11 @@ const PATTERNS: PatternRule[] = [
   },
   {
     type: "spec",
+    pattern: /^spec\s+(design|tasks|status)$/i,
+    paramExtractor: (m) => ({ phase: m[1].toLowerCase() }),
+  },
+  {
+    type: "spec",
     pattern: /^spec\s+(.+)$/i,
     paramExtractor: (m) => ({ description: m[1] }),
   },
