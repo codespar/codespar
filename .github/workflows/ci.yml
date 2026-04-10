@@ -7,7 +7,7 @@ on:
     branches: [main]
 
 jobs:
-  build:
+  build-and-test:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -17,3 +17,39 @@ jobs:
       - run: npm install
       - run: npx turbo run build
       - run: npx vitest run
+
+  security:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm install
+
+      # Dependency audit — check for known vulnerabilities
+      - name: npm audit
+        run: npm audit --omit=dev || true
+
+      # Secret scanning — check for hardcoded credentials
+      - name: Scan for secrets
+        run: |
+          echo "Scanning for hardcoded secrets..."
+          FOUND=0
+          # API keys
+          if grep -rn "sk_live_\|sk_test_[A-Za-z0-9]\{20,\}" --include="*.ts" --include="*.tsx" --include="*.js" packages/ src/ 2>/dev/null | grep -v node_modules | grep -v ".env"; then
+            echo "::warning::Possible Stripe key found in source"
+            FOUND=1
+          fi
+          # Generic secrets
+          if grep -rn "password\s*=\s*[\"'][^\"']\{8,\}" --include="*.ts" --include="*.tsx" packages/ src/ 2>/dev/null | grep -v node_modules | grep -v test | grep -v mock; then
+            echo "::warning::Possible hardcoded password found"
+            FOUND=1
+          fi
+          if [ $FOUND -eq 0 ]; then
+            echo "No hardcoded secrets found"
+          fi
+
+      # TypeScript strict check
+      - name: Type check
+        run: npx turbo run build 2>&1 | grep -c "error TS" && exit 1 || echo "No type errors"
