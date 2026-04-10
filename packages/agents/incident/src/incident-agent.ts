@@ -22,6 +22,8 @@ import type {
   StorageProvider,
 } from "@codespar/core";
 
+import { sanitizeForPrompt } from "@codespar/core";
+
 export interface Investigation {
   error: string;
   recentChanges: string[];
@@ -78,42 +80,23 @@ export class IncidentAgent implements Agent {
     this._state = "ACTIVE";
     this.tasksHandled++;
 
-    const recentChanges: string[] = [];
+    // Correlate with recent changes (commits, PRs, audit trail)
+    const recentChanges = await this.correlateWithRecentChanges(event);
 
-    // Include commit SHA if available
-    if (event.details.sha) {
-      recentChanges.push(`Last commit: ${event.details.sha.slice(0, 8)}`);
-    }
-
-    // Include PR number if available
-    if (event.details.prNumber) {
-      recentChanges.push(`Related PR: #${event.details.prNumber}`);
-    }
-
-    // Pull recent audit entries for additional context
-    if (this.storage) {
-      const { entries } = await this.storage.queryAudit("", 5);
-      for (const entry of entries) {
-        const detail = entry.metadata?.detail;
-        if (typeof detail === "string") {
-          recentChanges.push(detail);
-        }
-      }
-    }
-
-    // If no changes found, note that
-    if (recentChanges.length === 0) {
-      recentChanges.push("No recent changes found in audit log");
-    }
-
-    // Determine severity based on event details
-    const severity = this.assessSeverity(event);
+    // Determine severity based on error patterns
+    const severity = this.classifySeverity(event);
 
     // Determine suspected cause from conclusion
-    const suspectedCause = this.determineCause(event);
+    let suspectedCause = this.determineCause(event);
 
     // Suggest a fix based on the event type and conclusion
-    const suggestedFix = this.suggestFix(event);
+    let suggestedFix = this.suggestFix(event);
+
+    // Attempt Claude analysis for richer investigation
+    const aiAnalysis = await this.analyzeWithClaude(event, recentChanges);
+    if (aiAnalysis) {
+      suspectedCause = `${suspectedCause}\n\n  AI Analysis:\n  ${aiAnalysis}`;
+    }
 
     const investigation: Investigation = {
       error: `Build failed on ${event.branch}`,
@@ -171,29 +154,52 @@ export class IncidentAgent implements Agent {
   }
 
   /**
-   * Assess severity based on event characteristics.
-   * - Main/master branch failures are high/critical
-   * - Feature branch failures are medium
-   * - Everything else is low
+   * Classify severity based on error patterns in the event.
+   *
+   * Pattern-based classification:
+   * - deploy failure = critical (regardless of branch)
+   * - build failure on main/master = critical
+   * - build failure on feature branch = high
+   * - test failure = medium
+   * - timed_out / cancelled on main = high, on feature = medium
+   * - everything else = low
+   */
+  classifySeverity(event: CIEvent): "low" | "medium" | "high" | "critical" {
+    const isMainBranch =
+      event.branch === "main" || event.branch === "master";
+
+    const title = (event.details.title || "").toLowerCase();
+    const conclusion = event.details.conclusion || "";
+
+    // Deploy failures are always critical
+    if (title.includes("deploy") && conclusion === "failure") {
+      return "critical";
+    }
+
+    // Test failures are medium severity
+    if (title.includes("test") && conclusion === "failure") {
+      return "medium";
+    }
+
+    // Build failures: critical on main, high on feature
+    if (conclusion === "failure") {
+      return isMainBranch ? "critical" : "high";
+    }
+
+    if (conclusion === "timed_out" || conclusion === "cancelled") {
+      return isMainBranch ? "high" : "medium";
+    }
+
+    return "low";
+  }
+
+  /**
+   * Legacy method — delegates to classifySeverity for backward compatibility.
    */
   private assessSeverity(
     event: CIEvent
   ): "low" | "medium" | "high" | "critical" {
-    const isMainBranch =
-      event.branch === "main" || event.branch === "master";
-
-    if (event.details.conclusion === "failure") {
-      return isMainBranch ? "critical" : "high";
-    }
-
-    if (
-      event.details.conclusion === "timed_out" ||
-      event.details.conclusion === "cancelled"
-    ) {
-      return isMainBranch ? "high" : "medium";
-    }
-
-    return "medium";
+    return this.classifySeverity(event);
   }
 
   /**
@@ -229,6 +235,121 @@ export class IncidentAgent implements Agent {
         return "Review and approve the required workflow action";
       default:
         return "Review CI logs and recent changes for anomalies";
+    }
+  }
+
+  /**
+   * Extract commit/PR context from a CIEvent and recent audit entries.
+   * Returns a list of human-readable change descriptions useful for
+   * correlating a failure with what recently changed.
+   */
+  async correlateWithRecentChanges(event: CIEvent): Promise<string[]> {
+    const changes: string[] = [];
+
+    // Extract commit info from event metadata
+    if (event.details.sha) {
+      changes.push(`Commit: ${event.details.sha.slice(0, 8)}`);
+    }
+
+    if (event.details.prNumber) {
+      changes.push(`PR: #${event.details.prNumber}`);
+    }
+
+    if (event.details.commitsCount) {
+      changes.push(`Commits in push: ${event.details.commitsCount}`);
+    }
+
+    if (event.details.title) {
+      changes.push(`Workflow: ${event.details.title}`);
+    }
+
+    // Pull recent audit entries for deploy/fix activity
+    if (this.storage) {
+      const { entries } = await this.storage.queryAudit("", 10);
+      for (const entry of entries) {
+        const action = entry.action;
+        const detail = entry.metadata?.detail;
+
+        // Only include deploy/fix/rollback actions — not noise
+        if (
+          typeof detail === "string" &&
+          (action.startsWith("deploy.") ||
+            action.startsWith("rollback.") ||
+            action.startsWith("fix.") ||
+            action.startsWith("pr."))
+        ) {
+          changes.push(`${action}: ${detail}`);
+        }
+      }
+    }
+
+    if (changes.length === 0) {
+      changes.push("No recent changes found");
+    }
+
+    return changes;
+  }
+
+  /**
+   * Call the Anthropic Messages API to analyze build logs and produce
+   * an AI-powered investigation summary. Returns empty string on failure
+   * (graceful degradation — investigation proceeds without AI).
+   */
+  async analyzeWithClaude(event: CIEvent, recentChanges: string[]): Promise<string> {
+    const apiKey = process.env.ANTHROPIC_API_KEY;
+    if (!apiKey) {
+      return "";
+    }
+
+    const changesContext = recentChanges.map((c) => `- ${c}`).join("\n");
+    const eventSummary = sanitizeForPrompt(
+      [
+        `Repo: ${event.repo}`,
+        `Branch: ${event.branch}`,
+        `Status: ${event.status}`,
+        `Conclusion: ${event.details.conclusion || "unknown"}`,
+        `Workflow: ${event.details.title || "unknown"}`,
+        event.details.url ? `URL: ${event.details.url}` : null,
+      ]
+        .filter(Boolean)
+        .join("\n"),
+      "ci_error"
+    ).text;
+
+    try {
+      const res = await fetch("https://api.anthropic.com/v1/messages", {
+        method: "POST",
+        headers: {
+          "x-api-key": apiKey,
+          "anthropic-version": "2023-06-01",
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          model: process.env.INCIDENT_MODEL || "claude-sonnet-4-20250514",
+          max_tokens: 800,
+          system:
+            "You are a senior SRE investigating a CI/CD failure. Analyze the build failure context and recent changes. Provide: 1) Most likely root cause, 2) Recommended immediate action, 3) Whether this is likely a flaky test or a real regression. Be concise and direct. Use bullet points. Keep it under 150 words.",
+          messages: [
+            {
+              role: "user",
+              content: `Build failure:\n${eventSummary}\n\nRecent changes:\n${changesContext}`,
+            },
+          ],
+        }),
+        signal: AbortSignal.timeout(30000),
+      });
+
+      if (res.ok) {
+        const data = (await res.json()) as {
+          content?: Array<{ text?: string }>;
+        };
+        return data.content?.[0]?.text || "";
+      }
+
+      return "";
+    } catch {
+      // Timeout or network error — degrade gracefully
+      return "";
     }
   }
 

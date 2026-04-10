@@ -107,6 +107,8 @@ export class DeployAgent implements Agent {
    * IMPORTANT: Caller must ensure production deploys are never auto-executed.
    */
   executeDeploy(environment: "staging" | "production"): ChannelResponse {
+    const deployStartMs = Date.now();
+
     const deployRequest: DeployRequest = {
       id: `auto-${Date.now()}`,
       environment,
@@ -120,11 +122,13 @@ export class DeployAgent implements Agent {
 
     this.deployHistory.push(deployRequest);
 
-    // Simulate deployment
+    // Simulate deployment (synchronous — real deploy would be async)
     deployRequest.status = "deployed";
 
+    const durationMs = Date.now() - deployStartMs;
+
     return {
-      text: `[${this.config.id}] Auto-deployed to ${environment}. Deploy complete.`,
+      text: `[${this.config.id}] Auto-deployed to ${environment}. Deploy complete (${durationMs}ms).`,
     };
   }
 
@@ -227,6 +231,7 @@ export class DeployAgent implements Agent {
 
     if (result.status === "approved") {
       // Quorum met — simulate deployment
+      const deployStartMs = Date.now();
       if (deploy) {
         deploy.status = "deploying";
         deploy.approvals.push({
@@ -237,8 +242,9 @@ export class DeployAgent implements Agent {
         // Simulate successful deployment
         deploy.status = "deployed";
       }
+      const durationMs = Date.now() - deployStartMs;
       return {
-        text: `[${this.config.id}] Approval ${result.votesReceived}/${result.votesRequired} — quorum met. Deploying${deploy ? ` to ${deploy.environment}` : ""}...\n  Deploy complete.`,
+        text: `[${this.config.id}] Approval ${result.votesReceived}/${result.votesRequired} — quorum met. Deploying${deploy ? ` to ${deploy.environment}` : ""}...\n  Deploy complete (${durationMs}ms).`,
       };
     }
 
@@ -268,16 +274,46 @@ export class DeployAgent implements Agent {
     message: NormalizedMessage,
     intent: ParsedIntent
   ): Promise<ChannelResponse> {
+    const rollbackEnv =
+      (intent.params.environment as "staging" | "production") || "production";
+
+    // Find the most recent deployed entry for this environment to roll back
+    const lastDeploy = [...this.deployHistory]
+      .reverse()
+      .find(
+        (d) => d.environment === rollbackEnv && d.status === "deployed"
+      );
+
+    if (!lastDeploy) {
+      return {
+        text: `[${this.config.id}] No deployed release found for ${rollbackEnv}. Nothing to roll back.`,
+      };
+    }
+
     const requiredApprovals = 2;
-    const rollbackEnv = intent.params.environment || "production";
 
     const approval = this.approvalManager.createRequest({
       type: "rollback",
-      description: `Rollback ${rollbackEnv}`,
+      description: `Rollback ${rollbackEnv} (deploy ${lastDeploy.id})`,
       requestedBy: message.channelUserId,
       requiredApprovals,
       expiresInMs: 3 * 60 * 1000, // 3 minutes for rollback
     });
+
+    // Track rollback in deploy history
+    const rollbackRequest: DeployRequest = {
+      id: `rollback-${Date.now()}`,
+      environment: rollbackEnv,
+      requestedBy: message.channelUserId,
+      requestedAt: new Date(),
+      status: "pending_approval",
+      approvals: [],
+      requiredApprovals,
+      approvalToken: approval.token,
+    };
+
+    this.deployHistory.push(rollbackRequest);
+    this.tokenToDeployId.set(approval.token, rollbackRequest.id);
 
     if (this.storage) {
       await this.storage.appendAudit({
@@ -289,16 +325,88 @@ export class DeployAgent implements Agent {
           agentId: this.config.id,
           project: this.config.projectId || "unknown",
           risk: "critical",
-          detail: `Rollback ${rollbackEnv}. Requires quorum.`,
+          detail: `Rollback ${rollbackEnv} (reverting deploy ${lastDeploy.id}). Requires quorum.`,
           channel: message.channelType,
           environment: rollbackEnv,
+          rollingBackDeployId: lastDeploy.id,
         },
       });
     }
 
     return {
-      text: `[${this.config.id}] Rollback requested.\n  Requires ${requiredApprovals} approvals (quorum).\n  Approve with: @codespar approve ${approval.token}\n  Expires in 3 minutes.`,
+      text: `[${this.config.id}] Rollback requested for ${rollbackEnv} (reverting deploy ${lastDeploy.id}).\n  Requires ${requiredApprovals} approvals (quorum).\n  Approve with: @codespar approve ${approval.token}\n  Expires in 3 minutes.`,
     };
+  }
+
+  /**
+   * Execute a rollback directly (called when approval quorum is met).
+   * Marks the target deploy as rolled_back, tracks in history, and audits.
+   */
+  async executeRollback(
+    environment: "staging" | "production",
+    requestedBy: string
+  ): Promise<ChannelResponse> {
+    const lastDeploy = [...this.deployHistory]
+      .reverse()
+      .find(
+        (d) => d.environment === environment && d.status === "deployed"
+      );
+
+    if (!lastDeploy) {
+      return {
+        text: `[${this.config.id}] No deployed release found for ${environment}. Nothing to roll back.`,
+      };
+    }
+
+    // Mark original deploy as rolled back
+    lastDeploy.status = "rolled_back";
+
+    // Simulate rollback timing
+    const rollbackStartMs = Date.now();
+
+    // Record rollback entry
+    const rollbackEntry: DeployRequest = {
+      id: `rollback-${Date.now()}`,
+      environment,
+      requestedBy,
+      requestedAt: new Date(),
+      status: "deployed",
+      approvals: [],
+      requiredApprovals: 0,
+      approvalToken: "",
+    };
+    this.deployHistory.push(rollbackEntry);
+
+    const durationMs = Date.now() - rollbackStartMs;
+
+    if (this.storage) {
+      await this.storage.appendAudit({
+        actorType: "agent",
+        actorId: this.config.id,
+        action: "rollback.executed",
+        result: "success",
+        metadata: {
+          agentId: this.config.id,
+          project: this.config.projectId || "unknown",
+          risk: "critical",
+          detail: `Rolled back ${environment}. Reverted deploy ${lastDeploy.id}. Duration: ${durationMs}ms.`,
+          environment,
+          rolledBackDeployId: lastDeploy.id,
+          durationMs,
+        },
+      });
+    }
+
+    return {
+      text: `[${this.config.id}] Rollback complete for ${environment}. Reverted deploy ${lastDeploy.id}. Duration: ${durationMs}ms.`,
+    };
+  }
+
+  /**
+   * Return the deploy history for this agent session.
+   */
+  getDeployHistory(): DeployRequest[] {
+    return [...this.deployHistory];
   }
 
   getStatus(): AgentStatus {
