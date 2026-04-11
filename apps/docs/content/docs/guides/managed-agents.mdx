@@ -1,0 +1,156 @@
+---
+title: Use with Claude Managed Agents
+description: Connect CodeSpar MCP servers to Anthropic's Managed Agents for cloud-hosted commerce agents.
+---
+
+# Use with Claude Managed Agents
+
+CodeSpar's MCP servers work with [Claude Managed Agents](https://platform.claude.com/docs/en/managed-agents/overview) — Anthropic's cloud-hosted agent runtime. This guide shows how to connect our servers to a Managed Agent.
+
+## Option 1: stdio (Claude Desktop / Cursor)
+
+The simplest way. Install any server locally:
+
+```bash
+npx @codespar/mcp-stripe-acp
+npx @codespar/mcp-asaas
+npx @codespar/mcp-brasil-api  # no API key needed
+```
+
+Add to Claude Desktop config (`~/.config/claude/claude_desktop_config.json`):
+
+```json
+{
+  "mcpServers": {
+    "stripe-acp": {
+      "command": "npx",
+      "args": ["-y", "@codespar/mcp-stripe-acp"],
+      "env": { "STRIPE_API_KEY": "sk_test_..." }
+    }
+  }
+}
+```
+
+## Option 2: HTTP (Remote / Cloud)
+
+All 37 servers support Streamable HTTP transport. Run any server as an HTTP endpoint:
+
+```bash
+# Local
+npx @codespar/mcp-asaas --http
+
+# Or via environment variable
+MCP_HTTP=true npx @codespar/mcp-asaas
+```
+
+CodeSpar hosts a public BrasilAPI server at:
+
+```
+https://mcp.codespar.dev/mcp     # MCP endpoint
+https://mcp.codespar.dev/health  # Health check
+```
+
+## Option 3: Commerce Kit (Enterprise)
+
+Pre-configured Managed Agents with MCP servers ready to go:
+
+```typescript
+import { CommerceKit } from "@codespar-enterprise/commerce-kit";
+
+const kit = new CommerceKit({
+  apiKey: process.env.ANTHROPIC_API_KEY,
+});
+
+// One line — agent ready with Stripe ACP
+const session = await kit.quickStart({ preset: "checkout" });
+
+// Chat with the agent
+const messages = await kit.sendMessage(
+  session.sessionId,
+  "Show me available products"
+);
+```
+
+### Available presets
+
+| Preset | What it does | MCP servers |
+|--------|-------------|-------------|
+| `checkout` | Retail checkout via Stripe ACP | stripe-acp (16 tools) |
+| `micropayments` | HTTP micropayments via x402 | x402 (10 tools) |
+| `full-commerce` | Complete commerce stack | UCP + ACP + AP2 + x402 (60 tools) |
+| `brazilian` | Brazilian business loop | Asaas + NF + Melhor Envio + Z-API + Omie (99 tools) |
+
+## Option 4: Self-Hosted Runtime
+
+For regulated environments that can't use Anthropic-hosted agents:
+
+```typescript
+import { SelfHostedRuntime } from "@codespar-enterprise/self-hosted-runtime";
+
+const runtime = new SelfHostedRuntime({
+  apiKey: process.env.ANTHROPIC_API_KEY,
+  preset: "brazilian",
+});
+
+await runtime.initialize(); // Discovers tools from MCP servers
+const sessionId = runtime.createSession();
+const messages = await runtime.chat(sessionId, "Cobra R$150 via Pix");
+```
+
+## Adding Payment Governance
+
+Wrap any approach with the Payment Gateway for budget limits, mandate authorization, and audit trails:
+
+```typescript
+import { PaymentGateway } from "@codespar-enterprise/payment-gateway";
+
+const gateway = new PaymentGateway({
+  mandateSecret: process.env.MANDATE_SECRET,
+});
+
+// Add budget rule
+gateway.policy.addRule({
+  id: "daily-limit",
+  name: "Daily budget",
+  agents: ["*"],
+  tools: ["payment.*"],
+  type: "budget",
+  config: { dailyLimit: 500 },
+  enabled: true,
+  priority: 10,
+  description: "$500/day limit",
+});
+
+// Process payment through governance pipeline
+const result = await gateway.processPayment({
+  agentId: "agent-checkout",
+  amount: 49.99,
+  currency: "USD",
+  recipient: "merchant-123",
+  description: "Product purchase",
+});
+
+// result.audit → 5-step trail (policy, mandate, route, execute, record)
+```
+
+## Supported Servers
+
+All 37 `@codespar/mcp-*` packages work with Managed Agents:
+
+**Agentic Protocols:** Stripe ACP, x402, AP2, Google UCP
+
+**Payments:** Asaas, PagSeguro, Zoop, Pagar.me, iugu, Pix BCB, EBANX, EFI, Vindi, Cielo, Stone, Celcoin
+
+**Fiscal:** Nuvem Fiscal, Focus NFe, Conta Azul
+
+**Communication:** Z-API, Evolution API, Zenvia, RD Station, Take Blip
+
+**Logistics:** Melhor Envio, Correios, VTEX
+
+**Banking:** Stark Bank, Open Finance
+
+**Identity:** BrasilAPI (no API key required)
+
+**ERP:** Omie, Bling, Tiny
+
+**Crypto:** Circle, Mercado Bitcoin, Bitso, UnblockPay
