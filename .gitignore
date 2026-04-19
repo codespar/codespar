@@ -3,7 +3,7 @@ dist/
 .turbo/
 *.tsbuildinfo
 .env
-.env.local
+*.local*
 .DS_Store
 .codespar/
 
