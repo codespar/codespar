@@ -8,9 +8,8 @@ import { OSSPolicyHook } from "./oss-policy-hook.js";
  * After registration the registry is sealed so no subsequent call can replace
  * the hook — accidental double-registration throws immediately.
  *
- * In a managed deployment, the enterprise bootstrap calls its own init
- * function instead of this one. The two init functions are mutually exclusive
- * by design: this one is for self-hosted OSS runtimes only.
+ * If you have registered your own PolicyHook before calling this, the sealed
+ * registry will throw. Register only one hook per process.
  */
 export function initOSSPolicies(registry: PluginRegistry): void {
   registry.registerPolicy(new OSSPolicyHook());

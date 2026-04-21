@@ -20,8 +20,7 @@ import { AgentSupervisor } from "@codespar/agent-supervisor";
 import { ProjectAgent } from "@codespar/agent-project";
 import { CoordinatorAgent } from "@codespar/agent-coordinator";
 
-// Register OSS deny-list policy hook before any agent or server code runs.
-// Enterprise deployments skip this call and register their own hook instead.
+// Register the deny-list policy hook before any agent or server code runs.
 initOSSPolicies(pluginRegistry);
 
 const port = parseInt(process.env.PORT || "3000", 10);
