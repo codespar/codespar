@@ -45,6 +45,14 @@ jobs:
       - name: OSS contract tests
         run: npx vitest run packages/core/src/__tests__/contract-oss.test.ts
 
+      # Verify that server/start.mjs actually calls initOSSPolicies before
+      # accepting requests. A missing call would leave the singleton
+      # unregistered in production even if all unit tests pass.
+      - name: Verify OSS policy startup wiring
+        run: |
+          grep -q "initOSSPolicies" server/start.mjs \
+            || (echo "ERROR: server/start.mjs is missing the initOSSPolicies(pluginRegistry) call" && exit 1)
+
   security:
     runs-on: ubuntu-latest
     steps:
