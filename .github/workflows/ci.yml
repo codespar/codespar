@@ -12,12 +12,19 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # Checkout codespar-core adjacent to this repo so the file: dependency
-      # in packages/core resolves to the same relative path used locally.
+      # TODO: replace with a versioned npm dependency once @codespar/types is
+      # published. Until then we check out codespar-core inside the workspace
+      # (actions/checkout requires path to stay within $GITHUB_WORKSPACE) and
+      # symlink it to the sibling position that the file: reference in
+      # packages/core/package.json expects — mirroring the local layout where
+      # codespar-core and codespar are siblings on disk.
       - uses: actions/checkout@v4
         with:
           repository: codespar/codespar-core
-          path: ../codespar-core
+          path: codespar-core
+
+      - name: Symlink codespar-core to sibling position
+        run: ln -s "$GITHUB_WORKSPACE/codespar-core" "$GITHUB_WORKSPACE/../codespar-core"
 
       - uses: actions/setup-node@v4
         with:
