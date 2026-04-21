@@ -1,5 +1,5 @@
 /**
- * OSS startup contract tests.
+ * OSS startup policy contract tests.
  *
  * Verifies that the singleton pluginRegistry is correctly wired after
  * initOSSPolicies is called — the state the server must be in before
