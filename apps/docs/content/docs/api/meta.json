@@ -2,6 +2,7 @@
   "title": "API Reference",
   "pages": [
     "index",
+    "session",
     "agents",
     "a2a",
     "projects",

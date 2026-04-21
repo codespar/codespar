@@ -11,12 +11,39 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      # TODO: replace with a versioned npm dependency once @codespar/types is
+      # published. Until then we check out codespar-core inside the workspace
+      # (actions/checkout requires path to stay within $GITHUB_WORKSPACE) and
+      # symlink it to the sibling position that the file: reference in
+      # packages/core/package.json expects — mirroring the local layout where
+      # codespar-core and codespar are siblings on disk.
+      - uses: actions/checkout@v4
+        with:
+          repository: codespar/codespar-core
+          path: codespar-core
+
+      - name: Symlink codespar-core to sibling position
+        run: ln -s "$GITHUB_WORKSPACE/codespar-core" "$GITHUB_WORKSPACE/../codespar-core"
+
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+
+      # Build @codespar/types so the dist/ directory exists before npm install
+      # creates the symlink inside this workspace's node_modules.
+      - name: Build @codespar/types
+        run: |
+          cd ../codespar-core/packages/types
+          npm install
+          npm run build
+
       - run: npm install
       - run: npx turbo run build
       - run: npx vitest run
+
+      - name: OSS contract tests
+        run: npx vitest run packages/core/src/__tests__/contract-oss.test.ts
 
   security:
     runs-on: ubuntu-latest

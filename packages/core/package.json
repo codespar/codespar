@@ -29,6 +29,7 @@
     "zod": "^3.25.76"
   },
   "devDependencies": {
+    "@codespar/types": "file:../../../codespar-core/packages/types",
     "@types/dockerode": "^3.3.34",
     "@testcontainers/postgresql": "^11.13.0",
     "drizzle-kit": "^0.31.10",
