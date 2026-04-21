@@ -25,15 +25,28 @@ import { createLogger } from "../observability/logger.js";
 
 const log = createLogger("plugin-registry");
 
-class PluginRegistryImpl {
+export class PluginRegistry {
   private policy: PolicyHook | null = null;
   private observability: ObservabilityHook | null = null;
   private secrets: SecretsHook | null = null;
   private integrations: Map<string, IntegrationHook> = new Map();
+  private sealed = false;
 
-  /** Register a policy engine plugin */
+  /** Register a policy engine plugin.
+   *
+   * Throws if the registry is already sealed or if a policy hook has already
+   * been registered. Call seal() after registration to lock the registry
+   * against further overwrites. The hook object is frozen at registration
+   * time to prevent post-registration mutation.
+   */
   registerPolicy(hook: PolicyHook): void {
-    this.policy = hook;
+    if (this.sealed) {
+      throw new Error("Plugin registry is sealed; no further registrations are allowed.");
+    }
+    if (this.policy !== null) {
+      throw new Error("Policy hook already registered. Seal the registry after registration to prevent accidental overwrites.");
+    }
+    this.policy = Object.freeze(hook) as PolicyHook;
     log.info("Policy plugin registered");
   }
 
@@ -53,6 +66,22 @@ class PluginRegistryImpl {
   registerIntegration(hook: IntegrationHook): void {
     this.integrations.set(hook.id, hook);
     log.info("Integration plugin registered", { id: hook.id, name: hook.name });
+  }
+
+  /** Seal the registry against any further policy registrations.
+   *
+   * Call this after all plugins have been registered, before the server
+   * starts accepting requests. Once sealed, any call to registerPolicy
+   * will throw regardless of whether a hook is currently registered.
+   */
+  seal(): void {
+    this.sealed = true;
+    log.info("Plugin registry sealed");
+  }
+
+  /** Returns true if the registry has been sealed. */
+  isSealed(): boolean {
+    return this.sealed;
   }
 
   // ── Policy API ──────────────────────────────────────────────
@@ -115,15 +144,17 @@ class PluginRegistryImpl {
     observability: boolean;
     secrets: boolean;
     integrations: string[];
+    sealed: boolean;
   } {
     return {
       policy: this.policy !== null,
       observability: this.observability !== null,
       secrets: this.secrets !== null,
       integrations: Array.from(this.integrations.keys()),
+      sealed: this.sealed,
     };
   }
 }
 
 /** Singleton plugin registry — import and use from anywhere in the core */
-export const pluginRegistry = new PluginRegistryImpl();
+export const pluginRegistry = new PluginRegistry();

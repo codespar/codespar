@@ -15,10 +15,14 @@
  *   PROJECT_NAME      — Project identifier (default "default")
  */
 
-import { MessageRouter, WebhookServer, FileStorage, createStorage, ApprovalManager, VectorStore, IdentityStore, analyzeDeployFailure, formatSmartAlert, parseIntent, broadcastEvent, DeployHealthMonitor, ChannelRouter, SentryClient, PagerDutyClient, LinearClient } from "@codespar/core";
+import { MessageRouter, WebhookServer, FileStorage, createStorage, ApprovalManager, VectorStore, IdentityStore, analyzeDeployFailure, formatSmartAlert, parseIntent, broadcastEvent, DeployHealthMonitor, ChannelRouter, SentryClient, PagerDutyClient, LinearClient, pluginRegistry, initOSSPolicies } from "@codespar/core";
 import { AgentSupervisor } from "@codespar/agent-supervisor";
 import { ProjectAgent } from "@codespar/agent-project";
 import { CoordinatorAgent } from "@codespar/agent-coordinator";
+
+// Register OSS deny-list policy hook before any agent or server code runs.
+// Enterprise deployments skip this call and register their own hook instead.
+initOSSPolicies(pluginRegistry);
 
 const port = parseInt(process.env.PORT || "3000", 10);
 const projectId = process.env.PROJECT_NAME || "default";

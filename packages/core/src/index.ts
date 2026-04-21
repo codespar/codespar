@@ -154,8 +154,19 @@ export type { RollbackContext, RollbackDecision, RollbackDecisionConfig } from "
 export { scheduler, scheduleBuildStatusReport, scheduleHealthCheck, scheduleAuditCleanup } from "./scheduler/index.js";
 export type { ScheduledTask } from "./scheduler/index.js";
 
-// Plugins (enterprise extension hooks)
-export { pluginRegistry } from "./plugins/index.js";
+// Plugins (enterprise extension hooks + OSS reference implementation)
+export { pluginRegistry, PluginRegistry } from "./plugins/index.js";
+export { OSSPolicyHook } from "./plugins/index.js";
+export { initOSSPolicies } from "./plugins/index.js";
+export {
+  canonicalizeToolName,
+  DENY_LIST_PATTERNS,
+  FUND_TRANSFER_PATTERN,
+  FISCAL_DOCUMENT_PATTERN,
+  WALLET_POLICY_OVERRIDE_PATTERN,
+  BULK_MESSAGING_PATTERN,
+  CROSS_TENANT_A2A_PATTERN,
+} from "./plugins/index.js";
 export type {
   PolicyDecision,
   ToolMetric,
