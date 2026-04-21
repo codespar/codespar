@@ -12,7 +12,14 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { randomUUID } from "node:crypto";
-import type { AgentMemory, AgentStateEntry, AuditEntry, ChannelConfig, NewsletterSubscriber, ProjectConfig, ProjectListEntry, SlackInstallation, StorageProvider } from "./types.js";
+import type { AgentMemory, AgentStateEntry, AuditEntry, ChannelConfig, CreateProjectInput, NewsletterSubscriber, Project, ProjectConfig, ProjectListEntry, SlackInstallation, StorageProvider, UpdateProjectInput } from "./types.js";
+import {
+  validateSlug,
+  validateName,
+  newProjectId,
+  defaultProjectIdForOrg,
+  ProjectError,
+} from "./project-helpers.js";
 import { createLogger } from "../observability/logger.js";
 
 const log = createLogger("storage");
@@ -44,6 +51,11 @@ export class FileStorage implements StorageProvider {
   private readonly slackInstallationsPath: string;
   private readonly agentStatesPath: string;
   private readonly channelConfigsPath: string;
+  /** Separate file for the new 2-level-tenancy `projects` (environments).
+   *  The legacy `projects.json` / `projects-list.json` files belong to
+   *  the pre-pivot project-configs / code-repos data and are kept under
+   *  their original paths for backwards compatibility. */
+  private readonly projectEnvsPath: string;
 
   /**
    * @param baseDir  Root storage directory (default ".codespar")
@@ -62,6 +74,7 @@ export class FileStorage implements StorageProvider {
     this.slackInstallationsPath = path.join(this.dir, "slack-installations.json");
     this.agentStatesPath = path.join(this.dir, "agent-states.json");
     this.channelConfigsPath = path.join(this.dir, "channel-configs.json");
+    this.projectEnvsPath = path.join(this.dir, "project-envs.json");
   }
 
   // ── Agent Memory ───────────────────────────────────────────────
@@ -303,6 +316,107 @@ export class FileStorage implements StorageProvider {
     return configs[channel]?.config ?? null;
   }
 
+  // ── Projects (environments; 2-level tenancy) ──────────────────
+
+  async listProjects(orgId: string): Promise<Project[]> {
+    const all = await this.readProjectEnvsFile();
+    return all
+      .filter((p) => p.orgId === orgId)
+      .sort((a, b) => {
+        if (a.isDefault !== b.isDefault) return a.isDefault ? -1 : 1;
+        return a.createdAt < b.createdAt ? 1 : -1;
+      });
+  }
+
+  async getProject(orgId: string, id: string): Promise<Project | null> {
+    const all = await this.readProjectEnvsFile();
+    return all.find((p) => p.id === id && p.orgId === orgId) ?? null;
+  }
+
+  async getOrCreateDefaultProject(orgId: string): Promise<Project> {
+    const all = await this.readProjectEnvsFile();
+    const existing = all.find((p) => p.orgId === orgId && p.isDefault);
+    if (existing) return existing;
+
+    const id = defaultProjectIdForOrg(orgId);
+    const project: Project = {
+      id,
+      orgId,
+      name: "Default project",
+      slug: "default",
+      isDefault: true,
+      createdAt: new Date().toISOString(),
+    };
+    // Race-safety via re-read + dedupe: idempotent if another caller
+    // created it between our read and write.
+    const fresh = await this.readProjectEnvsFile();
+    const winner = fresh.find((p) => p.orgId === orgId && p.isDefault);
+    if (winner) return winner;
+    fresh.push(project);
+    await this.writeFile(this.projectEnvsPath, fresh);
+    return project;
+  }
+
+  async createProject(input: CreateProjectInput): Promise<Project> {
+    validateName(input.name);
+    validateSlug(input.slug);
+
+    const all = await this.readProjectEnvsFile();
+    if (all.some((p) => p.orgId === input.orgId && p.slug === input.slug)) {
+      throw new ProjectError("slug_conflict", "slug already in use");
+    }
+    const project: Project = {
+      id: newProjectId(),
+      orgId: input.orgId,
+      name: input.name,
+      slug: input.slug,
+      isDefault: input.isDefault ?? false,
+      createdAt: new Date().toISOString(),
+    };
+    all.push(project);
+    await this.writeFile(this.projectEnvsPath, all);
+    return project;
+  }
+
+  async updateProject(
+    orgId: string,
+    id: string,
+    patch: UpdateProjectInput,
+  ): Promise<Project | null> {
+    if (patch.name !== undefined) validateName(patch.name);
+    if (patch.slug !== undefined) validateSlug(patch.slug);
+
+    const all = await this.readProjectEnvsFile();
+    const target = all.find((p) => p.id === id && p.orgId === orgId);
+    if (!target) return null;
+
+    if (patch.slug !== undefined && patch.slug !== target.slug) {
+      if (all.some((p) => p.orgId === orgId && p.slug === patch.slug && p.id !== id)) {
+        throw new ProjectError("slug_conflict", "slug already in use");
+      }
+      target.slug = patch.slug;
+    }
+    if (patch.name !== undefined) target.name = patch.name;
+    if (patch.isDefault === true && !target.isDefault) {
+      // Atomic-ish promotion: clear the previous default first.
+      for (const p of all) {
+        if (p.orgId === orgId && p.isDefault) p.isDefault = false;
+      }
+      target.isDefault = true;
+    }
+    await this.writeFile(this.projectEnvsPath, all);
+    return target;
+  }
+
+  async deleteProject(orgId: string, id: string): Promise<boolean> {
+    const all = await this.readProjectEnvsFile();
+    const idx = all.findIndex((p) => p.id === id && p.orgId === orgId);
+    if (idx === -1) return false;
+    all.splice(idx, 1);
+    await this.writeFile(this.projectEnvsPath, all);
+    return true;
+  }
+
   // ── Internal helpers ───────────────────────────────────────────
 
   private async ensureDir(): Promise<void> {
@@ -358,6 +472,16 @@ export class FileStorage implements StorageProvider {
     try {
       const raw = await fs.readFile(this.agentStatesPath, "utf-8");
       return JSON.parse(raw) as AgentStateEntry[];
+    } catch {
+      return [];
+    }
+  }
+
+  private async readProjectEnvsFile(): Promise<Project[]> {
+    try {
+      const raw = await fs.readFile(this.projectEnvsPath, "utf-8");
+      const parsed = JSON.parse(raw);
+      return Array.isArray(parsed) ? (parsed as Project[]) : [];
     } catch {
       return [];
     }

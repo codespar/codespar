@@ -18,6 +18,7 @@ import {
   agentMemory,
   projectConfigs,
   codeRepos,
+  projects,
   auditLog,
   subscribers,
   slackInstallations,
@@ -33,7 +34,17 @@ import type {
   NewsletterSubscriber,
   SlackInstallation,
   AgentStateEntry,
+  Project,
+  CreateProjectInput,
+  UpdateProjectInput,
 } from "./types.js";
+import {
+  validateSlug,
+  validateName,
+  newProjectId,
+  defaultProjectIdForOrg,
+  ProjectError,
+} from "./project-helpers.js";
 import { createLogger } from "../observability/logger.js";
 
 const log = createLogger("pg-storage");
@@ -407,5 +418,198 @@ export class PgStorage implements StorageProvider {
       .where(eq(channelConfigs.channel, channel))
       .limit(1);
     return rows[0]?.config ?? null;
+  }
+
+  // ── Projects (environments; 2-level tenancy) ──────────────────
+
+  async listProjects(orgId: string): Promise<Project[]> {
+    const rows = await this.db
+      .select()
+      .from(projects)
+      .where(eq(projects.orgId, orgId))
+      .orderBy(desc(projects.isDefault), desc(projects.createdAt));
+    return rows.map((r) => ({
+      id: r.id,
+      orgId: r.orgId,
+      name: r.name,
+      slug: r.slug,
+      isDefault: r.isDefault,
+      createdAt: r.createdAt.toISOString(),
+    }));
+  }
+
+  async getProject(orgId: string, id: string): Promise<Project | null> {
+    const rows = await this.db
+      .select()
+      .from(projects)
+      .where(and(eq(projects.id, id), eq(projects.orgId, orgId)))
+      .limit(1);
+    const r = rows[0];
+    if (!r) return null;
+    return {
+      id: r.id,
+      orgId: r.orgId,
+      name: r.name,
+      slug: r.slug,
+      isDefault: r.isDefault,
+      createdAt: r.createdAt.toISOString(),
+    };
+  }
+
+  /** Mirrors the enterprise `getOrCreateDefaultProjectId` behaviour so
+   *  a fresh org that hits the runtime before any explicit createProject
+   *  call still resolves to a real default project instead of
+   *  exploding with "project_resolution_failed". */
+  async getOrCreateDefaultProject(orgId: string): Promise<Project> {
+    const existing = await this.db
+      .select()
+      .from(projects)
+      .where(and(eq(projects.orgId, orgId), eq(projects.isDefault, true)))
+      .limit(1);
+    if (existing[0]) {
+      const r = existing[0];
+      return {
+        id: r.id,
+        orgId: r.orgId,
+        name: r.name,
+        slug: r.slug,
+        isDefault: r.isDefault,
+        createdAt: r.createdAt.toISOString(),
+      };
+    }
+    const id = defaultProjectIdForOrg(orgId);
+    await this.db
+      .insert(projects)
+      .values({
+        id,
+        orgId,
+        name: "Default project",
+        slug: "default",
+        isDefault: true,
+      })
+      .onConflictDoNothing();
+    // Re-read via the same path so concurrent inserts converge.
+    const created = await this.db
+      .select()
+      .from(projects)
+      .where(and(eq(projects.orgId, orgId), eq(projects.isDefault, true)))
+      .limit(1);
+    const r = created[0];
+    if (!r) {
+      throw new Error("Failed to create default project");
+    }
+    return {
+      id: r.id,
+      orgId: r.orgId,
+      name: r.name,
+      slug: r.slug,
+      isDefault: r.isDefault,
+      createdAt: r.createdAt.toISOString(),
+    };
+  }
+
+  async createProject(input: CreateProjectInput): Promise<Project> {
+    validateName(input.name);
+    validateSlug(input.slug);
+    const id = newProjectId();
+    try {
+      const inserted = await this.db
+        .insert(projects)
+        .values({
+          id,
+          orgId: input.orgId,
+          name: input.name,
+          slug: input.slug,
+          isDefault: input.isDefault ?? false,
+        })
+        .returning();
+      const r = inserted[0]!;
+      return {
+        id: r.id,
+        orgId: r.orgId,
+        name: r.name,
+        slug: r.slug,
+        isDefault: r.isDefault,
+        createdAt: r.createdAt.toISOString(),
+      };
+    } catch (err) {
+      // Postgres SQLSTATE 23505 = unique_violation
+      if (
+        typeof err === "object" &&
+        err !== null &&
+        "code" in err &&
+        (err as { code?: unknown }).code === "23505"
+      ) {
+        throw new ProjectError("slug_conflict", "slug already in use");
+      }
+      throw err;
+    }
+  }
+
+  async updateProject(
+    orgId: string,
+    id: string,
+    patch: UpdateProjectInput,
+  ): Promise<Project | null> {
+    if (patch.name !== undefined) validateName(patch.name);
+    if (patch.slug !== undefined) validateSlug(patch.slug);
+
+    const existing = await this.getProject(orgId, id);
+    if (!existing) return null;
+
+    try {
+      return await this.db.transaction(async (tx) => {
+        // Promotion path: clear the current default first so the
+        // partial unique index never sees two rows with is_default=true
+        // for the same org. No-op when the project is already default.
+        if (patch.isDefault === true && !existing.isDefault) {
+          await tx
+            .update(projects)
+            .set({ isDefault: false })
+            .where(
+              and(
+                eq(projects.orgId, orgId),
+                eq(projects.isDefault, true),
+              ),
+            );
+        }
+        const next: Partial<typeof projects.$inferInsert> = {};
+        if (patch.name !== undefined) next.name = patch.name;
+        if (patch.slug !== undefined) next.slug = patch.slug;
+        if (patch.isDefault === true) next.isDefault = true;
+        const rows = await tx
+          .update(projects)
+          .set(next)
+          .where(and(eq(projects.id, id), eq(projects.orgId, orgId)))
+          .returning();
+        const r = rows[0]!;
+        return {
+          id: r.id,
+          orgId: r.orgId,
+          name: r.name,
+          slug: r.slug,
+          isDefault: r.isDefault,
+          createdAt: r.createdAt.toISOString(),
+        };
+      });
+    } catch (err) {
+      if (
+        typeof err === "object" &&
+        err !== null &&
+        "code" in err &&
+        (err as { code?: unknown }).code === "23505"
+      ) {
+        throw new ProjectError("slug_conflict", "slug already in use");
+      }
+      throw err;
+    }
+  }
+
+  async deleteProject(orgId: string, id: string): Promise<boolean> {
+    const res = await this.db
+      .delete(projects)
+      .where(and(eq(projects.id, id), eq(projects.orgId, orgId)))
+      .returning({ id: projects.id });
+    return res.length > 0;
   }
 }

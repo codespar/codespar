@@ -19,7 +19,7 @@ import type { ContainerPool } from "../../execution/container-pool.js";
 
 /** Route registration helper — registers on both /path and /v1/path */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-export type RouteFn = (method: "get" | "post" | "delete", path: string, handler: any) => void;
+export type RouteFn = (method: "get" | "post" | "delete" | "patch", path: string, handler: any) => void;
 
 /** Shared server context passed to all route modules */
 export interface ServerContext {

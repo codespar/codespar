@@ -33,11 +33,49 @@ export interface ProjectConfig {
   webhookConfigured: boolean;
 }
 
+/**
+ * Legacy shape: a code repository linked to an agent. Lives on the
+ * renamed `code_repos` table post-Layer 1. Kept under this name for
+ * backwards compatibility with existing callers; prefer `CodeRepo`
+ * going forward.
+ */
 export interface ProjectListEntry {
   id: string;
   agentId: string;
   repo: string;
   createdAt: string;
+}
+
+/** Alias for clarity. Same shape as ProjectListEntry. */
+export type CodeRepo = ProjectListEntry;
+
+/**
+ * Project as an environment (dev/staging/prod inside one org).
+ * Mirrors the enterprise shape; id is `prj_<16 hex>` to match the
+ * SDK + dashboard id format end-to-end.
+ */
+export interface Project {
+  id: string;
+  orgId: string;
+  name: string;
+  slug: string;
+  isDefault: boolean;
+  createdAt: string;
+}
+
+/** Input when creating a new project via the storage API. */
+export interface CreateProjectInput {
+  orgId: string;
+  name: string;
+  slug: string;
+  isDefault?: boolean;
+}
+
+/** Patch shape for updating a project. All fields optional. */
+export interface UpdateProjectInput {
+  name?: string;
+  slug?: string;
+  isDefault?: boolean;
 }
 
 export interface NewsletterSubscriber {
@@ -84,10 +122,32 @@ export interface StorageProvider {
   setProjectConfig(agentId: string, config: ProjectConfig): Promise<void>;
   deleteProjectConfig(agentId: string): Promise<void>;
 
-  // Projects list
+  // Code repos (née "projects list" pre-pivot; operates on code_repos
+  // post-Layer 1). Method names stay for backwards compatibility.
   getProjectsList(): Promise<ProjectListEntry[]>;
   addProject(project: Omit<ProjectListEntry, "createdAt">): Promise<void>;
   removeProject(id: string): Promise<void>;
+
+  // Projects (environments; 2-level tenancy)
+  /** List all projects within an org, default first. */
+  listProjects(orgId: string): Promise<Project[]>;
+  /** Fetch a single project by id. Returns null if not in the caller's
+   *  org — callers MUST pass orgId to guard cross-org reads. */
+  getProject(orgId: string, id: string): Promise<Project | null>;
+  /** Get-or-create the org's default project. Self-heals missing rows
+   *  the same way enterprise auth does, so the first read after org
+   *  creation never returns null. */
+  getOrCreateDefaultProject(orgId: string): Promise<Project>;
+  /** Create a new project. Throws a typed error on slug conflict /
+   *  reserved slug (the route handler translates these to 400 bodies). */
+  createProject(input: CreateProjectInput): Promise<Project>;
+  /** Patch an existing project. Promoting to default atomically
+   *  clears the prior default in the same transaction. */
+  updateProject(orgId: string, id: string, patch: UpdateProjectInput): Promise<Project | null>;
+  /** Hard delete. Caller is responsible for the "cannot delete the
+   *  only / default project" checks the enterprise /v1/projects
+   *  route enforces. */
+  deleteProject(orgId: string, id: string): Promise<boolean>;
 
   // Newsletter
   addSubscriber(email: string, source?: string): Promise<NewsletterSubscriber>;

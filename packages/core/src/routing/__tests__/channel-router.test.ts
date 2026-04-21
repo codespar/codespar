@@ -37,6 +37,16 @@ function createMockStorage(): StorageProvider & { _data: Map<string, unknown> } 
     async getChannelConfig() { return null; },
     async appendAudit() { return { id: "", timestamp: new Date(), actorType: "system" as const, actorId: "", action: "", result: "success" as const }; },
     async queryAudit() { return { entries: [], total: 0 }; },
+    async listProjects() { return []; },
+    async getProject() { return null; },
+    async getOrCreateDefaultProject(orgId: string) {
+      return { id: "prj_" + "0".repeat(16), orgId, name: "Default project", slug: "default", isDefault: true, createdAt: new Date().toISOString() };
+    },
+    async createProject(input: { orgId: string; name: string; slug: string; isDefault?: boolean }) {
+      return { id: "prj_" + "0".repeat(16), orgId: input.orgId, name: input.name, slug: input.slug, isDefault: input.isDefault ?? false, createdAt: new Date().toISOString() };
+    },
+    async updateProject() { return null; },
+    async deleteProject() { return false; },
   };
 }
 

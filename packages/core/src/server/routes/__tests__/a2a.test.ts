@@ -40,7 +40,7 @@ function createTestApp() {
     broadcastEvent: () => {},
   } as unknown as ServerContext;
 
-  const route = (method: "get" | "post" | "delete", path: string, handler: any) => {
+  const route = (method: "get" | "post" | "delete" | "patch", path: string, handler: any) => {
     app[method](path, handler);
   };
 

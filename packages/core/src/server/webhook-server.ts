@@ -52,6 +52,7 @@ import { registerA2ARoutes } from "./routes/a2a.js";
 import { registerChannelRoutingRoutes } from "./routes/channel-routing.js";
 import { registerPagerDutyRoutes } from "./routes/pagerduty.js";
 import { registerLinearRoutes } from "./routes/linear.js";
+import { registerProjectRoutes } from "./routes/projects.js";
 import { createEventBus } from "../queue/index.js";
 import type { EventBus, EventBusChannel } from "../queue/event-bus.js";
 import { ContainerPool } from "../execution/container-pool.js";
@@ -512,7 +513,7 @@ export class WebhookServer {
     // This keeps backward compatibility while enabling versioned endpoints.
     // Future breaking changes go in /v2/.
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const route = (method: "get" | "post" | "delete", path: string, handler: any) => {
+    const route = (method: "get" | "post" | "delete" | "patch", path: string, handler: any) => {
       this.app[method](path, handler);
       this.app[method](`/v1${path}`, handler);
     };
@@ -617,6 +618,9 @@ export class WebhookServer {
 
     // ── Agents + Projects (extracted to routes/agents.ts) ──────
     registerAgentRoutes(route, this as unknown as ServerContext);
+
+    // ── Projects (environments; 2-level tenancy) ──────
+    registerProjectRoutes(route, this as unknown as ServerContext);
 
     // ── Channels (extracted to routes/channels.ts) ──────
     registerChannelRoutes(route, this as unknown as ServerContext);
