@@ -158,6 +158,52 @@ codespar/
   tests/                             # Integration tests (Vitest + Testcontainers)
 ```
 
+### `packages/core/src/` layout
+
+| Directory | Contents |
+|-----------|----------|
+| `types/` | `Agent`, `ChannelAdapter`, `NormalizedMessage`, `ParsedIntent` interfaces |
+| `router/` | `MessageRouter`, `intent-parser` (regex + NLU), `nlu-parser` |
+| `agents/` | Plugin registry (`registerAgentType` / `getAgentFactory`) |
+| `auth/` | RBAC (`rbac.ts` — 6 roles, 15 permissions), `IdentityResolver` |
+| `approval/` | `ApprovalManager` (multi-channel quorum voting) |
+| `storage/` | `StorageProvider` interface, `FileStorage`, `PgStorage`, Drizzle schema |
+| `execution/` | `ClaudeBridge` (Anthropic API + GitHub PR creation), `sandbox.ts` |
+| `memory/` | `VectorStore` (TF-IDF, cosine similarity, in-memory; reindex every 50 entries) |
+| `ai/` | `smart-responder.ts`, `smart-alert.ts` |
+| `github/` | `GitHubClient` (REST: files, branches, PRs, webhooks) |
+| `webhooks/` | `github-handler.ts` (push / PR / CI events) |
+| `server/` | `WebhookServer` (Fastify), route modules |
+| `security/` | `PromptGuard` (injection detection, risk scoring) |
+| `scheduler/` | Task scheduler (cron-like) |
+| `observability/` | `createLogger` (JSON/pretty), metrics |
+| `plugins/` | Enterprise extension hooks: `PolicyHook`, `ObservabilityHook`, `SecretsHook`, `IntegrationHook` |
+
+### Key Entry Points
+
+| File | Purpose |
+|------|---------|
+| `packages/channels/cli/src/index.ts` | Main entry point |
+| `packages/core/src/index.ts` | Public API surface of `@codespar/core` |
+| `packages/core/src/types/agent.ts` | `Agent` interface |
+| `packages/core/src/types/channel-adapter.ts` | `ChannelAdapter` interface |
+| `packages/core/src/types/intent.ts` | `IntentType`, `RiskLevel`, `INTENT_RISK` map |
+| `packages/core/src/router/message-router.ts` | Routing: RBAC check + agent dispatch |
+| `packages/core/src/router/intent-parser.ts` | 24 command patterns + NLU fallback |
+| `packages/core/src/router/nlu-parser.ts` | Haiku NLU fallback — returns `{ intent, params, confidence }` |
+| `packages/core/src/storage/types.ts` | `StorageProvider` interface |
+| `packages/core/src/plugins/types.ts` | Enterprise extension hook interfaces |
+| `packages/core/src/auth/identity-store.ts` | Cross-channel identity resolution |
+| `packages/core/src/approval/approval-manager.ts` | Multi-channel quorum voting with expiry |
+| `packages/core/src/security/prompt-guard.ts` | Injection detection with weighted risk scoring |
+| `packages/core/src/ai/smart-alert.ts` | Deploy failure analysis (Vercel, Sentry webhooks) |
+| `packages/core/src/ai/smart-responder.ts` | Open-ended Claude Sonnet responses with rich context |
+| `packages/core/src/scheduler/scheduler.ts` | In-memory recurring task scheduler |
+| `packages/core/src/observability/metrics.ts` | In-memory counters, gauges, histograms |
+| `packages/core/src/server/routes/sessions.ts` | Session API — `POST /sessions`, execute, send (JSON + SSE), connections, DELETE |
+| `packages/agents/project/src/project-agent.ts` | Primary agent — handles all user-facing commands |
+| `packages/agents/supervisor/src/supervisor.ts` | Orchestration — spawn, health, broadcast |
+
 ## Tech Stack
 
 ### Runtime & Framework
@@ -242,6 +288,70 @@ Every channel implements this interface:
 | `sendConfirmation(userId, approval)` | Send approval request |
 | `getCapabilities()` | Return channel features |
 | `healthCheck()` | Verify connection alive |
+
+### Message flow
+`Channel SDK event → ChannelAdapter.onMessage() → NormalizedMessage → MessageRouter → Agent`
+
+### 3-tier intent parsing
+1. Regex (24 patterns)
+2. Claude Haiku NLU (on regex miss) — returns `{ intent, params, confidence }`; validates against `INTENT_RISK` map
+3. Claude Sonnet smart response (open-ended / no intent matched)
+
+### Agent hierarchy
+`AgentSupervisor → MessageRouter → ProjectAgent (persistent) → ephemeral agents (Task / Review / Deploy / Incident / Planning)`
+
+### Multi-project routing
+`MessageRouter` supports an `all` prefix (e.g. `all status`) for cross-project broadcast via `CoordinatorAgent`. Bare project alias is downgraded to `status` intent. Partial project ID matching is supported.
+
+### Graduated autonomy
+`INTENT_RISK` in `packages/core/src/types/intent.ts` maps each intent to a risk level (L0-L5). Notable levels: `deploy` = high, `rollback` = critical, `kill` = critical. Agents only auto-execute within their configured autonomy level.
+
+### `ClaudeBridge` flow
+Claude Haiku picks relevant files → Claude Sonnet generates SEARCH/REPLACE diff → `GitHubClient` creates branch + PR.
+
+### Plugin system
+`pluginRegistry` in `packages/core/src/plugins/` — enterprise packages register hooks at runtime; core never imports them at build time.
+
+### Storage abstraction
+`StorageProvider` is the only surface agents touch. Swap `FileStorage` for `PgStorage` via config; no agent code changes required. Covers: agent memory, project CRUD, newsletter subscriptions, Slack installations, channel configs, audit queries.
+
+### Agent capabilities (key details)
+
+- **TaskAgent**: Falls back to simulation when `ANTHROPIC_API_KEY` is unset. Supports vision context (image URLs) and progress callbacks for SSE streaming.
+- **ReviewAgent**: Classifies risk via 18+ sensitive file regex patterns (`.env`, `auth`, `migration`, `secret`, `token`, `password`, `.lock`, etc.). Auto-approves low-risk PRs at L3+.
+- **DeployAgent**: Quorum thresholds are environment-specific: 1 approval for staging, 2 for production. Deploy lifecycle: `pending → approved → deploying → deployed/failed/rolled_back`.
+- **PlanningAgent**: Decomposes features into 3-8 ordered `PlanStep` items. Plan states: `draft → approved → executing → completed/failed`.
+- **CoordinatorAgent**: Maintains a `ProjectRegistry` (alias → projectId → agentId) and manages `CascadeDeploy` state machines for multi-project sequenced deployments.
+- **IncidentAgent**: Correlates CI failures with recent audit entries and commit metadata. Produces `Investigation` with `error`, `recentChanges`, `suspectedCause`, `suggestedFix`, and `severity`.
+- **LensAgent**: Ephemeral analytics agent supporting PostgreSQL, MySQL, SQLite, BigQuery, Snowflake, and Redshift. Generates SQL via Claude and tracks `LensQuery` history.
+- **AgentSupervisor**: Detects long-running intents (`instruct`, `fix`, `review`, `deploy`, `rollback`) and sends immediate progress feedback before the full response.
+
+### ApprovalManager
+Creates requests with 8-character tokens. Blocks self-approval when quorum > 1. Default expiry: 3 min for rollback, 10 min for deploy/fix. Supports multi-channel quorum (approve on Slack what was requested on WhatsApp).
+
+### IdentityStore
+Maintains unified `UserIdentity` via `channelIndex` reverse-mapping (e.g. `"slack:U123"` → `userId`). Enables cross-channel approval workflows.
+
+### PromptGuard
+10+ weighted regex patterns (e.g. "ignore previous", "you are now", "act as"). Block threshold: `0.7`. Returns risk score before processing any user input.
+
+### SmartAlert
+Claude-powered deploy failure analysis from webhook payloads (Vercel, Sentry, generic CI). Returns structured `{ rootCause, affectedFiles, suggestedFix, severity, confidence }`.
+
+### SmartResponder
+Claude Sonnet service for open-ended queries. Provides agents with rich context: autonomy level, tasks handled, uptime, memory stats, linked channels, recent audit entries, and recent commits. Supports vision (image URLs). Responds in the user's language.
+
+### Scheduler
+In-memory task scheduler: fixed-interval recurring tasks, deduplication by name, graceful cancellation, per-task `runCount` and `errors` tracking.
+
+### Metrics
+In-memory counters, gauges, and histograms (max 1000 observations per histogram). Exposed at `GET /api/metrics`. Rate limiting via in-memory sliding window applied per endpoint in the webhook server.
+
+### GitHub webhook events
+Parses 4 event types: `workflow_run`, `check_run`, `pull_request`, `push`. Maps GitHub conclusions to normalized `CIStatus` (success, failure, in_progress, queued).
+
+### VectorStore
+TF-IDF + cosine similarity, stopword filtering, reindexes vocabulary every 50 entries.
 
 ## Agent Types
 
@@ -446,11 +556,49 @@ Every instruction to Claude Code includes:
 - Agent behavior tests: simulate message → verify response + side effects
 - Channel adapter tests: mock platform SDK, verify NormalizedMessage output
 
+### ESM and TypeScript
+- **ESM only**: all imports must end in `.js`, even when importing `.ts` source files
+- **No `any`**: avoid unless genuinely unavoidable; prefer `unknown` + type guards
+- Tests at `packages/**/src/**/__tests__/**/*.test.ts`; excluded from `tsc` via `tsconfig.base.json`
+- Each package builds via its own `tsc`; `@codespar/core` is the only allowed cross-package dependency
+- PRs that add or change agent or channel behavior must include tests and documentation updates (`apps/docs/`)
+
 ### Error Handling
 - Never swallow errors silently — log and propagate
 - Agent errors: transition to ERROR state, alert admins, attempt auto-restart
 - Channel errors: retry with exponential backoff, fall back to other channels
 - Execution errors: git reset, notify agent, record in audit log
+
+## Build, Test, Run
+
+```bash
+# Install and build
+npm install
+npx turbo run build   # builds all packages
+
+# Test
+npx vitest run        # all packages
+npx vitest run packages/core/src/__tests__/contract-oss.test.ts  # OSS contract test
+
+# Run CLI (falls back to simulation without ANTHROPIC_API_KEY)
+npm start
+
+# Run with Slack channel
+ENABLE_SLACK=true SLACK_BOT_TOKEN=xoxb-... npm run start:server
+
+# Docker
+docker compose -f docker-compose.yml -f docker-compose.slack.yml up
+docker compose -f docker-compose.full.yml up   # all channels
+
+# Database (from packages/core/)
+npm run db:generate && npm run db:migrate && npm run db:studio
+```
+
+**Required env vars:** `ANTHROPIC_API_KEY`, `GITHUB_TOKEN`
+
+**Channel env vars:** `ENABLE_<CHANNEL>=true` plus the channel-specific token(s).
+
+**Optional env vars:** `CODESPAR_WORK_DIR` (override working directory for Claude Code execution context); webhook-specific secrets for Vercel, Sentry, and other CI/CD integrations (see `.env.example`).
 
 ## Docker Compose (Modular)
 
