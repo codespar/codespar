@@ -11,12 +11,32 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      # Checkout codespar-core adjacent to this repo so the file: dependency
+      # in packages/core resolves to the same relative path used locally.
+      - uses: actions/checkout@v4
+        with:
+          repository: codespar/codespar-core
+          path: ../codespar-core
+
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+
+      # Build @codespar/types so the dist/ directory exists before npm install
+      # creates the symlink inside this workspace's node_modules.
+      - name: Build @codespar/types
+        run: |
+          cd ../codespar-core/packages/types
+          npm install
+          npm run build
+
       - run: npm install
       - run: npx turbo run build
       - run: npx vitest run
+
+      - name: OSS contract tests
+        run: npx vitest run packages/core/src/__tests__/contract-oss.test.ts
 
   security:
     runs-on: ubuntu-latest

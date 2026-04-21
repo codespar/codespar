@@ -53,6 +53,7 @@ import { registerChannelRoutingRoutes } from "./routes/channel-routing.js";
 import { registerPagerDutyRoutes } from "./routes/pagerduty.js";
 import { registerLinearRoutes } from "./routes/linear.js";
 import { registerProjectRoutes } from "./routes/projects.js";
+import { registerSessionRoutes } from "./routes/sessions.js";
 import { createEventBus } from "../queue/index.js";
 import type { EventBus, EventBusChannel } from "../queue/event-bus.js";
 import { ContainerPool } from "../execution/container-pool.js";
@@ -682,6 +683,9 @@ export class WebhookServer {
 
     // ── Linear (teams, issues, auto-ticket creation) ──────
     registerLinearRoutes(route, this as unknown as ServerContext);
+
+    // ── Session contract (SessionBase HTTP API) ──────
+    registerSessionRoutes(route);
 
     // ── Webhooks (extracted to routes/webhooks.ts) ──────
     registerWebhookRoutes(route, this as unknown as ServerContext);
