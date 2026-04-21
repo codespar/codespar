@@ -8,9 +8,13 @@
  * without network dependencies.
  *
  * Usage:
- *   npx codespar
- *   # or after build:
- *   node packages/channels/cli/dist/index.js
+ *   npx codespar                                    # default project
+ *   npx codespar --project=prj_abcd1234567890ef     # explicit project
+ *   CODESPAR_PROJECT_ID=prj_... npx codespar        # env var form
+ *
+ * Precedence: `--project=` flag > CODESPAR_PROJECT_ID env > default
+ * project in the REPL's org. Matches the SDK precedence so a dev's
+ * muscle memory carries across surfaces.
  */
 
 import { MessageRouter, FileStorage, ApprovalManager, VectorStore } from "@codespar/core";
@@ -19,12 +23,33 @@ import { ProjectAgent } from "@codespar/agent-project";
 import { CoordinatorAgent } from "@codespar/agent-coordinator";
 import { CLIAdapter } from "./adapter.js";
 
+/** Parse `--project=<id>` from argv. Falls back to CODESPAR_PROJECT_ID.
+ *  Validates against the prj_<16 hex> shape so a typo at the shell
+ *  surfaces immediately instead of later as a 400 from the runtime. */
+function resolveProjectFromArgs(): string | null {
+  const flag = process.argv.find((a) => a.startsWith("--project="));
+  const raw = flag ? flag.slice("--project=".length) : process.env.CODESPAR_PROJECT_ID;
+  if (!raw) return null;
+  if (!/^prj_[a-z0-9]{16}$/.test(raw)) {
+    console.error(
+      `[codespar] invalid --project value: "${raw}". Expected prj_<16 hex chars>.`,
+    );
+    process.exit(1);
+  }
+  return raw;
+}
+
 async function main() {
+  const projectId = resolveProjectFromArgs();
+
   console.log("");
   console.log(
     "  code\x1b[34m<\x1b[0mspar\x1b[34m>\x1b[0m  v0.1.0"
   );
   console.log("  ─────────────────────────────");
+  if (projectId) {
+    console.log(`  Project: ${projectId}`);
+  }
   console.log("");
 
   // 1. Create file-based storage for agent memory and audit
@@ -47,6 +72,11 @@ async function main() {
   const vectorStore = new VectorStore();
 
   // 5. Spawn a Project Agent (L1 Notify) with storage, approval manager, and vector memory
+  // The AgentConfig.projectId field here is the legacy "code repo tag" that
+  // predates the environment-level `projects` table. For the REPL we keep
+  // "local-dev" as the tag and, when a real env project was resolved above,
+  // surface it to operators in the welcome banner so they know which
+  // environment their commands will be scoped to after Layer 3 wiring.
   const agent = new ProjectAgent({
     id: "agent-local",
     type: "project",

@@ -70,6 +70,79 @@ All major endpoints respect `x-org-id`:
 
 ---
 
+## Projects (2-Level Tenancy)
+
+Beyond the organization tier, CodeSpar has a second tier — **projects** — that act as independent environments within a single org. A typical layout is **one org → dev + staging + prod projects**, each with its own API keys, connected accounts, triggers, sessions, and audit trail. Billing stays at the org level.
+
+```
+Org: Acme Corp
+├── Project: dev       (is_default)
+├── Project: staging
+└── Project: prod
+```
+
+### `x-codespar-project` Header
+
+Every `/api` endpoint additionally accepts `x-codespar-project: prj_<16 hex chars>`. When absent, the backend falls back to the org's **default project** (auto-created at first read if needed, so fresh orgs never 500).
+
+```bash
+# Operate inside a specific project
+curl http://localhost:3000/api/agents \
+  -H "x-org-id: org-acme-corp" \
+  -H "x-codespar-project: prj_a1b2c3d4e5f6g7h8"
+
+# Omit the header → default project
+curl http://localhost:3000/api/agents \
+  -H "x-org-id: org-acme-corp"
+```
+
+Invalid format or cross-org ids are rejected uniformly so existence can't be probed cross-tenant.
+
+### Project CRUD
+
+Projects are managed at `/api/projects-env` (the legacy `/api/projects` still serves the pre-pivot "code repo" CRUD; the two endpoints will collapse once callers migrate):
+
+```bash
+# List projects in the caller's org
+curl http://localhost:3000/api/projects-env -H "x-org-id: org-acme-corp"
+
+# Create
+curl -X POST http://localhost:3000/api/projects-env \
+  -H "Content-Type: application/json" \
+  -H "x-org-id: org-acme-corp" \
+  -d '{"name": "Staging", "slug": "staging"}'
+
+# Promote to default (atomic: clears the previous default)
+curl -X PATCH http://localhost:3000/api/projects-env/prj_a1b2c3d4e5f6g7h8 \
+  -H "Content-Type: application/json" \
+  -H "x-org-id: org-acme-corp" \
+  -d '{"is_default": true}'
+
+# Delete (returns 409 when the project is the org's default or the only project)
+curl -X DELETE http://localhost:3000/api/projects-env/prj_staging123 \
+  -H "x-org-id: org-acme-corp"
+```
+
+Error codes surface as JSON `{error: "<code>", message: "..."}`: `slug_conflict`, `slug_reserved`, `slug_invalid`, `name_required`, `cannot_delete_default`, `cannot_delete_last_project`.
+
+### Channel → Project Routing
+
+Inbound messages from WhatsApp / Slack / Telegram / Discord route to a project via the `channel_links` table: an operator binds a specific channel (e.g. `#ops-staging`) to a `(org, project)` pair, and every message arriving on that channel is scoped there. Without a binding, messages fall back to `orgId="default"` + the default project (single-tenant case).
+
+### CLI
+
+The `codespar` REPL accepts a `--project=` flag and a `CODESPAR_PROJECT_ID` env var (flag wins):
+
+```bash
+npx codespar --project=prj_a1b2c3d4e5f6g7h8
+# or
+CODESPAR_PROJECT_ID=prj_a1b2c3d4e5f6g7h8 npx codespar
+```
+
+Both are validated against `prj_<16 hex chars>` before the REPL starts.
+
+---
+
 ## Creating Organizations
 
 ### Via API
