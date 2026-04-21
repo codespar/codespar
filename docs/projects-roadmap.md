@@ -54,10 +54,46 @@ once there are usage signals:
   caller of the legacy code-repos CRUD has moved to a dedicated
   `/api/code-repos` path.
 - **Flip project_id NOT NULL** across the child tables (mirrors
-  enterprise migration 0015). Requires every runtime write path to
-  stamp the id first — today we stamp in the auth layer (via
-  resolveProjectId) and in audit / agent state writers, but not yet
-  in every callsite that inserts into tasks / agent_memory.
+  enterprise migration 0015). NOT a drop-in follow-up — the writer
+  audit (April 2026) surfaced four design questions that each need a
+  decision before the migration can land safely:
+
+  1. **`setMemory` system-level writes.** Channel Router (`system` agent
+     persisting `channel-routes`) and GitHub OAuth token storage call
+     `setMemory` without any project context — they're org-wide or
+     global. Forcing NOT NULL means either inventing a "null-sentinel
+     project" convention, or carving out a permanent "system memory"
+     surface that bypasses project scoping. No decision yet.
+
+  2. **Agent lifecycle doesn't know about projects.** TaskAgent /
+     ReviewAgent / DeployAgent are spawned by the supervisor without
+     being told which env-project they belong to. The config carries
+     the legacy `AgentConfig.projectId` (= code-repo tag), not the
+     environment project id. Stamping requires either passing the
+     env-project through `spawnAgent` or deriving it at runtime from
+     the agent's host project (needs an agentId→env-project lookup).
+
+  3. **Channel configs: per-channel global or per-project?** The
+     `channel_configs` table (Slack workspace creds, etc.) is
+     currently one row per channel name. Adding project scope means
+     deciding whether configs are shared across projects of the same
+     org, or each project gets its own. The answer affects whether
+     enterprise-tier users can run dev + prod Slack workspaces
+     against a single CodeSpar instance.
+
+  4. **Autonomy-set route has no agent context.** `POST /api/agents/
+     :id/autonomy` in `routes/agents.ts` invokes `saveAgentState`
+     with the agentId only. Stamping org + project requires threading
+     both through the route or adding a `getAgentById` lookup that
+     returns metadata. Not hard, but blocked on (2).
+
+  The safe path is: answer (1) and (3) at the product level, fix (4)
+  once the conventions from (1) + (3) are known, then fix (2) as
+  part of a broader agent-lifecycle refactor, then flip NOT NULL.
+  Estimated total: ~1 day of work once decisions exist. No user pain
+  today — the column is populated by auth-layer writers on every
+  request, and the remaining gaps only affect system-level rows
+  that never get read under a project scope.
 - **Agent ↔ project one-to-many**: today agents still use the
   legacy `AgentConfig.projectId` (= code-repo tag). The new
   environment-level project_id coexists without coupling; a future
