@@ -22,6 +22,12 @@ export interface AuditEntry {
   result: "success" | "failure" | "denied" | "pending" | "approved" | "error";
   metadata?: Record<string, unknown>;
   hash?: string;
+  /** 2-level tenancy: org this event belongs to. Null for system-wide
+   *  events (e.g. startup, install). */
+  orgId?: string;
+  /** 2-level tenancy: project this event belongs to. Null for events
+   *  above the project level (org-wide settings, billing). */
+  projectId?: string;
 }
 
 export interface ProjectConfig {
@@ -78,6 +84,20 @@ export interface UpdateProjectInput {
   isDefault?: boolean;
 }
 
+/**
+ * Channel link — binds an inbound channel conversation to a specific
+ * project. `channelType + channelId` is unique globally; `project_id`
+ * is where the message ends up routed.
+ */
+export interface ChannelLink {
+  id: string;
+  channelType: "whatsapp" | "slack" | "telegram" | "discord" | "cli";
+  channelId: string;
+  orgId: string;
+  projectId: string;
+  createdAt: string;
+}
+
 export interface NewsletterSubscriber {
   email: string;
   subscribedAt: string;
@@ -90,6 +110,12 @@ export interface AgentStateEntry {
   state: "active" | "suspended";
   autonomyLevel: number;
   updatedAt: string;
+  /** 2-level tenancy: org this agent belongs to. Null during
+   *  rollout; flipped NOT NULL in a later migration. */
+  orgId?: string;
+  /** 2-level tenancy: project this agent belongs to. Null during
+   *  rollout; flipped NOT NULL in a later migration. */
+  projectId?: string;
 }
 
 export interface ChannelConfig {
@@ -148,6 +174,19 @@ export interface StorageProvider {
    *  only / default project" checks the enterprise /v1/projects
    *  route enforces. */
   deleteProject(orgId: string, id: string): Promise<boolean>;
+
+  // Channel links (inbound routing → project)
+  /** Resolve an inbound channel conversation to its (org, project).
+   *  Returns null when no binding exists; the caller should fall back
+   *  to the org's default project. */
+  getChannelLink(channelType: string, channelId: string): Promise<ChannelLink | null>;
+  /** Upsert a channel → project binding. Replaces any prior binding
+   *  on the same (channelType, channelId). */
+  setChannelLink(link: Omit<ChannelLink, "id" | "createdAt">): Promise<ChannelLink>;
+  /** List every binding for an org, most recent first. */
+  listChannelLinks(orgId: string): Promise<ChannelLink[]>;
+  /** Remove a binding. Returns true when a row was removed. */
+  deleteChannelLink(channelType: string, channelId: string): Promise<boolean>;
 
   // Newsletter
   addSubscriber(email: string, source?: string): Promise<NewsletterSubscriber>;

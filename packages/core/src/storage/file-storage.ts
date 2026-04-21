@@ -12,7 +12,7 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { randomUUID } from "node:crypto";
-import type { AgentMemory, AgentStateEntry, AuditEntry, ChannelConfig, CreateProjectInput, NewsletterSubscriber, Project, ProjectConfig, ProjectListEntry, SlackInstallation, StorageProvider, UpdateProjectInput } from "./types.js";
+import type { AgentMemory, AgentStateEntry, AuditEntry, ChannelConfig, ChannelLink, CreateProjectInput, NewsletterSubscriber, Project, ProjectConfig, ProjectListEntry, SlackInstallation, StorageProvider, UpdateProjectInput } from "./types.js";
 import {
   validateSlug,
   validateName,
@@ -56,6 +56,8 @@ export class FileStorage implements StorageProvider {
    *  the pre-pivot project-configs / code-repos data and are kept under
    *  their original paths for backwards compatibility. */
   private readonly projectEnvsPath: string;
+  /** Channel → project bindings for inbound routing. */
+  private readonly channelLinksPath: string;
 
   /**
    * @param baseDir  Root storage directory (default ".codespar")
@@ -75,6 +77,7 @@ export class FileStorage implements StorageProvider {
     this.agentStatesPath = path.join(this.dir, "agent-states.json");
     this.channelConfigsPath = path.join(this.dir, "channel-configs.json");
     this.projectEnvsPath = path.join(this.dir, "project-envs.json");
+    this.channelLinksPath = path.join(this.dir, "channel-links.json");
   }
 
   // ── Agent Memory ───────────────────────────────────────────────
@@ -417,6 +420,46 @@ export class FileStorage implements StorageProvider {
     return true;
   }
 
+  // ── Channel Links ──────────────────────────────────────────────
+
+  async getChannelLink(channelType: string, channelId: string): Promise<ChannelLink | null> {
+    const all = await this.readChannelLinksFile();
+    return all.find((l) => l.channelType === channelType && l.channelId === channelId) ?? null;
+  }
+
+  async setChannelLink(link: Omit<ChannelLink, "id" | "createdAt">): Promise<ChannelLink> {
+    const all = await this.readChannelLinksFile();
+    const idx = all.findIndex((l) => l.channelType === link.channelType && l.channelId === link.channelId);
+    const full: ChannelLink = {
+      id: idx >= 0 ? all[idx]!.id : randomUUID(),
+      channelType: link.channelType,
+      channelId: link.channelId,
+      orgId: link.orgId,
+      projectId: link.projectId,
+      createdAt: idx >= 0 ? all[idx]!.createdAt : new Date().toISOString(),
+    };
+    if (idx >= 0) all[idx] = full;
+    else all.push(full);
+    await this.writeFile(this.channelLinksPath, all);
+    return full;
+  }
+
+  async listChannelLinks(orgId: string): Promise<ChannelLink[]> {
+    const all = await this.readChannelLinksFile();
+    return all
+      .filter((l) => l.orgId === orgId)
+      .sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
+  }
+
+  async deleteChannelLink(channelType: string, channelId: string): Promise<boolean> {
+    const all = await this.readChannelLinksFile();
+    const idx = all.findIndex((l) => l.channelType === channelType && l.channelId === channelId);
+    if (idx === -1) return false;
+    all.splice(idx, 1);
+    await this.writeFile(this.channelLinksPath, all);
+    return true;
+  }
+
   // ── Internal helpers ───────────────────────────────────────────
 
   private async ensureDir(): Promise<void> {
@@ -482,6 +525,16 @@ export class FileStorage implements StorageProvider {
       const raw = await fs.readFile(this.projectEnvsPath, "utf-8");
       const parsed = JSON.parse(raw);
       return Array.isArray(parsed) ? (parsed as Project[]) : [];
+    } catch {
+      return [];
+    }
+  }
+
+  private async readChannelLinksFile(): Promise<ChannelLink[]> {
+    try {
+      const raw = await fs.readFile(this.channelLinksPath, "utf-8");
+      const parsed = JSON.parse(raw);
+      return Array.isArray(parsed) ? (parsed as ChannelLink[]) : [];
     } catch {
       return [];
     }

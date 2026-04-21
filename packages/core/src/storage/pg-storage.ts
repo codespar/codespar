@@ -19,6 +19,7 @@ import {
   projectConfigs,
   codeRepos,
   projects,
+  channelLinks,
   auditLog,
   subscribers,
   slackInstallations,
@@ -37,6 +38,7 @@ import type {
   Project,
   CreateProjectInput,
   UpdateProjectInput,
+  ChannelLink,
 } from "./types.js";
 import {
   validateSlug,
@@ -191,6 +193,8 @@ export class PgStorage implements StorageProvider {
       result: entry.result,
       metadata: entry.metadata,
       hash: chainHash,
+      orgId: entry.orgId,
+      projectId: entry.projectId,
     });
 
     return { ...entry, id, timestamp: now };
@@ -361,6 +365,8 @@ export class PgStorage implements StorageProvider {
         agentId,
         state: state.state,
         autonomyLevel: state.autonomyLevel,
+        orgId: state.orgId,
+        projectId: state.projectId,
         updatedAt: new Date(),
       })
       .onConflictDoUpdate({
@@ -368,6 +374,8 @@ export class PgStorage implements StorageProvider {
         set: {
           state: state.state,
           autonomyLevel: state.autonomyLevel,
+          orgId: state.orgId,
+          projectId: state.projectId,
           updatedAt: new Date(),
         },
       });
@@ -385,6 +393,8 @@ export class PgStorage implements StorageProvider {
       agentId: r.agentId,
       state: r.state as AgentStateEntry["state"],
       autonomyLevel: r.autonomyLevel,
+      orgId: r.orgId ?? undefined,
+      projectId: r.projectId ?? undefined,
       updatedAt: r.updatedAt.toISOString(),
     };
   }
@@ -395,6 +405,8 @@ export class PgStorage implements StorageProvider {
       agentId: r.agentId,
       state: r.state as AgentStateEntry["state"],
       autonomyLevel: r.autonomyLevel,
+      orgId: r.orgId ?? undefined,
+      projectId: r.projectId ?? undefined,
       updatedAt: r.updatedAt.toISOString(),
     }));
   }
@@ -610,6 +622,93 @@ export class PgStorage implements StorageProvider {
       .delete(projects)
       .where(and(eq(projects.id, id), eq(projects.orgId, orgId)))
       .returning({ id: projects.id });
+    return res.length > 0;
+  }
+
+  // ── Channel Links ──────────────────────────────────────────────
+
+  async getChannelLink(
+    channelType: string,
+    channelId: string,
+  ): Promise<ChannelLink | null> {
+    const rows = await this.db
+      .select()
+      .from(channelLinks)
+      .where(
+        and(
+          eq(channelLinks.channelType, channelType),
+          eq(channelLinks.channelId, channelId),
+        ),
+      )
+      .limit(1);
+    const r = rows[0];
+    if (!r) return null;
+    return {
+      id: r.id,
+      channelType: r.channelType as ChannelLink["channelType"],
+      channelId: r.channelId,
+      orgId: r.orgId,
+      projectId: r.projectId,
+      createdAt: r.createdAt.toISOString(),
+    };
+  }
+
+  async setChannelLink(
+    link: Omit<ChannelLink, "id" | "createdAt">,
+  ): Promise<ChannelLink> {
+    const rows = await this.db
+      .insert(channelLinks)
+      .values({
+        channelType: link.channelType,
+        channelId: link.channelId,
+        orgId: link.orgId,
+        projectId: link.projectId,
+      })
+      .onConflictDoUpdate({
+        target: [channelLinks.channelType, channelLinks.channelId],
+        set: { orgId: link.orgId, projectId: link.projectId },
+      })
+      .returning();
+    const r = rows[0]!;
+    return {
+      id: r.id,
+      channelType: r.channelType as ChannelLink["channelType"],
+      channelId: r.channelId,
+      orgId: r.orgId,
+      projectId: r.projectId,
+      createdAt: r.createdAt.toISOString(),
+    };
+  }
+
+  async listChannelLinks(orgId: string): Promise<ChannelLink[]> {
+    const rows = await this.db
+      .select()
+      .from(channelLinks)
+      .where(eq(channelLinks.orgId, orgId))
+      .orderBy(desc(channelLinks.createdAt));
+    return rows.map((r) => ({
+      id: r.id,
+      channelType: r.channelType as ChannelLink["channelType"],
+      channelId: r.channelId,
+      orgId: r.orgId,
+      projectId: r.projectId,
+      createdAt: r.createdAt.toISOString(),
+    }));
+  }
+
+  async deleteChannelLink(
+    channelType: string,
+    channelId: string,
+  ): Promise<boolean> {
+    const res = await this.db
+      .delete(channelLinks)
+      .where(
+        and(
+          eq(channelLinks.channelType, channelType),
+          eq(channelLinks.channelId, channelId),
+        ),
+      )
+      .returning({ id: channelLinks.id });
     return res.length > 0;
   }
 }

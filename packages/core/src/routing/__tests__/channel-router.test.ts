@@ -47,6 +47,12 @@ function createMockStorage(): StorageProvider & { _data: Map<string, unknown> } 
     },
     async updateProject() { return null; },
     async deleteProject() { return false; },
+    async getChannelLink() { return null; },
+    async setChannelLink(link: { channelType: string; channelId: string; orgId: string; projectId: string }) {
+      return { id: "link-0", channelType: link.channelType as "whatsapp" | "slack" | "telegram" | "discord" | "cli", channelId: link.channelId, orgId: link.orgId, projectId: link.projectId, createdAt: new Date().toISOString() };
+    },
+    async listChannelLinks() { return []; },
+    async deleteChannelLink() { return false; },
   };
 }
 

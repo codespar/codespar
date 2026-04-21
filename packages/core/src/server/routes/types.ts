@@ -24,6 +24,22 @@ export type RouteFn = (method: "get" | "post" | "delete" | "patch", path: string
 /** Shared server context passed to all route modules */
 export interface ServerContext {
   getOrgId(request: { headers: Record<string, string | string[] | undefined> }): string;
+  /**
+   * Resolve the active project id for a request. Order of precedence:
+   *   1. `x-codespar-project` header, validated against `/^prj_[a-z0-9]{16}$/`
+   *      and checked to belong to the caller's org. Invalid format or
+   *      cross-org id → throws (caller translates to 400/401).
+   *   2. The org's default project, creating one on demand if absent
+   *      (self-healing path, same behaviour as enterprise auth).
+   *
+   * Storage calls that are project-scoped should always go through this
+   * resolver rather than reading the header directly, so validation +
+   * ownership checks stay in one place.
+   */
+  resolveProjectId(
+    request: { headers: Record<string, string | string[] | undefined> },
+    orgId: string,
+  ): Promise<string>;
   getOrgStorage(orgId: string): StorageProvider;
   agentSupervisor: AgentStatusProvider | null;
   storageProvider: StorageProvider | null;

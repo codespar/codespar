@@ -286,6 +286,40 @@ export class WebhookServer {
   }
 
   /**
+   * Resolve the active project id for a request. See ServerContext
+   * docstring for the resolution order; mirrors the shape codespar-
+   * enterprise's auth layer uses so the SDK contract is identical.
+   */
+  private async resolveProjectId(
+    request: { headers: Record<string, string | string[] | undefined> },
+    orgId: string,
+  ): Promise<string> {
+    const raw = request.headers["x-codespar-project"];
+    const headerVal = typeof raw === "string" ? raw : Array.isArray(raw) ? raw[0] : undefined;
+
+    if (headerVal) {
+      // Lazy import keeps the dependency one-way (routes → helpers) and
+      // avoids the helper pulling in webhook-server at module load time.
+      const { PROJECT_ID_RE } = await import("../storage/project-helpers.js");
+      if (!PROJECT_ID_RE.test(headerVal)) {
+        throw new Error("invalid_project_header");
+      }
+      const storage = this.getOrgStorage(orgId);
+      const project = await storage.getProject(orgId, headerVal);
+      if (!project) {
+        // Uniform throw — caller distinguishes cross-org from not-
+        // found via the error code translation (404, not 403).
+        throw new Error("project_not_found");
+      }
+      return project.id;
+    }
+
+    const storage = this.getOrgStorage(orgId);
+    const def = await storage.getOrCreateDefaultProject(orgId);
+    return def.id;
+  }
+
+  /**
    * Get a StorageProvider scoped to the given org.
    * Returns the root storage provider for "default" org (backward compatible).
    * Creates org-scoped FileStorage instances for named orgs, cached per orgId.

@@ -9,6 +9,8 @@
  */
 
 import { createHash, randomBytes } from "node:crypto";
+import type { StorageProvider } from "./types.js";
+// StorageProvider is used by resolveInboundChannelTenancy below.
 
 /** Valid slug: lowercase alphanumeric + `_` and `-`, 1..64 chars. */
 export const SLUG_REGEX = /^[a-z0-9_-]+$/;
@@ -67,4 +69,37 @@ export function newProjectId(): string {
  *  default-project backfill so re-running yields the same row. */
 export function defaultProjectIdForOrg(orgId: string): string {
   return "prj_" + createHash("sha256").update(orgId).digest("hex").slice(0, 16);
+}
+
+/**
+ * Resolve the `(orgId, projectId)` for an inbound channel conversation.
+ *
+ * Channel adapters (WhatsApp, Slack, Telegram, Discord, CLI) call this
+ * when a message arrives, passing whatever channel-local identifier
+ * they have for the conversation (Slack channel id, Discord guild id,
+ * Telegram chat id, WhatsApp group id / phone hash, CLI shell id).
+ *
+ * Resolution order:
+ *   1. channel_links binding — explicit `(channelType, channelId) →
+ *      (orgId, projectId)` set by an operator via the dashboard or
+ *      `POST /api/channel-links`.
+ *   2. Fallback: returns `orgId = "default"` + `projectId = null`.
+ *      Callers should lazy-create a default project on first write
+ *      (matching enterprise auth behaviour) rather than forcing every
+ *      inbound message to pay for a DB upsert.
+ *
+ * The returned `orgId` matches the `x-org-id` default the HTTP layer
+ * uses when no header is present — keeping the two resolution paths
+ * consistent for a self-hosted single-tenant install.
+ */
+export async function resolveInboundChannelTenancy(
+  storage: StorageProvider,
+  channelType: string,
+  channelId: string,
+): Promise<{ orgId: string; projectId: string | null }> {
+  const link = await storage.getChannelLink(channelType, channelId);
+  if (link) {
+    return { orgId: link.orgId, projectId: link.projectId };
+  }
+  return { orgId: "default", projectId: null };
 }
