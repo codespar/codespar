@@ -1,11 +1,10 @@
 /**
- * Policy parity contract tests.
+ * OSSPolicyHook — deny-list enforcement tests.
  *
- * These tests verify that the OSS deny-list hook enforces all five
- * non-overridable categories defined in the platform safety contract.
- * Any PolicyHook implementation — OSS or enterprise — must produce the
- * same { allowed: false, requiresApproval: true } result for every
- * tool name that matches these categories.
+ * Verifies that OSSPolicyHook correctly denies the five non-overridable
+ * tool categories, allows everything else, handles canonicalization edge
+ * cases, and that the registry hardening (single-registration, sealing,
+ * Object.freeze) behaves as specified.
  */
 
 import { describe, it, expect, beforeEach } from "vitest";
