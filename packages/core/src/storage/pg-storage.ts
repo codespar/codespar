@@ -17,7 +17,7 @@ import { randomUUID } from "node:crypto";
 import {
   agentMemory,
   projectConfigs,
-  projects,
+  codeRepos,
   auditLog,
   subscribers,
   slackInstallations,
@@ -123,10 +123,14 @@ export class PgStorage implements StorageProvider {
     await this.db.delete(projectConfigs).where(eq(projectConfigs.agentId, agentId));
   }
 
-  // ── Projects List ────────────────────────────────────────────
+  // ── Code Repos List (née "projects") ─────────────────────────
+  // The StorageProvider method names (getProjectsList / addProject /
+  // removeProject) predate the 2-level tenancy model and now operate
+  // on code_repos (the renamed pre-pivot `projects` table). New APIs
+  // for the environment-level `projects` table land in Layer 2.
 
   async getProjectsList(): Promise<ProjectListEntry[]> {
-    const rows = await this.db.select().from(projects).orderBy(desc(projects.createdAt));
+    const rows = await this.db.select().from(codeRepos).orderBy(desc(codeRepos.createdAt));
     return rows.map((r) => ({
       id: r.id,
       agentId: r.agentId,
@@ -137,13 +141,13 @@ export class PgStorage implements StorageProvider {
 
   async addProject(project: Omit<ProjectListEntry, "createdAt">): Promise<void> {
     await this.db
-      .insert(projects)
+      .insert(codeRepos)
       .values({ id: project.id, agentId: project.agentId, repo: project.repo })
       .onConflictDoNothing();
   }
 
   async removeProject(id: string): Promise<void> {
-    await this.db.delete(projects).where(eq(projects.id, id));
+    await this.db.delete(codeRepos).where(eq(codeRepos.id, id));
   }
 
   // ── Audit Log ──────────────────────────────────────────────────

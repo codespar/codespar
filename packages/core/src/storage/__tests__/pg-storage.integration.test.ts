@@ -55,7 +55,7 @@ describeIf("PgStorage (integration)", () => {
         linked_by TEXT NOT NULL,
         webhook_configured BOOLEAN NOT NULL DEFAULT FALSE
       );
-      CREATE TABLE IF NOT EXISTS projects (
+      CREATE TABLE IF NOT EXISTS code_repos (
         id TEXT PRIMARY KEY,
         agent_id TEXT NOT NULL,
         repo TEXT NOT NULL,
