@@ -261,6 +261,16 @@ describe("PluginRegistry hardening", () => {
     expect(status.policy).toBe(true);
     expect(status.sealed).toBe(true);
   });
+
+  it("registered hook is frozen — property assignment throws TypeError in strict mode", () => {
+    const hook = new OSSPolicyHook();
+    registry.registerPolicy(hook);
+    // Object.freeze is applied to the hook at registration time. In strict
+    // mode (ESM always runs strict), writing to a frozen object throws.
+    expect(() => {
+      (hook as unknown as Record<string, unknown>).evaluate = () => ({ allowed: true });
+    }).toThrow(TypeError);
+  });
 });
 
 // ── initOSSPolicies ──────────────────────────────────────────────────────────
