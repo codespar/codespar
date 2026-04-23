@@ -15,6 +15,13 @@
       "when": 1775776540139,
       "tag": "0001_lyrical_bromley",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1776733584000,
+      "tag": "0002_projects",
+      "breakpoints": true
     }
   ]
 }
