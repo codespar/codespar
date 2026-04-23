@@ -156,15 +156,6 @@ export type { ScheduledTask } from "./scheduler/index.js";
 
 // Plugins (enterprise extension hooks)
 export { pluginRegistry, PluginRegistry } from "./plugins/index.js";
-export {
-  canonicalizeToolName,
-  DENY_LIST_PATTERNS,
-  FUND_TRANSFER_PATTERN,
-  FISCAL_DOCUMENT_PATTERN,
-  WALLET_POLICY_OVERRIDE_PATTERN,
-  BULK_MESSAGING_PATTERN,
-  CROSS_TENANT_A2A_PATTERN,
-} from "./plugins/index.js";
 export type {
   PolicyDecision,
   ToolMetric,
