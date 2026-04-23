@@ -154,10 +154,8 @@ export type { RollbackContext, RollbackDecision, RollbackDecisionConfig } from "
 export { scheduler, scheduleBuildStatusReport, scheduleHealthCheck, scheduleAuditCleanup } from "./scheduler/index.js";
 export type { ScheduledTask } from "./scheduler/index.js";
 
-// Plugins (enterprise extension hooks + OSS reference implementation)
+// Plugins (enterprise extension hooks)
 export { pluginRegistry, PluginRegistry } from "./plugins/index.js";
-export { OSSPolicyHook } from "./plugins/index.js";
-export { initOSSPolicies } from "./plugins/index.js";
 export {
   canonicalizeToolName,
   DENY_LIST_PATTERNS,

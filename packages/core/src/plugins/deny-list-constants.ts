@@ -37,9 +37,7 @@ export function canonicalizeToolName(toolName: string): string {
  * Category 1 — Fund transfers above cap.
  *
  * Covers Pix, wire transfers, wallet payouts, and generic payment-send
- * actions. When estimatedCost is undefined on a matching tool name the hook
- * also denies (see OSSPolicyHook), because the amount cannot be verified
- * against the configured cap.
+ * actions.
  */
 export const FUND_TRANSFER_PATTERN =
   /^(pix|fund|payment|wire|remit|payout|transfer):(send|transfer|execute|process|initiate|pay|funds)(:[a-z0-9]+)*$/;

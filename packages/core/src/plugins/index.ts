@@ -9,8 +9,6 @@ export type {
 } from "./types.js";
 
 export { PluginRegistry, pluginRegistry } from "./registry.js";
-export { OSSPolicyHook } from "./oss-policy-hook.js";
-export { initOSSPolicies } from "./oss-init.js";
 export {
   canonicalizeToolName,
   DENY_LIST_PATTERNS,
