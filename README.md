@@ -63,7 +63,7 @@ docker compose up          # Postgres + Redis + core
 docker compose -f docker-compose.yml -f docker-compose.whatsapp.yml up   # + WhatsApp
 ```
 
-Docs: https://docs.codespar.dev
+Docs: [docs.codespar.dev](https://docs.codespar.dev) (served from [`codespar-web`](https://github.com/codespar/codespar-web), not this repo).
 
 ## What's in the box
 

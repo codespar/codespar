@@ -3,13 +3,12 @@
   "private": true,
   "packageManager": "npm@11.8.0",
   "workspaces": [
-    "apps/*",
     "packages/*",
     "packages/agents/*",
     "packages/channels/*"
   ],
   "scripts": {
-    "build": "turbo run build --filter='!@codespar/docs'",
+    "build": "turbo run build",
     "dev": "turbo run dev",
     "lint": "turbo run lint",
     "test": "turbo run test",

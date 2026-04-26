@@ -83,8 +83,9 @@ When these surfaces land in OSS, the dependency arrow stays the same — enterpr
 - **Vitest + Testcontainers** — tests with real PostgreSQL + Redis
 - **Biome** — linting + formatting
 
-### Docs Site
-- **Fumadocs** — at `apps/docs/` (Next.js + MDX)
+### Docs site
+
+User-facing docs live in [`codespar-web`](https://github.com/codespar/codespar-web) (Fumadocs at `content/docs/`) and are deployed at [docs.codespar.dev](https://docs.codespar.dev). This repo does not ship a docs site of its own.
 
 ## Project Structure
 
@@ -109,8 +110,6 @@ codespar-opensource/
     channels/
       whatsapp/                      # @codespar/channel-whatsapp (Evolution API)
       cli/                           # @codespar/channel-cli (terminal REPL)
-  apps/
-    docs/                            # Fumadocs documentation site
   server/
     start.mjs                        # Production entry point
   tests/                             # Integration tests
