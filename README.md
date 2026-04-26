@@ -87,16 +87,47 @@ Docs: https://docs.codespar.dev
 
 | Channel | Status |
 |---------|--------|
-| WhatsApp (Evolution API v2.3.7) | ✅ Working |
-| Slack (Socket Mode, app_mention + DMs) | ✅ Working |
-| Telegram (grammy) | ✅ Working |
-| Discord (discord.js) | ✅ Working |
+| WhatsApp (Evolution API v2.3.7) | ✅ Working — primary channel for Brazilian commerce |
+| HTTP / Web chat (streaming SSE) | ✅ Working |
 | CLI REPL (stdin/stdout) | ✅ Working |
-| Web chat (streaming SSE) | ✅ Working |
+| Slack / Telegram / Discord | Legacy adapters present — see Legacy Surfaces below |
 | Email / Voice / SMS | Planned |
 
 Channels are composable capabilities — no single channel is a
 prerequisite. An agent that speaks only HTTP is a first-class citizen.
+WhatsApp is the deepest integration because Brazilian commerce
+concentrates there (~78% of businesses, 6× web-e-commerce conversion).
+
+## What's not in OSS yet
+
+The OSS runtime is functionally complete for self-hosting an agent that
+transacts on LATAM rails — but the following surfaces live only in
+[`codespar-enterprise`](https://github.com/codespar/codespar-enterprise) today
+and are on the OSS roadmap:
+
+- **MCP server catalog API** (`/v1/servers`). Enterprise has 109 servers
+  in a Postgres-backed catalog with category × country metadata. In OSS,
+  providers are registered manually via SDK config.
+- **Connections vault** (`/v1/connections`, `/v1/auth-configs`).
+  Enterprise has an AES-256-GCM vault with per-tenant scrypt-derived
+  keys for storing provider credentials. In OSS, credentials live in
+  environment variables.
+- **Programmable wallet + policy engine + commerce-specific
+  observability + fiscal-compliance certifications.** All managed-tier
+  capabilities; the wallet/policy engine is design-only as of 2026-04
+  (engineering not yet started).
+
+The five-point MIT commitment in VISION binds every shipped feature to
+land in this repo MIT-first. The dependency arrow stays enterprise → MIT.
+
+## Legacy Surfaces
+
+This repo originated as a coding-agent platform; the thesis pivoted to
+LATAM commerce in April 2026. Some pre-pivot surfaces still ship in the
+tree (Slack/Telegram/Discord adapters, coding-agent types, `@mention`
+intent parser). They are not part of the post-pivot product surface and
+are scheduled for removal as the catalog/connections OSS work lands.
+Don't extend them.
 
 ## Managed tier
 

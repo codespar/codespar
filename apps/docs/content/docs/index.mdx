@@ -1,128 +1,88 @@
 ---
 title: Introduction
-description: CodeSpar is an open source, multi-agent platform that deploys autonomous AI coding agents to WhatsApp, Slack, Telegram, Discord, and CLI.
+description: CodeSpar is an MIT-licensed self-hostable agent runtime for commerce AI agents in Latin America — Pix, NF-e, WhatsApp Business, and the LATAM PSP / fiscal stack.
 ---
+
+import { Callout } from "fumadocs-ui/components/callout";
 
 # Introduction
 
-**Autonomous agents for every project. Deployed where your team works.**
+<Callout type="warn">
+**Documentation migration in progress (April 2026).** CodeSpar's thesis pivoted to LATAM commerce-agent infrastructure. This site still contains pages from the previous coding-agent product; pages under `/docs/agents/`, `/docs/commands/`, `/docs/dashboard/`, and most `/docs/getting-started/*` are pre-pivot and being rewritten. The authoritative current thesis is in [VISION-codespar.md](https://github.com/codespar/codespar-web/blob/main/docs/visions/VISION-codespar.md). Treat anything not described on this page as "may not match shipped behavior."
+</Callout>
 
-CodeSpar is an open source, multi-agent platform that deploys autonomous AI coding agents directly into the messaging channels your team already uses — WhatsApp, Slack, Telegram, Discord, and CLI. Each project gets its own persistent agent that monitors builds, investigates failures, proposes fixes, and orchestrates deploys, all via `@mention` commands.
+**MIT-licensed self-hostable runtime for commerce AI agents in Latin America.**
 
-## Key Features
+CodeSpar is the open-source implementation of the [`@codespar/api-types`](https://www.npmjs.com/package/@codespar/api-types) session contract. Agents written against [`@codespar/sdk`](https://www.npmjs.com/package/@codespar/sdk) (TypeScript) or [`codespar`](https://pypi.org/project/codespar/) (Python) run unchanged against this self-hosted runtime or against the managed tier at `api.codespar.dev` — `baseUrl` is a configuration change, not a rewrite.
 
-- **Eight specialized agent types** — purpose-built agents for project management, task execution, code review, deployment, incident response, cross-project coordination, sprint planning, and codebase analysis
-- **Five messaging channels** — WhatsApp, Slack, Telegram, Discord, and CLI, all with the same `@mention` interface
-- **Graduated autonomy (L0–L5)** — fine-grained control over how much independence your agents have, from passive (L0) to fully autonomous (L5)
-- **Security-first architecture** — 10 defense layers including sandboxed Docker execution, secrets isolation, audit logging, and human approval gates for sensitive operations
-- **Open source (MIT License)** — full transparency, community contributions, self-host anywhere
+The runtime is channel-agnostic and vertical-agnostic in its core abstractions. The **shipped application is LATAM commerce**: agents that transact on Pix, issue NF-e, ship via Melhor Envio, and notify on WhatsApp Business — without rebuilding the plumbing every team.
 
-## How It Works
+## What ships in this repo
 
-### 1. You talk to your agent in any channel
+- **Session API** (`POST /v1/sessions`, `execute`, `send`, `connections`, `DELETE`) — the OSS implementation of the codespar session contract. Fastify, Postgres, Redis.
+- **Projects API** (`/v1/projects` CRUD) — 2-level tenancy (Org → Project) mirroring the enterprise contract. Slug rules, default-project enforcement, atomic promotion.
+- **WhatsApp channel adapter** via Evolution API. WhatsApp is the deepest channel because Brazilian commerce concentrates there (~78% of businesses, 6× web-e-commerce conversion).
+- **Plugin hooks** — `PolicyHook`, `ObservabilityHook`, `SecretsHook`, `IntegrationHook`. The integration surface for the managed tier and any third party.
+- **Storage** — `StorageProvider` with `FileStorage` (single-tenant) and `PgStorage` (PostgreSQL via Drizzle) implementations. Audit log is a per-tenant append-only hash chain.
 
-Just `@mention` your agent in Slack, WhatsApp, Discord, or Telegram — same syntax everywhere:
+## What's not in OSS yet
 
-```
-@codespar instruct add a health check endpoint at /api/health
-```
+The runtime is functionally complete for self-hosting an agent that transacts on LATAM rails — but the following surfaces live only in [`codespar-enterprise`](https://github.com/codespar/codespar-enterprise) and are on the OSS roadmap:
 
-### 2. The Dev Agent reads your code and creates a PR
+- **MCP server catalog API** (`/v1/servers`). Enterprise has 109 servers in a Postgres-backed catalog with category × country metadata. In OSS, providers are registered manually via SDK config.
+- **Connections vault** (`/v1/connections`, `/v1/auth-configs`). Enterprise has an AES-256-GCM vault with per-tenant scrypt-derived keys. In OSS, credentials live in environment variables.
+- **Programmable wallet + policy engine + commerce-specific observability + fiscal-compliance certifications.** All managed-tier capabilities. The wallet/policy engine is design-only as of 2026-04 (engineering not yet started).
 
-The agent reads your actual codebase via the GitHub API, sends the relevant files to Claude, and creates a pull request with the changes:
+## Five-point MIT commitment
 
-```
-[agent-default] Task completed: task-1773970
-  Instruction: add a health check endpoint at /api/health
-  Duration: 12.3s
+The MIT layer stays MIT forever. From [VISION §Premise 1a](https://github.com/codespar/codespar-web/blob/main/docs/visions/VISION-codespar.md):
 
-  Changes applied to 1 file(s):
-    - app/api/health/route.ts
+1. Every MCP server already published is MIT forever.
+2. Every future MCP server will be MIT — not BSL, SSPL, AGPL, GPL, or "source-available."
+3. `@codespar/sdk` stays MIT.
+4. No usage-based restrictions on OSS components — no rate limits, no feature gates, no telemetry that restricts functionality.
+5. Copyleft is never used as a competitive weapon.
 
-  PR #1 created: https://github.com/your-org/your-repo/pull/1
-```
+If codespar ceased to exist tomorrow, agent code built on this runtime does not break.
 
-### 3. The Review Agent analyzes the PR
+## Quick start
 
-Automatically (or on demand), the Review Agent fetches the PR diff, classifies risk, and posts a detailed code review:
-
-```
-@codespar review PR #1
-```
-
-### 4. Your team approves from any channel
-
-A developer approves from WhatsApp what was requested in Slack. Cross-channel, token-based approval with quorum:
-
-```
-@codespar approve dp-abc123
+```bash
+git clone https://github.com/codespar/codespar
+cd codespar
+docker compose up   # Postgres + Redis + runtime
 ```
 
-### 5. Everything is audited
+Point the SDK at it:
 
-Every action — from commands to approvals to deployments — is logged in an immutable, hash-chained audit trail.
+```ts
+import { CodeSpar } from "@codespar/sdk";
 
----
+const cs = new CodeSpar({
+  baseUrl: "http://localhost:3000",
+  apiKey: process.env.CODESPAR_API_KEY,
+});
 
-### Architecture
-
-Under the hood, CodeSpar follows a persistent + ephemeral agent architecture:
-
-```
-┌─────────────────────────────────────────────────┐
-│                  Coordinator                     │
-│           (cross-project orchestration)          │
-└──────────────────────┬──────────────────────────┘
-                       │
-        ┌──────────────┼──────────────┐
-        ▼              ▼              ▼
-┌──────────────┐┌──────────────┐┌──────────────┐
-│Project Agent ││Project Agent ││Project Agent │
-│  (repo-a)    ││  (repo-b)    ││  (repo-c)    │
-└──────┬───────┘└──────┬───────┘└──────────────┘
-       │               │
-       ▼               ▼
-  ┌─────────┐    ┌─────────┐
-  │Dev/Task │    │ Review  │
-  │  Agent  │    │  Agent  │
-  └─────────┘    └─────────┘
-  (ephemeral)    (ephemeral)
+const session = await cs.create("user_123");
 ```
 
-- **Project Agent** (persistent) — your team's always-on interface. Monitors CI/CD, handles `@mention` commands, spawns ephemeral agents.
-- **Dev Agent** (ephemeral) — reads your codebase via GitHub API, sends context to Claude, creates branches and PRs with real code changes. [Learn more](/docs/agents/dev-agent)
-- **Review Agent** (ephemeral) — fetches PR diffs, classifies risk (low/medium/high), auto-approves low-risk at L3+. [Learn more](/docs/agents/review-agent)
-- **Deploy Agent** (ephemeral) — approval workflows with quorum, cross-channel voting, staging and production. [Learn more](/docs/agents/deploy-agent)
-- **Incident Agent** (ephemeral) — investigates build failures, correlates with recent changes, proposes fixes. [Learn more](/docs/agents/incident-agent)
-- **Coordinator** (persistent) — cross-project orchestration, cascading deploys, status aggregation. [Learn more](/docs/agents/coordinator-agent)
+The same code, with `baseUrl` removed (or set to `https://api.codespar.dev`), runs against the managed tier — which adds the catalog, vault, and governance surfaces listed above.
 
-The agent also understands natural language in any language. Ask in Portuguese, Spanish, or English — it uses Claude Haiku for intent classification and Claude Sonnet for open-ended questions. [Learn more](/docs/commands/natural-language)
+## Tech stack
 
-## Autonomy Levels
+- **Node.js 22** + **TypeScript 5.4** (strict)
+- **Fastify 5** + **Postgres 16** (Drizzle ORM) + **Redis 7**
+- **Evolution API** for WhatsApp
+- **Vitest + Testcontainers** for tests against real Postgres/Redis
+- **Biome** for linting + formatting
 
-CodeSpar uses a graduated autonomy model so you control exactly how much independence your agents have:
+## Next steps
 
-| Level | Name | Behavior |
-|-------|------|----------|
-| **L0** | Passive | Only responds when directly addressed |
-| **L1** | Notify | Monitors and alerts, never auto-executes (default) |
-| **L2** | Suggest | Proposes actions proactively, requires human approval |
-| **L3** | Auto-Low | Auto-executes low-risk actions (formatting, linting), notifies after |
-| **L4** | Auto-Med | Auto-executes medium-risk actions (bug fixes, PR reviews) |
-| **L5** | Full Auto | Fully autonomous within policy bounds |
+- [Quickstart](/docs/getting-started/quickstart) — running locally in under 5 minutes
+- [Installation](/docs/getting-started/installation) — production deployment options
+- [VISION](https://github.com/codespar/codespar-web/blob/main/docs/visions/VISION-codespar.md) — the full strategic thesis (lives in `codespar-web`)
+- [`mcp-dev-latam`](https://github.com/codespar/mcp-dev-latam) — the LATAM MCP catalog (109 servers, MIT)
 
-**Safety guardrail:** Regardless of autonomy level, agents never auto-execute production deployments, data migrations, security-sensitive changes, or infrastructure modifications. These always require explicit human approval.
+## Legacy surfaces
 
-## Tech Stack
-
-CodeSpar is built with:
-
-- **TypeScript** — end to end, strict mode
-- **Fastify** — high-performance HTTP server
-- **Turborepo** — monorepo with 13 packages
-- **Docker** — sandboxed agent execution
-- **MIT License** — use it, fork it, contribute to it
-
-## Next Steps
-
-Ready to get started? Head to the [Quickstart](/docs/getting-started/quickstart) guide to have CodeSpar running in under 5 minutes, or read the full [Installation](/docs/getting-started/installation) guide for production deployment options.
+This repo originated as a coding-agent platform; the thesis pivoted to LATAM commerce in April 2026. Pre-pivot surfaces (Slack/Telegram/Discord adapters, coding-agent types, `@mention` intent parser, `/docs/agents/*`, `/docs/commands/*`, `/docs/dashboard/*`) still ship in the tree but are not part of the post-pivot product surface. They are scheduled for removal as the catalog/connections OSS work lands.
