@@ -208,3 +208,22 @@ export type {
 export { createEventBus, createTaskQueue } from "./queue/index.js";
 export type { EventBus, EventBusChannel, EventBusMessage, EventBusHandler } from "./queue/event-bus.js";
 export type { TaskQueue, QueuedTask } from "./queue/task-queue.js";
+
+// Mandate primitive (F2.M1.3 OSS reference impl).
+// Wire-compatible with @codespar-enterprise/mandate; closes the I-3
+// self-host parity gap so the meta-tools surface (F3.M2) can verify
+// mandates against a self-hosted backend without depending on the
+// managed tier.
+export {
+  MandateGenerator,
+  InMemoryMandateBackend,
+  FileMandateBackend,
+  LocalRevocationDenylist,
+} from "./mandate/index.js";
+export type {
+  Mandate,
+  MandateBackend,
+  CreateParams as MandateCreateParams,
+  FileMandateBackendConfig,
+  LocalDenylistConfig,
+} from "./mandate/index.js";
