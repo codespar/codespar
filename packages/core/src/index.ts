@@ -209,6 +209,11 @@ export { createEventBus, createTaskQueue } from "./queue/index.js";
 export type { EventBus, EventBusChannel, EventBusMessage, EventBusHandler } from "./queue/event-bus.js";
 export type { TaskQueue, QueuedTask } from "./queue/task-queue.js";
 
+// MCP bridge (OSS) — types + registry. Process manager + dispatch hook
+// land in T-03/T-04/T-05; this export is the type surface seed.
+export type { McpServerSpec, ToolResult, McpErrorCode } from "./mcp/index.js";
+export { MCP_ERROR_CODES, McpServerRegistry } from "./mcp/index.js";
+
 // Mandate primitive (F2.M1.3 OSS reference impl).
 // Wire-compatible with @codespar-enterprise/mandate; closes the I-3
 // self-host parity gap so the meta-tools surface (F3.M2) can verify

@@ -1,0 +1,14 @@
+{
+  "asaas": {
+    "command": ["npx", "@codespar/mcp-asaas"],
+    "transport": "stdio"
+  },
+  "nuvem-fiscal": {
+    "command": ["npx", "@codespar/mcp-nuvem-fiscal"],
+    "transport": "stdio"
+  },
+  "z-api": {
+    "command": ["npx", "@codespar/mcp-z-api"],
+    "transport": "stdio"
+  }
+}

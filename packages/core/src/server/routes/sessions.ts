@@ -22,6 +22,7 @@ import { randomUUID, createHash, timingSafeEqual } from "node:crypto";
 import type { RouteFn } from "./types.js";
 import { generateSmartResponse, type AgentContext } from "../../ai/smart-responder.js";
 import { getAllAgentMetadata } from "../../agents/agent-registry.js";
+import { mcpBridge } from "../../mcp/index.js";
 
 interface SessionEntry {
   id: string;
@@ -156,6 +157,30 @@ export function registerSessionRoutes(route: RouteFn): void {
       return reply.status(400).send({ error: "tool field is required" });
     }
 
+    // MCP dispatch — `prefix/tool` names route to a spawned MCP server
+    // when the prefix is registered on this session. Split on the first
+    // `/` only so tool paths like `nuvem-fiscal/foo/bar` resolve to
+    // server="nuvem-fiscal", tool="foo/bar". Unknown prefixes return the
+    // existing `Tool not registered` shape (HTTP 200), not 403.
+    if (toolName.includes("/")) {
+      const slashIdx = toolName.indexOf("/");
+      const serverId = toolName.slice(0, slashIdx);
+      const subTool = toolName.slice(slashIdx + 1);
+      if (serverId && subTool && session.servers.includes(serverId)) {
+        return mcpBridge.call(id, serverId, subTool, body?.input ?? {});
+      }
+      return {
+        success: false,
+        data: {},
+        error: `Tool not registered: ${toolName}`,
+        duration: 0,
+        server: "oss-runtime",
+        tool: toolName,
+        tool_call_id: `${id}-${randomUUID().slice(0, 8)}`,
+        called_at: new Date().toISOString(),
+      };
+    }
+
     if (BUILT_IN_TOOLS.has(toolName)) {
       return executeBuiltIn(toolName, id);
     }
@@ -250,7 +275,10 @@ export function registerSessionRoutes(route: RouteFn): void {
     return { servers };
   });
 
-  // DELETE /sessions/:id — close session and release resources
+  // DELETE /sessions/:id — close session and release resources.
+  // Awaits the MCP bridge tearing down child processes before replying
+  // so callers can rely on lifecycle being tied to the session: when
+  // the 204 lands, every child for this session is gone.
   route("delete", "/sessions/:id", async (request: any, reply: any) => {
     if (!checkBearerAuth(request)) {
       return reply.status(401).send({ error: "Missing or invalid Bearer token" });
@@ -260,6 +288,17 @@ export function registerSessionRoutes(route: RouteFn): void {
     const session = sessions.get(id);
     if (!session) {
       return reply.status(404).send({ error: "Session not found" });
+    }
+
+    try {
+      await mcpBridge.closeSession(id);
+    } catch (err) {
+      // Lifecycle bug — surface as 500 so callers don't silently lose
+      // the close-session signal. The in-memory session is still marked
+      // closed for audit purposes.
+      session.status = "closed";
+      const message = err instanceof Error ? err.message : String(err);
+      return reply.status(500).send({ error: `mcp.close_failed: ${message}` });
     }
 
     session.status = "closed";

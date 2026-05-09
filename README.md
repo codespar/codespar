@@ -65,6 +65,26 @@ docker compose -f docker-compose.yml -f docker-compose.whatsapp.yml up   # + Wha
 
 Docs: [docs.codespar.dev](https://docs.codespar.dev) (served from [`codespar-web`](https://github.com/codespar/codespar-web), not this repo).
 
+## MCP bridge (demo / integration)
+
+The runtime ships with a thin MCP bridge so that `POST /sessions/:id/execute`
+routes tool calls whose name contains a `/` (e.g. `asaas/charge`) to a
+spawned stdio MCP server process, instead of returning `Tool not registered`.
+Server entries live in `mcp-servers.json` at the repo root, each carrying
+the spawn command verbatim.
+
+The same code path serves OSS demos, CI integration, and self-hosted
+production. To run the canonical integration check end-to-end:
+
+```bash
+MCP_DEMO=true npm run start:server &     # in another shell
+MCP_DEMO=true bash scripts/validate-bridge.sh
+```
+
+`MCP_DEMO` is set on the runtime parent process and inherited by child
+MCP servers via the bridge's env passthrough. The bridge source itself
+does not read `MCP_DEMO` — there is no demo-mode branch in code.
+
 ## What's in the box
 
 - **Runtime**: agent supervisor, message router, task queue, vector
