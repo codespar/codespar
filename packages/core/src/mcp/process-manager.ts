@@ -91,7 +91,7 @@ export class McpProcessManager {
     serverId: string,
     tool: string,
     input: unknown,
-    opts?: { timeoutMs?: number },
+    opts?: { timeoutMs?: number; specOverride?: McpServerSpec },
   ): Promise<ToolResult> {
     const startedAt = Date.now();
     const tool_call_id = `${sessionId}-${randomUUID().slice(0, 8)}`;
@@ -103,7 +103,11 @@ export class McpProcessManager {
       called_at,
     };
 
-    const spec = this.#registry.resolve(serverId);
+    // Inline session-scoped spec wins over the registry. Lets callers
+    // (typically sessions.ts when the session was created with
+    // `server_specs`) bypass the config-file path entirely without the
+    // bridge needing a second resolution surface.
+    const spec = opts?.specOverride ?? this.#registry.resolve(serverId);
     if (!spec) {
       return buildFailure(baseFields, MCP_ERROR_CODES.unknown_server, startedAt);
     }

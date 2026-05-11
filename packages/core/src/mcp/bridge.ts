@@ -8,6 +8,7 @@
 
 import { McpProcessManager } from "./process-manager.js";
 import { McpServerRegistry } from "./registry.js";
+import type { McpServerSpec } from "./types.js";
 
 let bridgeInstance: McpProcessManager | null = null;
 let knownSessions = new Set<string>();
@@ -32,7 +33,7 @@ export const mcpBridge = {
     serverId: string,
     tool: string,
     input: unknown,
-    opts?: { timeoutMs?: number },
+    opts?: { timeoutMs?: number; specOverride?: McpServerSpec },
   ): ReturnType<McpProcessManager["call"]> {
     knownSessions.add(sessionId);
     return getBridge().call(sessionId, serverId, tool, input, opts);

@@ -1,11 +1,19 @@
 /**
  * MCP server registry — resolves server IDs to spawn specs.
  *
- * Loads `mcp-servers.json` from `process.cwd()` on first call, caches the
- * parsed map, and answers `resolve(serverId)` from cache thereafter. The
- * file path is intentionally not part of the public API: a future
+ * Looks up the config file in this order: `CODESPAR_MCP_SERVERS_PATH` if
+ * the env var is set, otherwise `process.cwd()/mcp-servers.json`. If
+ * neither exists or parses cleanly, the registry stays empty and
+ * `resolve` returns `null` for every id — callers see the existing
+ * `Tool not registered` shape and the runtime does not crash.
+ *
+ * The file path is intentionally not part of the public API: a future
  * catalog-backed implementation must be drop-in via the same `resolve`
  * signature, with no other public fields or methods.
+ *
+ * For session-scoped inline specs (no shared config file), callers pass
+ * the spec to `mcpBridge.call(...)` via `opts.specOverride` and bypass
+ * the registry entirely. See `sessions.ts` for the dispatch wiring.
  */
 
 import { readFileSync } from "node:fs";
@@ -45,7 +53,11 @@ export class McpServerRegistry {
 
   static #load(): Map<string, McpServerSpec> {
     const map = new Map<string, McpServerSpec>();
-    const path = join(process.cwd(), "mcp-servers.json");
+    const override = process.env.CODESPAR_MCP_SERVERS_PATH;
+    const path =
+      override && override.length > 0
+        ? override
+        : join(process.cwd(), "mcp-servers.json");
     let raw: string;
     try {
       raw = readFileSync(path, "utf8");
