@@ -65,6 +65,69 @@ docker compose -f docker-compose.yml -f docker-compose.whatsapp.yml up   # + Wha
 
 Docs: [docs.codespar.dev](https://docs.codespar.dev) (served from [`codespar-web`](https://github.com/codespar/codespar-web), not this repo).
 
+## MCP bridge
+
+`POST /sessions/:id/execute` routes tool calls whose name contains a `/`
+(e.g. `asaas/charge`) to a spawned stdio MCP server process, instead of
+returning `Tool not registered`. The spawn command for a given prefix
+comes from one of three configuration surfaces, checked in this order:
+
+1. **Inline session specs (preferred for SDK callers).** Pass
+   `server_specs` in the `POST /sessions` body — a map from server id
+   to `{ command, env?, transport: "stdio" }`. The session is self-
+   contained; no file on disk, no env var. The session ids get added to
+   `servers` automatically so the prefix validation passes.
+
+   ```bash
+   curl -X POST http://localhost:3000/sessions \
+     -H "Authorization: Bearer $TOKEN" \
+     -H "Content-Type: application/json" \
+     -d '{
+       "user_id": "u",
+       "server_specs": {
+         "asaas": { "command": ["npx", "@codespar/mcp-asaas"], "transport": "stdio" }
+       }
+     }'
+   ```
+
+2. **`CODESPAR_MCP_SERVERS_PATH` env var.** Point the runtime at a
+   config file anywhere on disk; useful when the process runs under
+   systemd or in a container with a fixed `WorkingDirectory`.
+
+   ```bash
+   CODESPAR_MCP_SERVERS_PATH=/etc/codespar/mcp-servers.json npm run start:server
+   ```
+
+3. **`mcp-servers.json` in the runtime's working directory.** Fallback
+   for ad-hoc local runs. Copy [`examples/mcp-servers.json`](./examples/mcp-servers.json)
+   to your project root and edit; the file is not tracked by this repo,
+   so updates are yours to manage.
+
+If none of the three are set, the registry is empty and every
+`prefix/tool` call returns `Tool not registered`. The runtime does not
+crash and built-in tools (`codespar_list_tools`) keep working.
+
+### Integration check
+
+The canonical end-to-end check is `scripts/validate-bridge.sh`. It
+creates a session, calls one tool, deletes the session, and fails if the
+response contains `Tool not registered`. It assumes at least one
+`@codespar/mcp-*` package is installable via `npx` on the runtime host.
+
+```bash
+# Option A — env-var override (no copy)
+CODESPAR_MCP_SERVERS_PATH=examples/mcp-servers.json npm run start:server &
+bash scripts/validate-bridge.sh
+
+# Option B — copy the template to cwd
+cp examples/mcp-servers.json ./mcp-servers.json
+npm run start:server &
+bash scripts/validate-bridge.sh
+```
+
+The bridge source itself has no env-var branching — every code path
+serves OSS demos, CI integration, and production identically.
+
 ## What's in the box
 
 - **Runtime**: agent supervisor, message router, task queue, vector

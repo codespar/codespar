@@ -22,13 +22,56 @@ import { randomUUID, createHash, timingSafeEqual } from "node:crypto";
 import type { RouteFn } from "./types.js";
 import { generateSmartResponse, type AgentContext } from "../../ai/smart-responder.js";
 import { getAllAgentMetadata } from "../../agents/agent-registry.js";
+import { mcpBridge } from "../../mcp/index.js";
+import type { McpServerSpec } from "../../mcp/index.js";
 
 interface SessionEntry {
   id: string;
   status: "active" | "closed" | "error";
   servers: string[];
+  // Optional inline specs supplied at session creation. When present,
+  // dispatch passes the spec to the bridge as `specOverride` and skips
+  // the registry — letting callers configure MCP servers per session
+  // without a shared `mcp-servers.json` file.
+  serverSpecs?: Record<string, McpServerSpec>;
   userId: string;
   createdAt: Date;
+}
+
+function parseServerSpecs(
+  raw: unknown,
+): { ok: true; specs: Record<string, McpServerSpec> | undefined } | { ok: false; error: string } {
+  if (raw === undefined || raw === null) return { ok: true, specs: undefined };
+  if (typeof raw !== "object" || Array.isArray(raw)) {
+    return { ok: false, error: "server_specs must be an object keyed by server id" };
+  }
+  const out: Record<string, McpServerSpec> = {};
+  for (const [id, value] of Object.entries(raw as Record<string, unknown>)) {
+    if (!value || typeof value !== "object") {
+      return { ok: false, error: `server_specs.${id} must be an object` };
+    }
+    const v = value as { command?: unknown; env?: unknown; transport?: unknown };
+    if (!Array.isArray(v.command) || v.command.length === 0 || !v.command.every((p) => typeof p === "string")) {
+      return { ok: false, error: `server_specs.${id}.command must be a non-empty string array` };
+    }
+    if (v.transport !== "stdio") {
+      return { ok: false, error: `server_specs.${id}.transport must be "stdio"` };
+    }
+    const spec: McpServerSpec = { command: v.command as string[], transport: "stdio" };
+    if (v.env !== undefined) {
+      if (!v.env || typeof v.env !== "object" || Array.isArray(v.env)) {
+        return { ok: false, error: `server_specs.${id}.env must be a string map` };
+      }
+      for (const ev of Object.values(v.env as Record<string, unknown>)) {
+        if (typeof ev !== "string") {
+          return { ok: false, error: `server_specs.${id}.env values must be strings` };
+        }
+      }
+      spec.env = v.env as Record<string, string>;
+    }
+    out[id] = spec;
+  }
+  return { ok: true, specs: out };
 }
 
 // In-memory store — scoped to process lifetime; CI creates a fresh process
@@ -124,12 +167,30 @@ export function registerSessionRoutes(route: RouteFn): void {
       return reply.status(401).send({ error: "Missing or invalid Bearer token" });
     }
 
-    const body = request.body as { servers?: string[]; user_id?: string } | undefined;
+    const body = request.body as {
+      servers?: string[];
+      server_specs?: unknown;
+      user_id?: string;
+    } | undefined;
+
+    const parsed = parseServerSpecs(body?.server_specs);
+    if (!parsed.ok) {
+      return reply.status(400).send({ error: parsed.error });
+    }
+
+    const declared = Array.isArray(body?.servers) ? body.servers : [];
+    // If the caller provided inline specs without listing the ids in
+    // `servers`, add them — the prefix-validation list must include
+    // every server the session expects to dispatch to.
+    const inlineIds = parsed.specs ? Object.keys(parsed.specs) : [];
+    const merged = Array.from(new Set([...declared, ...inlineIds]));
+
     const id = randomUUID();
     sessions.set(id, {
       id,
       status: "active",
-      servers: Array.isArray(body?.servers) ? body.servers : [],
+      servers: merged,
+      serverSpecs: parsed.specs,
       userId: typeof body?.user_id === "string" ? body.user_id : "anonymous",
       createdAt: new Date(),
     });
@@ -154,6 +215,33 @@ export function registerSessionRoutes(route: RouteFn): void {
 
     if (!toolName) {
       return reply.status(400).send({ error: "tool field is required" });
+    }
+
+    // MCP dispatch — `prefix/tool` names route to a spawned MCP server
+    // when the prefix is registered on this session. Split on the first
+    // `/` only so tool paths like `nuvem-fiscal/foo/bar` resolve to
+    // server="nuvem-fiscal", tool="foo/bar". Unknown prefixes return the
+    // existing `Tool not registered` shape (HTTP 200), not 403.
+    if (toolName.includes("/")) {
+      const slashIdx = toolName.indexOf("/");
+      const serverId = toolName.slice(0, slashIdx);
+      const subTool = toolName.slice(slashIdx + 1);
+      if (serverId && subTool && session.servers.includes(serverId)) {
+        const specOverride = session.serverSpecs?.[serverId];
+        return mcpBridge.call(id, serverId, subTool, body?.input ?? {}, {
+          specOverride,
+        });
+      }
+      return {
+        success: false,
+        data: {},
+        error: `Tool not registered: ${toolName}`,
+        duration: 0,
+        server: "oss-runtime",
+        tool: toolName,
+        tool_call_id: `${id}-${randomUUID().slice(0, 8)}`,
+        called_at: new Date().toISOString(),
+      };
     }
 
     if (BUILT_IN_TOOLS.has(toolName)) {
@@ -250,7 +338,10 @@ export function registerSessionRoutes(route: RouteFn): void {
     return { servers };
   });
 
-  // DELETE /sessions/:id — close session and release resources
+  // DELETE /sessions/:id — close session and release resources.
+  // Awaits the MCP bridge tearing down child processes before replying
+  // so callers can rely on lifecycle being tied to the session: when
+  // the 204 lands, every child for this session is gone.
   route("delete", "/sessions/:id", async (request: any, reply: any) => {
     if (!checkBearerAuth(request)) {
       return reply.status(401).send({ error: "Missing or invalid Bearer token" });
@@ -260,6 +351,17 @@ export function registerSessionRoutes(route: RouteFn): void {
     const session = sessions.get(id);
     if (!session) {
       return reply.status(404).send({ error: "Session not found" });
+    }
+
+    try {
+      await mcpBridge.closeSession(id);
+    } catch (err) {
+      // Lifecycle bug — surface as 500 so callers don't silently lose
+      // the close-session signal. The in-memory session is still marked
+      // closed for audit purposes.
+      session.status = "closed";
+      const message = err instanceof Error ? err.message : String(err);
+      return reply.status(500).send({ error: `mcp.close_failed: ${message}` });
     }
 
     session.status = "closed";
