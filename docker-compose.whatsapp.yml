@@ -5,6 +5,10 @@ services:
       - "8084:8084"
     environment:
       AUTHENTICATION_API_KEY: ${EVOLUTION_API_KEY:-codespar_dev_key}
+      # Shared with `core` so signed callbacks verify on both sides
+      # (F10.M3 / #364). Defaults to the API key for local dev; set
+      # EVOLUTION_WEBHOOK_SECRET in production.
+      WEBHOOK_GLOBAL_URL_SECRET: ${EVOLUTION_WEBHOOK_SECRET:-codespar_dev_key}
     volumes:
       - evolution_data:/evolution/instances
     healthcheck:
@@ -20,6 +24,12 @@ services:
       EVOLUTION_API_KEY: ${EVOLUTION_API_KEY:-codespar_dev_key}
       EVOLUTION_INSTANCE: codespar
       WHATSAPP_WEBHOOK_PORT: "3001"
+      # Evolution API reaches the runtime over the compose network using the
+      # service name, not host.docker.internal (F10.M1.B / #363).
+      WHATSAPP_WEBHOOK_HOST: core
+      # Webhook signature secret + strict-mode (F10.M3 / #364).
+      EVOLUTION_WEBHOOK_SECRET: ${EVOLUTION_WEBHOOK_SECRET:-codespar_dev_key}
+      WHATSAPP_WEBHOOK_STRICT_MODE: ${WHATSAPP_WEBHOOK_STRICT_MODE:-false}
     depends_on:
       evolution-api:
         condition: service_healthy

@@ -125,6 +125,30 @@ export interface ChannelConfig {
   configuredBy: string;
 }
 
+/**
+ * Durable session bound to a (project, channelType, channelUserId)
+ * triple. Created by the channel → session bridge (F10.M2) or by the
+ * HTTP `/sessions` route. `status === 'closed'` rows are retained for
+ * audit but don't compete for the active-lookup slot.
+ */
+export interface Session {
+  id: string;
+  orgId: string;
+  projectId: string;
+  channelType: string;
+  channelUserId: string;
+  instanceId?: string;
+  status: "active" | "closed" | "error";
+  createdAt: string;
+  updatedAt: string;
+  metadata: Record<string, unknown>;
+}
+
+/** Input shape for inserting / updating a session row. */
+export type SessionInput =
+  & Omit<Session, "id" | "createdAt" | "updatedAt">
+  & Partial<Pick<Session, "id" | "createdAt">>;
+
 export interface SlackInstallation {
   teamId: string;
   teamName: string;
@@ -187,6 +211,27 @@ export interface StorageProvider {
   listChannelLinks(orgId: string): Promise<ChannelLink[]>;
   /** Remove a binding. Returns true when a row was removed. */
   deleteChannelLink(channelType: string, channelId: string): Promise<boolean>;
+
+  // Sessions (durable channel/HTTP-bridge sessions)
+  /** Fetch a session by id. Returns null when no row exists. */
+  getSession(id: string): Promise<Session | null>;
+  /** Resolve the active session for the (project, channelType, channelUserId)
+   *  tuple. Returns null when no active row exists (closed rows are ignored). */
+  findSessionByChannelUser(
+    projectId: string,
+    channelType: string,
+    channelUserId: string,
+  ): Promise<Session | null>;
+  /** Insert or update a session row. `id` is generated when not provided.
+   *  Bumps `updatedAt` on every call. */
+  setSession(session: SessionInput): Promise<Session>;
+  /** Mark `status = 'closed'`. Returns true when a row transitioned. */
+  closeSession(id: string): Promise<boolean>;
+  /** Close every active session whose `updatedAt` is strictly older than
+   *  `olderThanIso`. Returns the count of rows transitioned. Used by the
+   *  F10.M4 lazy-TTL helper and by tests; not wired in the OSS bridge
+   *  path (lazy close runs on lookup instead). */
+  closeStaleSessions(olderThanIso: string): Promise<number>;
 
   // Newsletter
   addSubscriber(email: string, source?: string): Promise<NewsletterSubscriber>;

@@ -54,11 +54,34 @@ export type {
   NewsletterSubscriber,
   ProjectConfig,
   ProjectListEntry,
+  Session,
+  SessionInput,
   SlackInstallation,
   StorageProvider,
 } from "./storage/index.js";
 
 export { FileStorage } from "./storage/index.js";
+
+// Sessions (F10.M2 — shared between HTTP /sessions route and channel bridges)
+export {
+  DEFAULT_SESSION_IDLE_TTL_DAYS,
+  HTTP_CHANNEL_TYPE,
+  clearSessionStore,
+  closeSessionById,
+  closeStaleSessions,
+  createSessionForHttp,
+  findOrCreateSession,
+  getSessionById,
+  readIdleTtlDays,
+  sendInboundMessage,
+  ttlCutoffIso,
+} from "./sessions/index.js";
+export type {
+  SendResult as SessionSendResult,
+  CreateHttpSessionInput,
+  FindOrCreateOptions,
+  FindOrCreateSessionInput,
+} from "./sessions/index.js";
 
 // Router
 export { MessageRouter } from "./router/message-router.js";

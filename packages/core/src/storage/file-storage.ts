@@ -12,7 +12,7 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { randomUUID } from "node:crypto";
-import type { AgentMemory, AgentStateEntry, AuditEntry, ChannelConfig, ChannelLink, CreateProjectInput, NewsletterSubscriber, Project, ProjectConfig, ProjectListEntry, SlackInstallation, StorageProvider, UpdateProjectInput } from "./types.js";
+import type { AgentMemory, AgentStateEntry, AuditEntry, ChannelConfig, ChannelLink, CreateProjectInput, NewsletterSubscriber, Project, ProjectConfig, ProjectListEntry, Session, SessionInput, SlackInstallation, StorageProvider, UpdateProjectInput } from "./types.js";
 import {
   validateSlug,
   validateName,
@@ -58,6 +58,8 @@ export class FileStorage implements StorageProvider {
   private readonly projectEnvsPath: string;
   /** Channel → project bindings for inbound routing. */
   private readonly channelLinksPath: string;
+  /** Durable channel/HTTP-bridge sessions (F10.M2). */
+  private readonly sessionsPath: string;
 
   /**
    * @param baseDir  Root storage directory (default ".codespar")
@@ -78,6 +80,7 @@ export class FileStorage implements StorageProvider {
     this.channelConfigsPath = path.join(this.dir, "channel-configs.json");
     this.projectEnvsPath = path.join(this.dir, "project-envs.json");
     this.channelLinksPath = path.join(this.dir, "channel-links.json");
+    this.sessionsPath = path.join(this.dir, "sessions.json");
   }
 
   // ── Agent Memory ───────────────────────────────────────────────
@@ -460,6 +463,81 @@ export class FileStorage implements StorageProvider {
     return true;
   }
 
+  // ── Sessions (F10.M2) ──────────────────────────────────────────
+
+  async getSession(id: string): Promise<Session | null> {
+    const all = await this.readSessionsFile();
+    return all.find((s) => s.id === id) ?? null;
+  }
+
+  async findSessionByChannelUser(
+    projectId: string,
+    channelType: string,
+    channelUserId: string,
+  ): Promise<Session | null> {
+    const all = await this.readSessionsFile();
+    return (
+      all.find(
+        (s) =>
+          s.projectId === projectId &&
+          s.channelType === channelType &&
+          s.channelUserId === channelUserId &&
+          s.status === "active",
+      ) ?? null
+    );
+  }
+
+  async setSession(session: SessionInput): Promise<Session> {
+    const all = await this.readSessionsFile();
+    const nowIso = new Date().toISOString();
+    const id = session.id ?? randomUUID();
+    const idx = all.findIndex((s) => s.id === id);
+    const prior = idx >= 0 ? all[idx]! : null;
+    const full: Session = {
+      id,
+      orgId: session.orgId,
+      projectId: session.projectId,
+      channelType: session.channelType,
+      channelUserId: session.channelUserId,
+      status: session.status,
+      createdAt: prior?.createdAt ?? session.createdAt ?? nowIso,
+      updatedAt: nowIso,
+      metadata: session.metadata ?? {},
+      ...(session.instanceId !== undefined ? { instanceId: session.instanceId } : prior?.instanceId !== undefined ? { instanceId: prior.instanceId } : {}),
+    };
+    if (idx >= 0) all[idx] = full;
+    else all.push(full);
+    await this.writeFile(this.sessionsPath, all);
+    return full;
+  }
+
+  async closeSession(id: string): Promise<boolean> {
+    const all = await this.readSessionsFile();
+    const idx = all.findIndex((s) => s.id === id);
+    if (idx === -1) return false;
+    const target = all[idx]!;
+    if (target.status === "closed") return false;
+    target.status = "closed";
+    target.updatedAt = new Date().toISOString();
+    await this.writeFile(this.sessionsPath, all);
+    return true;
+  }
+
+  async closeStaleSessions(olderThanIso: string): Promise<number> {
+    const all = await this.readSessionsFile();
+    const nowIso = new Date().toISOString();
+    let closed = 0;
+    for (const s of all) {
+      if (s.status === "active" && s.updatedAt < olderThanIso) {
+        s.status = "closed";
+        s.updatedAt = nowIso;
+        closed++;
+      }
+    }
+    if (closed > 0) await this.writeFile(this.sessionsPath, all);
+    return closed;
+  }
+
   // ── Internal helpers ───────────────────────────────────────────
 
   private async ensureDir(): Promise<void> {
@@ -535,6 +613,16 @@ export class FileStorage implements StorageProvider {
       const raw = await fs.readFile(this.channelLinksPath, "utf-8");
       const parsed = JSON.parse(raw);
       return Array.isArray(parsed) ? (parsed as ChannelLink[]) : [];
+    } catch {
+      return [];
+    }
+  }
+
+  private async readSessionsFile(): Promise<Session[]> {
+    try {
+      const raw = await fs.readFile(this.sessionsPath, "utf-8");
+      const parsed = JSON.parse(raw);
+      return Array.isArray(parsed) ? (parsed as Session[]) : [];
     } catch {
       return [];
     }

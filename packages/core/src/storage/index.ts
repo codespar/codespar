@@ -3,9 +3,13 @@ export type {
   AgentStateEntry,
   AuditEntry,
   ChannelConfig,
+  ChannelLink,
   NewsletterSubscriber,
+  Project,
   ProjectConfig,
   ProjectListEntry,
+  Session,
+  SessionInput,
   SlackInstallation,
   StorageProvider,
 } from "./types.js";
