@@ -260,4 +260,24 @@ describe("McpProcessManager", () => {
     expect(result.error).toBe(MCP_ERROR_CODES.unknown_server);
     expect(manager.getActiveProcessCount()).toBe(0);
   });
+
+  it("[T-03.M] canonical MCP envelope from child is parsed end-to-end", async () => {
+    // Drives the fixture into the standard MCP envelope shape that every
+    // `@codespar/mcp-*` server emits, proving the bridge's translator
+    // handles the real-world payload — not just the legacy bespoke shape
+    // the in-tree fixture used pre-fix.
+    manager = new McpProcessManager({
+      registry: makeRegistry({
+        echo: { args: ["--envelope", "canonical"] },
+      }),
+    });
+    try {
+      const result = await manager.call("s1", "echo", "tools/echo", { y: 42 });
+      expect(result.success).toBe(true);
+      expect(result.error).toBe("");
+      expect((result.data as { echo: unknown }).echo).toEqual({ y: 42 });
+    } finally {
+      await manager.closeSession("s1");
+    }
+  });
 });

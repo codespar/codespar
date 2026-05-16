@@ -17,6 +17,7 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { createLogger } from "../observability/logger.js";
+import { translateMcpResult } from "./result-translator.js";
 import { MCP_ERROR_CODES, type McpServerSpec, type ToolResult } from "./types.js";
 
 const log = createLogger("mcp-bridge");
@@ -356,15 +357,14 @@ export class McpProcessManager {
       return;
     }
 
-    const result = (obj.result ?? {}) as Partial<ToolResult> & {
-      success?: boolean;
-      data?: unknown;
-      error?: string;
-    };
+    const translated = translateMcpResult(obj.result, {
+      serverId: handle.serverId,
+      sessionId: handle.sessionId,
+    });
     entry.resolve({
-      success: result.success ?? true,
-      data: result.data ?? null,
-      error: result.error ?? "",
+      success: translated.success,
+      data: translated.data,
+      error: translated.error,
       duration: Date.now() - entry.startedAt,
       ...entry.baseFields,
     });
