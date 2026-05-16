@@ -16,6 +16,13 @@
  *   --garbage-on-call <t>  for tool name t, write non-JSON to stdout
  *   --noisy-stderr         write a known marker to stderr at startup
  *   --echo-env <name>      include process.env[name] in the reply payload
+ *   --envelope <mode>      "legacy" (default) writes the pre-standard
+ *                          `{success,data,error,...}` body inside `result`;
+ *                          "canonical" writes the MCP-spec envelope
+ *                          `{content:[{type:"text",text:JSON.stringify(payload)}], isError}`.
+ *                          Real `@codespar/mcp-*` servers emit canonical;
+ *                          legacy stays the default so existing tests do
+ *                          not change shape in lockstep with the bridge fix.
  *
  * MIT-licensed. This fixture exists for the OSS runtime's MCP bridge
  * test suite — it's not part of the public package surface and is not
@@ -48,6 +55,7 @@ const garbageOnCall = flagValue("--garbage-on-call");
 const crashOnCall = flagValue("--crash-on-call");
 const noisyStderr = flagPresent("--noisy-stderr");
 const echoEnvName = flagValue("--echo-env");
+const envelopeMode = flagValue("--envelope") ?? "legacy";
 
 const STDERR_MARKER = "echo-mcp-server: stderr-startup-marker";
 
@@ -62,6 +70,20 @@ function nowIso() {
 }
 
 function buildToolResult({ id, toolName, params }) {
+  if (envelopeMode === "canonical") {
+    const data = { echo: params?.arguments ?? null };
+    if (echoEnvName) {
+      data.env = process.env[echoEnvName] ?? null;
+    }
+    return {
+      jsonrpc: "2.0",
+      id,
+      result: {
+        content: [{ type: "text", text: JSON.stringify(data) }],
+        isError: false,
+      },
+    };
+  }
   const payload = {
     success: true,
     data: { echo: params?.arguments ?? null },

@@ -49,6 +49,7 @@ export const MCP_ERROR_CODES = {
   parse_error: "mcp.parse_error",
   timeout: "mcp.timeout",
   child_exit: "mcp.child_exit",
+  unknown_response_shape: "mcp.unknown_response_shape",
 } as const;
 
 export type McpErrorCode =
