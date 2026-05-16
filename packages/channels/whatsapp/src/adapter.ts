@@ -299,7 +299,7 @@ export class WhatsAppAdapter implements ChannelAdapter {
     // is exempt (it returns no inbound data and is the operator's
     // "is this thing up?" probe).
     server.addHook("preHandler", async (request, reply) => {
-      if (request.routerPath === "/health" || request.url === "/health") return;
+      if (request.url === "/health") return;
       const secret = process.env.EVOLUTION_WEBHOOK_SECRET;
       const strict = isStrictMode(process.env.WHATSAPP_WEBHOOK_STRICT_MODE);
       const providedHeader = request.headers[EVOLUTION_SIGNATURE_HEADER] as
