@@ -161,6 +161,16 @@ prerequisite. An agent that speaks only HTTP is a first-class citizen.
 WhatsApp is the deepest integration because Brazilian commerce
 concentrates there (~78% of businesses, 6× web-e-commerce conversion).
 
+WhatsApp pairing is preserved across restarts. Delete the
+`evolution_data` Docker volume to force a re-pair. The Evolution API
+callback URL is set via `WHATSAPP_WEBHOOK_URL` (full URL override) or
+`WHATSAPP_WEBHOOK_HOST` + `WHATSAPP_WEBHOOK_PORT` (default
+`host.docker.internal:3001` for local dev; in compose set HOST to the
+runtime service name). When `EVOLUTION_WEBHOOK_SECRET` is set the
+inbound webhook validates it on every request; set
+`WHATSAPP_WEBHOOK_STRICT_MODE=true` in production so unsigned requests
+are rejected even when the secret is unset.
+
 ## What's not in OSS yet
 
 The OSS runtime is functionally complete for self-hosting an agent that

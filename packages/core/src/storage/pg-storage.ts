@@ -11,7 +11,7 @@
  */
 
 import { drizzle, type PostgresJsDatabase } from "drizzle-orm/postgres-js";
-import { eq, desc, and, sql, count } from "drizzle-orm";
+import { eq, desc, and, sql, count, lt } from "drizzle-orm";
 import postgres from "postgres";
 import { randomUUID } from "node:crypto";
 import {
@@ -20,6 +20,7 @@ import {
   codeRepos,
   projects,
   channelLinks,
+  sessions as sessionsTable,
   auditLog,
   subscribers,
   slackInstallations,
@@ -39,6 +40,8 @@ import type {
   CreateProjectInput,
   UpdateProjectInput,
   ChannelLink,
+  Session,
+  SessionInput,
 } from "./types.js";
 import {
   validateSlug,
@@ -710,5 +713,120 @@ export class PgStorage implements StorageProvider {
       )
       .returning({ id: channelLinks.id });
     return res.length > 0;
+  }
+
+  // ── Sessions (F10.M2) ──────────────────────────────────────────
+
+  private mapSessionRow(r: {
+    id: string;
+    orgId: string;
+    projectId: string;
+    channelType: string;
+    channelUserId: string;
+    instanceId: string | null;
+    status: string;
+    createdAt: Date;
+    updatedAt: Date;
+    metadata: Record<string, unknown>;
+  }): Session {
+    return {
+      id: r.id,
+      orgId: r.orgId,
+      projectId: r.projectId,
+      channelType: r.channelType,
+      channelUserId: r.channelUserId,
+      ...(r.instanceId !== null ? { instanceId: r.instanceId } : {}),
+      status: r.status as Session["status"],
+      createdAt: r.createdAt.toISOString(),
+      updatedAt: r.updatedAt.toISOString(),
+      metadata: r.metadata ?? {},
+    };
+  }
+
+  async getSession(id: string): Promise<Session | null> {
+    const rows = await this.db
+      .select()
+      .from(sessionsTable)
+      .where(eq(sessionsTable.id, id))
+      .limit(1);
+    return rows[0] ? this.mapSessionRow(rows[0]) : null;
+  }
+
+  async findSessionByChannelUser(
+    projectId: string,
+    channelType: string,
+    channelUserId: string,
+  ): Promise<Session | null> {
+    const rows = await this.db
+      .select()
+      .from(sessionsTable)
+      .where(
+        and(
+          eq(sessionsTable.projectId, projectId),
+          eq(sessionsTable.channelType, channelType),
+          eq(sessionsTable.channelUserId, channelUserId),
+          eq(sessionsTable.status, "active"),
+        ),
+      )
+      .limit(1);
+    return rows[0] ? this.mapSessionRow(rows[0]) : null;
+  }
+
+  async setSession(session: SessionInput): Promise<Session> {
+    const id = session.id ?? randomUUID();
+    const now = new Date();
+    const rows = await this.db
+      .insert(sessionsTable)
+      .values({
+        id,
+        orgId: session.orgId,
+        projectId: session.projectId,
+        channelType: session.channelType,
+        channelUserId: session.channelUserId,
+        instanceId: session.instanceId ?? null,
+        status: session.status,
+        metadata: session.metadata ?? {},
+        updatedAt: now,
+        ...(session.createdAt ? { createdAt: new Date(session.createdAt) } : {}),
+      })
+      .onConflictDoUpdate({
+        target: sessionsTable.id,
+        set: {
+          orgId: session.orgId,
+          projectId: session.projectId,
+          channelType: session.channelType,
+          channelUserId: session.channelUserId,
+          instanceId: session.instanceId ?? null,
+          status: session.status,
+          metadata: session.metadata ?? {},
+          updatedAt: now,
+        },
+      })
+      .returning();
+    return this.mapSessionRow(rows[0]!);
+  }
+
+  async closeSession(id: string): Promise<boolean> {
+    const res = await this.db
+      .update(sessionsTable)
+      .set({ status: "closed", updatedAt: new Date() })
+      .where(and(eq(sessionsTable.id, id), eq(sessionsTable.status, "active")))
+      .returning({ id: sessionsTable.id });
+    return res.length > 0;
+  }
+
+  async closeStaleSessions(olderThanIso: string): Promise<number> {
+    const cutoff = new Date(olderThanIso);
+    const res = await this.db
+      .update(sessionsTable)
+      .set({ status: "closed", updatedAt: new Date() })
+      .where(
+        and(
+          eq(sessionsTable.status, "active"),
+          lt(sessionsTable.updatedAt, cutoff),
+        ),
+      )
+      .returning({ id: sessionsTable.id });
+    return res.length;
   }
 }

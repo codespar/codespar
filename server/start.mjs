@@ -15,7 +15,7 @@
  *   PROJECT_NAME      — Project identifier (default "default")
  */
 
-import { MessageRouter, WebhookServer, FileStorage, createStorage, ApprovalManager, VectorStore, IdentityStore, analyzeDeployFailure, formatSmartAlert, parseIntent, broadcastEvent, DeployHealthMonitor, ChannelRouter, SentryClient, PagerDutyClient, LinearClient } from "@codespar/core";
+import { MessageRouter, WebhookServer, FileStorage, createStorage, ApprovalManager, VectorStore, IdentityStore, analyzeDeployFailure, formatSmartAlert, parseIntent, broadcastEvent, DeployHealthMonitor, ChannelRouter, SentryClient, PagerDutyClient, LinearClient, findOrCreateSession, sendInboundMessage } from "@codespar/core";
 import { AgentSupervisor } from "@codespar/agent-supervisor";
 import { ProjectAgent } from "@codespar/agent-project";
 import { CoordinatorAgent } from "@codespar/agent-coordinator";
@@ -113,11 +113,59 @@ await identityStore.registerUser({
 });
 
 // 2. Channel adapters (conditional)
+//
+// WhatsApp routes through the bespoke channel \u2192 session bridge
+// (F10.M2 / #362) rather than the AgentSupervisor. Other adapters
+// (Slack/Telegram/Discord) keep the supervisor path until the legacy
+// surface gets retired in a follow-up cleanup PR.
+let whatsappAdapter = null;
 if (process.env.ENABLE_WHATSAPP === "true") {
   try {
     const { WhatsAppAdapter } = await import("@codespar/channel-whatsapp");
-    supervisor.addAdapter(new WhatsAppAdapter());
-    console.log("[server] \u2713 WhatsApp adapter enabled");
+    whatsappAdapter = new WhatsAppAdapter();
+    const orgId = "default";
+    whatsappAdapter.onMessage(async (message) => {
+      try {
+        const orgStorage = createStorage(orgId);
+        const link = await orgStorage.getChannelLink(message.channelType, message.channelId);
+        let projectId;
+        if (link) {
+          projectId = link.projectId;
+        } else {
+          const project = await orgStorage.getOrCreateDefaultProject(orgId);
+          projectId = project.id;
+          // Eagerly write the binding so the next message hits the fast path.
+          await orgStorage.setChannelLink({
+            channelType: message.channelType,
+            channelId: message.channelId,
+            orgId,
+            projectId,
+          });
+        }
+        const session = await findOrCreateSession(
+          {
+            orgId,
+            projectId,
+            channelType: message.channelType,
+            channelUserId: message.channelUserId,
+            instanceId: process.env.EVOLUTION_INSTANCE || undefined,
+          },
+          orgStorage,
+        );
+        const result = await sendInboundMessage(session, message.text ?? "");
+        if (result.message) {
+          if (message.isDM) {
+            await whatsappAdapter.sendDM(message.channelId, { text: result.message });
+          } else {
+            await whatsappAdapter.sendToChannel(message.channelId, { text: result.message });
+          }
+        }
+      } catch (err) {
+        console.error("[whatsapp-bridge] handler error:", err?.message ?? err);
+      }
+    });
+    await whatsappAdapter.connect();
+    console.log("[server] \u2713 WhatsApp adapter enabled (bridge mode)");
   } catch (err) {
     console.error("[server] \u2717 WhatsApp adapter failed:", err.message);
   }
@@ -700,6 +748,13 @@ console.log("[server] Ready.\n");
 const shutdown = async () => {
   console.log("\n[server] Shutting down...");
   await webhookServer.stop();
+  if (whatsappAdapter) {
+    try {
+      await whatsappAdapter.disconnect();
+    } catch (err) {
+      console.error("[server] WhatsApp adapter disconnect error:", err.message);
+    }
+  }
   await supervisor.shutdown();
   process.exit(0);
 };

@@ -106,6 +106,30 @@ export const channelLinks = pgTable("channel_links", {
   index("channel_links_project_idx").on(table.projectId),
 ]);
 
+// ── Sessions (durable channel/HTTP-bridge sessions) ──────────
+// One row per (project_id, channel_type, channel_user_id) durable
+// session reified by the bridge or by /sessions HTTP route. Drives
+// F10.M2 channel → session resolution and F10.M4 idle-TTL eviction.
+// Partial unique index `sessions_active_lookup` keeps only active rows
+// in the unique slot (closed rows don't collide).
+
+export const sessions = pgTable("sessions", {
+  id: text("id").primaryKey(),
+  orgId: uuid("org_id").notNull(),
+  projectId: text("project_id").notNull(),
+  channelType: text("channel_type").notNull(),
+  channelUserId: text("channel_user_id").notNull(),
+  instanceId: text("instance_id"),
+  status: text("status").default("active").notNull(), // "active" | "closed" | "error"
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  metadata: jsonb("metadata").$type<Record<string, unknown>>().default({}).notNull(),
+}, (table) => [
+  index("sessions_org_idx").on(table.orgId),
+  index("sessions_project_idx").on(table.projectId),
+  index("sessions_updated_idx").on(table.updatedAt),
+]);
+
 // ── Audit Log ─────────────────────────────────────────────────
 
 export const auditLog = pgTable("audit_log", {
