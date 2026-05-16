@@ -685,7 +685,7 @@ export class WebhookServer {
     registerLinearRoutes(route, this as unknown as ServerContext);
 
     // ── Session contract (SessionBase HTTP API) ──────
-    registerSessionRoutes(route);
+    registerSessionRoutes(route, this as unknown as ServerContext);
 
     // ── Webhooks (extracted to routes/webhooks.ts) ──────
     registerWebhookRoutes(route, this as unknown as ServerContext);

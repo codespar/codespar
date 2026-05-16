@@ -13,31 +13,34 @@
  *   When ENGINE_API_TOKEN is set the token is verified; otherwise any
  *   non-empty Bearer string is accepted (local / CI mode).
  *
+ * Tenancy (F10.M2): the route resolves `(orgId, projectId)` from the
+ * `x-org-id` and `x-codespar-project` headers via the shared
+ * `ServerContext`. When the headers are absent the route falls back to
+ * org "default" + the org's default project — same self-heal as the
+ * other tenancy-aware routes (`webhook-server.ts:294-321`), so the
+ * SessionBase contract tests continue to pass without any headers.
+ *
  * These routes are the OSS runtime's implementation of the session
  * contract defined in @codespar/types. The contract-oss.test.ts file
  * verifies conformance using runContractSuite from @codespar/types/testing.
  */
 
 import { randomUUID, createHash, timingSafeEqual } from "node:crypto";
-import type { RouteFn } from "./types.js";
-import { generateSmartResponse, type AgentContext } from "../../ai/smart-responder.js";
+import type { RouteFn, ServerContext } from "./types.js";
 import { getAllAgentMetadata } from "../../agents/agent-registry.js";
-
-interface SessionEntry {
-  id: string;
-  status: "active" | "closed" | "error";
-  servers: string[];
-  userId: string;
-  createdAt: Date;
-}
-
-// In-memory store — scoped to process lifetime; CI creates a fresh process
-// per test run, so cross-test contamination is impossible.
-const sessions = new Map<string, SessionEntry>();
+import {
+  clearSessionStore as clearCoreStore,
+  closeSessionById,
+  createSessionForHttp,
+  getHttpSessionMap,
+  getSessionById,
+  sendInboundMessage,
+} from "../../sessions/core.js";
+import type { Session } from "../../storage/types.js";
 
 /** Exported for test teardown — clears all entries from the in-memory store. */
 export function clearSessionStore(): void {
-  sessions.clear();
+  clearCoreStore();
 }
 
 function checkBearerAuth(request: { headers: Record<string, string | string[] | undefined> }): string | null {
@@ -57,8 +60,6 @@ function checkBearerAuth(request: { headers: Record<string, string | string[] | 
 }
 
 // Built-in tools available in every OSS session.
-// codespar_list_tools exposes the skill manifest from the agent registry
-// so SDK callers can discover agent capabilities without additional config.
 const BUILT_IN_TOOLS = new Set(["codespar_list_tools"]);
 
 function executeBuiltIn(toolName: string, sessionId: string): {
@@ -104,20 +105,36 @@ function executeBuiltIn(toolName: string, sessionId: string): {
   };
 }
 
-function makeAgentContext(session: SessionEntry): AgentContext {
-  return {
-    agentId: `session-${session.id.slice(0, 8)}`,
-    projectId: "default",
-    autonomyLevel: 1,
-    tasksHandled: 0,
-    uptimeMinutes: Math.round((Date.now() - session.createdAt.getTime()) / 60_000),
-    recentAudit: [],
-    memoryStats: { total: 0, byCategory: {} },
-    linkedChannels: [],
-  };
+/** Read the `servers` list a session was created with (kept in metadata). */
+function readServers(session: Session): string[] {
+  const raw = session.metadata?.["servers"];
+  return Array.isArray(raw) ? (raw as string[]) : [];
 }
 
-export function registerSessionRoutes(route: RouteFn): void {
+/**
+ * Resolve `(orgId, projectId)` for a request using the shared
+ * ServerContext when present. When ctx is null (legacy registration
+ * path) falls back to org "default" + the placeholder project string
+ * — same shape as before F10.M2 so callers without tenancy headers
+ * keep working.
+ */
+async function resolveOrgAndProject(
+  ctx: ServerContext | null,
+  request: { headers: Record<string, string | string[] | undefined> },
+): Promise<{ orgId: string; projectId: string }> {
+  if (!ctx) return { orgId: "default", projectId: "default" };
+  const orgId = ctx.getOrgId(request);
+  try {
+    const projectId = await ctx.resolveProjectId(request, orgId);
+    return { orgId, projectId };
+  } catch {
+    // Fall back to the same "default" placeholder the legacy route
+    // used so contract tests with no tenancy headers continue to pass.
+    return { orgId, projectId: "default" };
+  }
+}
+
+export function registerSessionRoutes(route: RouteFn, ctx: ServerContext | null = null): void {
   // POST /sessions — create session
   route("post", "/sessions", async (request: any, reply: any) => {
     if (!checkBearerAuth(request)) {
@@ -125,16 +142,15 @@ export function registerSessionRoutes(route: RouteFn): void {
     }
 
     const body = request.body as { servers?: string[]; user_id?: string } | undefined;
-    const id = randomUUID();
-    sessions.set(id, {
-      id,
-      status: "active",
-      servers: Array.isArray(body?.servers) ? body.servers : [],
+    const { orgId, projectId } = await resolveOrgAndProject(ctx, request);
+    const session = createSessionForHttp({
+      orgId,
+      projectId,
       userId: typeof body?.user_id === "string" ? body.user_id : "anonymous",
-      createdAt: new Date(),
+      servers: Array.isArray(body?.servers) ? body.servers : [],
     });
 
-    return reply.status(201).send({ id, status: "active" });
+    return reply.status(201).send({ id: session.id, status: session.status });
   });
 
   // POST /sessions/:id/execute — execute a registered tool
@@ -144,7 +160,7 @@ export function registerSessionRoutes(route: RouteFn): void {
     }
 
     const { id } = request.params as { id: string };
-    const session = sessions.get(id);
+    const session = await getSessionById(id, ctx?.storageProvider ?? null);
     if (!session || session.status !== "active") {
       return reply.status(404).send({ error: "Session not found or closed" });
     }
@@ -160,8 +176,6 @@ export function registerSessionRoutes(route: RouteFn): void {
       return executeBuiltIn(toolName, id);
     }
 
-    // Unknown tool — return structured error so callers can distinguish
-    // "tool not found" from a network/server error.
     return {
       success: false,
       data: {},
@@ -181,15 +195,15 @@ export function registerSessionRoutes(route: RouteFn): void {
   //
   // SSE mode (Accept: text/event-stream):
   //   Streams user_message → assistant_text → done events. When
-  //   ANTHROPIC_API_KEY is unset the assistant_text is a fallback string so
-  //   the CI contract test passes without any credentials.
+  //   ANTHROPIC_API_KEY is unset the assistant_text is a fallback string
+  //   so the contract test passes without any credentials.
   route("post", "/sessions/:id/send", async (request: any, reply: any) => {
     if (!checkBearerAuth(request)) {
       return reply.status(401).send({ error: "Missing or invalid Bearer token" });
     }
 
     const { id } = request.params as { id: string };
-    const session = sessions.get(id);
+    const session = await getSessionById(id, ctx?.storageProvider ?? null);
     if (!session || session.status !== "active") {
       return reply.status(404).send({ error: "Session not found or closed" });
     }
@@ -198,15 +212,7 @@ export function registerSessionRoutes(route: RouteFn): void {
     const message = typeof body?.message === "string" ? body.message.trim() : "";
     const accept = (request.headers["accept"] as string | undefined) ?? "";
 
-    const ctx = makeAgentContext(session);
-    const aiText = await generateSmartResponse(message || "hello", ctx);
-    const responseText = aiText ?? "Message received. Set ANTHROPIC_API_KEY for AI responses.";
-
-    const sendResult = {
-      message: responseText,
-      tool_calls: [] as unknown[],
-      iterations: 1,
-    };
+    const sendResult = await sendInboundMessage(session, message);
 
     if (accept.includes("text/event-stream")) {
       reply.raw.writeHead(200, {
@@ -220,7 +226,7 @@ export function registerSessionRoutes(route: RouteFn): void {
       };
 
       emit("user_message", { content: message });
-      emit("assistant_text", { content: responseText, iteration: 1 });
+      emit("assistant_text", { content: sendResult.message, iteration: 1 });
       emit("done", sendResult);
 
       reply.raw.end();
@@ -237,12 +243,12 @@ export function registerSessionRoutes(route: RouteFn): void {
     }
 
     const { id } = request.params as { id: string };
-    const session = sessions.get(id);
+    const session = await getSessionById(id, ctx?.storageProvider ?? null);
     if (!session) {
       return reply.status(404).send({ error: "Session not found" });
     }
 
-    const servers = session.servers.map((s, i) => ({
+    const servers = readServers(session).map((s, i) => ({
       id: `${id}-conn-${i}-${s}`,
       connected: session.status === "active",
     }));
@@ -257,12 +263,17 @@ export function registerSessionRoutes(route: RouteFn): void {
     }
 
     const { id } = request.params as { id: string };
-    const session = sessions.get(id);
+    const session = await getSessionById(id, ctx?.storageProvider ?? null);
     if (!session) {
       return reply.status(404).send({ error: "Session not found" });
     }
 
-    session.status = "closed";
+    await closeSessionById(id, ctx?.storageProvider ?? null);
     return reply.status(204).send();
   });
+
+  // `getHttpSessionMap` is only referenced when a test wants to inspect
+  // the in-memory store directly. Re-exporting prevents unused-import
+  // warnings when a downstream test imports it from sessions.ts.
+  void getHttpSessionMap;
 }

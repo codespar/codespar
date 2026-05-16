@@ -1,0 +1,270 @@
+/**
+ * Session core — shared module behind both the HTTP `/sessions` route
+ * handlers and the channel → session bridge (F10.M2).
+ *
+ * Two surfaces share this module:
+ *
+ *   1. HTTP `/sessions`             — `createSessionForHttp`, `getSessionById`,
+ *                                      `sendInboundMessage`, `closeSessionById`
+ *   2. Channel webhook bridges       — `findOrCreateSession`,
+ *      (WhatsApp, etc.)               `sendInboundMessage`, `closeSessionById`
+ *
+ * The HTTP route stays auth/transport-only; tenancy resolution and
+ * session persistence live here so the WhatsApp bridge calls the same
+ * functions in-process (no loopback HTTP, no bearer bootstrap).
+ *
+ * Storage model:
+ *
+ *   * HTTP-created sessions live in an in-memory `Map` keyed by id so
+ *     the @codespar/types contract test suite continues to pass without
+ *     any database — same behaviour as before the F10 refactor.
+ *   * Channel-created (bridged) sessions persist via `StorageProvider`
+ *     (FileStorage on JSON, PgStorage on the `sessions` table).
+ *   * `getSessionById` checks the in-memory store first, then storage.
+ */
+
+import { randomUUID } from "node:crypto";
+import type { Session, StorageProvider } from "../storage/types.js";
+import { generateSmartResponse, type AgentContext } from "../ai/smart-responder.js";
+
+/** Channel type for sessions created via the HTTP `/sessions` route. */
+export const HTTP_CHANNEL_TYPE = "http" as const;
+
+/**
+ * In-memory store for HTTP sessions. Scoped to process lifetime; CI
+ * creates a fresh process per test run so cross-test contamination is
+ * impossible. Channel-bridge sessions persist to storage instead.
+ */
+const httpSessions = new Map<string, Session>();
+
+/** Exported for test teardown — clears the in-memory store. */
+export function clearSessionStore(): void {
+  httpSessions.clear();
+}
+
+/** Result of sending an inbound message into a session. Shape matches
+ *  the SendResult contract the HTTP `/sessions/:id/send` route returns. */
+export interface SendResult {
+  message: string;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  tool_calls: any[];
+  iterations: number;
+}
+
+export interface CreateHttpSessionInput {
+  orgId: string;
+  projectId: string;
+  userId: string;
+  servers: string[];
+}
+
+/** Create an HTTP-route session. The session is held in-memory only —
+ *  this matches the behaviour the SessionBase contract test asserts. */
+export function createSessionForHttp(input: CreateHttpSessionInput): Session {
+  const id = randomUUID();
+  const nowIso = new Date().toISOString();
+  const session: Session = {
+    id,
+    orgId: input.orgId,
+    projectId: input.projectId,
+    channelType: HTTP_CHANNEL_TYPE,
+    channelUserId: input.userId,
+    status: "active",
+    createdAt: nowIso,
+    updatedAt: nowIso,
+    metadata: { servers: input.servers },
+  };
+  httpSessions.set(id, session);
+  return session;
+}
+
+/** Internal accessor for the HTTP map — exported only for the legacy
+ *  send route which mutates `servers` in metadata. Channel-bridge code
+ *  should NOT use this; it goes through storage. */
+export function getHttpSessionMap(): Map<string, Session> {
+  return httpSessions;
+}
+
+/**
+ * Resolve a session by id. Checks the in-memory HTTP store first; falls
+ * back to `storage.getSession` for channel-bridge sessions when storage
+ * is available.
+ */
+export async function getSessionById(
+  id: string,
+  storage: StorageProvider | null,
+): Promise<Session | null> {
+  const inMemory = httpSessions.get(id);
+  if (inMemory) return inMemory;
+  if (!storage) return null;
+  return storage.getSession(id);
+}
+
+export interface FindOrCreateSessionInput {
+  orgId: string;
+  projectId: string;
+  channelType: string;
+  channelUserId: string;
+  /** Optional Evolution-API instance label (or analogous channel
+   *  instance) — recorded for diagnostics, not part of the lookup key. */
+  instanceId?: string;
+}
+
+/** Default idle TTL for durable sessions, in days (F10.M4 / #366). */
+export const DEFAULT_SESSION_IDLE_TTL_DAYS = 30;
+
+/** Read the configured TTL window (in days) from the env, with sane
+ *  bounds. Returns Infinity when explicitly set to 0 or a negative
+ *  value so tests can disable TTL by exporting WHATSAPP_SESSION_IDLE_TTL_DAYS=0. */
+export function readIdleTtlDays(): number {
+  const raw = process.env.WHATSAPP_SESSION_IDLE_TTL_DAYS;
+  if (raw === undefined || raw === "") return DEFAULT_SESSION_IDLE_TTL_DAYS;
+  const parsed = Number.parseInt(raw, 10);
+  if (!Number.isFinite(parsed)) return DEFAULT_SESSION_IDLE_TTL_DAYS;
+  if (parsed <= 0) return Number.POSITIVE_INFINITY;
+  return parsed;
+}
+
+/** ISO timestamp that marks the boundary between "fresh" and "stale"
+ *  sessions for the given TTL window. Anything with `updatedAt`
+ *  strictly less than this cutoff is closable. */
+export function ttlCutoffIso(ttlDays: number, now: number = Date.now()): string {
+  if (!Number.isFinite(ttlDays)) return new Date(0).toISOString();
+  return new Date(now - ttlDays * 86_400_000).toISOString();
+}
+
+export interface FindOrCreateOptions {
+  /** Override the TTL window (days). Used by tests; production reads
+   *  WHATSAPP_SESSION_IDLE_TTL_DAYS via [[readIdleTtlDays]]. */
+  ttlDays?: number;
+  /** Override `Date.now()`-derived clock for deterministic tests. */
+  now?: number;
+}
+
+/**
+ * Find the active session for the (project, channelType, channelUserId)
+ * tuple, or create a new one. Channel-bridge sessions persist via the
+ * storage provider so they survive process restarts.
+ *
+ * Lazy TTL (F10.M4): when the existing session's `updatedAt` is older
+ * than the configured idle window the row is closed and a fresh session
+ * is created in its place. When the session is fresh, `updatedAt` is
+ * bumped so continued activity extends the idle window.
+ */
+export async function findOrCreateSession(
+  input: FindOrCreateSessionInput,
+  storage: StorageProvider,
+  options?: FindOrCreateOptions,
+): Promise<Session> {
+  const ttlDays = options?.ttlDays ?? readIdleTtlDays();
+  const cutoff = ttlCutoffIso(ttlDays, options?.now);
+  const existing = await storage.findSessionByChannelUser(
+    input.projectId,
+    input.channelType,
+    input.channelUserId,
+  );
+  if (existing) {
+    if (existing.updatedAt < cutoff) {
+      await storage.closeSession(existing.id);
+      // Fall through to create a fresh session.
+    } else {
+      // Touch updatedAt so continued activity extends the idle window.
+      return storage.setSession({
+        id: existing.id,
+        orgId: existing.orgId,
+        projectId: existing.projectId,
+        channelType: existing.channelType,
+        channelUserId: existing.channelUserId,
+        ...(existing.instanceId !== undefined
+          ? { instanceId: existing.instanceId }
+          : input.instanceId !== undefined
+            ? { instanceId: input.instanceId }
+            : {}),
+        status: existing.status,
+        metadata: existing.metadata,
+        createdAt: existing.createdAt,
+      });
+    }
+  }
+
+  return storage.setSession({
+    orgId: input.orgId,
+    projectId: input.projectId,
+    channelType: input.channelType,
+    channelUserId: input.channelUserId,
+    ...(input.instanceId !== undefined ? { instanceId: input.instanceId } : {}),
+    status: "active",
+    metadata: {},
+  });
+}
+
+/**
+ * Sweep stale sessions out of storage. Intended for an optional cron
+ * sweeper; the OSS bridge runs lazy-close on lookup instead. Returns
+ * the count of rows transitioned.
+ */
+export async function closeStaleSessions(
+  storage: StorageProvider,
+  olderThanIso: string,
+): Promise<number> {
+  return storage.closeStaleSessions(olderThanIso);
+}
+
+/**
+ * Mark a session closed. Updates the in-memory HTTP store if the id
+ * lives there, otherwise propagates to storage. Returns true when a
+ * row transitioned.
+ */
+export async function closeSessionById(
+  id: string,
+  storage: StorageProvider | null,
+): Promise<boolean> {
+  const inMemory = httpSessions.get(id);
+  if (inMemory) {
+    if (inMemory.status === "closed") return false;
+    inMemory.status = "closed";
+    inMemory.updatedAt = new Date().toISOString();
+    return true;
+  }
+  if (!storage) return false;
+  return storage.closeSession(id);
+}
+
+/** Build the AgentContext passed to generateSmartResponse for this
+ *  session. Mirrors the shape the legacy HTTP send handler used so the
+ *  contract test continues to pass unchanged. */
+function makeAgentContext(session: Session): AgentContext {
+  const createdAt = Date.parse(session.createdAt) || Date.now();
+  return {
+    agentId: `session-${session.id.slice(0, 8)}`,
+    projectId: session.projectId,
+    autonomyLevel: 1,
+    tasksHandled: 0,
+    uptimeMinutes: Math.round((Date.now() - createdAt) / 60_000),
+    recentAudit: [],
+    memoryStats: { total: 0, byCategory: {} },
+    linkedChannels: [],
+  };
+}
+
+/**
+ * Send an inbound message into a session and return the AI response.
+ * Identical AI invocation path as the legacy `POST /sessions/:id/send`
+ * handler. Channel bridges call this directly; the HTTP route is a
+ * thin wrapper that also handles SSE streaming.
+ */
+export async function sendInboundMessage(
+  session: Session,
+  message: string,
+): Promise<SendResult> {
+  const ctx = makeAgentContext(session);
+  const trimmed = message.trim() || "hello";
+  const aiText = await generateSmartResponse(trimmed, ctx);
+  const responseText =
+    aiText ?? "Message received. Set ANTHROPIC_API_KEY for AI responses.";
+  return {
+    message: responseText,
+    tool_calls: [],
+    iterations: 1,
+  };
+}

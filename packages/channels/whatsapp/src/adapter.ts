@@ -10,6 +10,12 @@
  *   EVOLUTION_API_KEY      -- API authentication key
  *   EVOLUTION_INSTANCE     -- Instance name (default: codespar)
  *   WHATSAPP_WEBHOOK_PORT  -- Port for incoming webhooks (default: 3001)
+ *   WHATSAPP_WEBHOOK_URL   -- Full callback URL registered with Evolution API
+ *                              (override; default derived from
+ *                              WHATSAPP_WEBHOOK_HOST + WHATSAPP_WEBHOOK_PORT).
+ *   WHATSAPP_WEBHOOK_HOST  -- Hostname Evolution API uses to reach this runtime
+ *                              (default: host.docker.internal; in compose set
+ *                              to the runtime's service name).
  *   WHATSAPP_BOT_MENTION   -- Bot mention pattern (default: @codespar)
  */
 
@@ -23,6 +29,12 @@ import type {
   MessageHandler,
   NormalizedMessage,
 } from "@codespar/core";
+import {
+  EVOLUTION_SIGNATURE_HEADER,
+  isStrictMode,
+  verifyEvolutionSignature,
+} from "./signature.js";
+import { WebhookDedupe } from "./dedupe.js";
 
 // ---------------------------------------------------------------------------
 // Evolution API webhook payload types
@@ -68,6 +80,10 @@ export class WhatsAppAdapter implements ChannelAdapter {
 
   private messageHandler: MessageHandler | null = null;
   private webhookServer: FastifyInstance | null = null;
+  /** One-time WARN log gate for the relaxed signature mode (F10.M3). */
+  private warnedAboutUnsignedWebhook = false;
+  /** Idempotency state for inbound webhook events (F10.M4 / #366). */
+  private readonly dedupe = new WebhookDedupe();
 
   private get apiUrl(): string {
     return process.env.EVOLUTION_API_URL || "http://localhost:8084";
@@ -127,21 +143,16 @@ export class WhatsAppAdapter implements ChannelAdapter {
   // ---------------------------------------------------------------------------
 
   async disconnect(): Promise<void> {
-    try {
-      await fetch(`${this.apiUrl}/instance/logout/${this.instanceName}`, {
-        method: "DELETE",
-        headers: this.headers,
-      });
-    } catch {
-      // Ignore errors during logout -- instance may already be gone
-    }
-
+    // Preserve pairing across restarts: do NOT call /instance/logout/. The
+    // Evolution API container keeps the paired session in its named volume
+    // (`evolution_data`); deleting that volume is the only way to force a
+    // re-pair on next start (F10.M1 / #365).
     if (this.webhookServer) {
       await this.webhookServer.close();
       this.webhookServer = null;
     }
 
-    console.log("[whatsapp] Disconnected");
+    console.log("[whatsapp] Disconnected (pairing preserved)");
   }
 
   // ---------------------------------------------------------------------------
@@ -260,10 +271,12 @@ export class WhatsAppAdapter implements ChannelAdapter {
         return;
       }
 
-      // If it's a raw QR code string (not a data URI), print it directly
+      // If it's a raw QR code string (not a data URI), render it as
+      // ASCII so the operator can scan straight from the terminal
+      // (F10.M4 / #366). Base64 data URIs go through the dashboard.
       if (!qrString.startsWith("data:")) {
         console.log("[whatsapp] Scan the QR code with your WhatsApp app.");
-        console.log(`[whatsapp] QR code value: ${qrString.substring(0, 60)}...`);
+        await renderQrAscii(qrString);
       } else {
         console.log("[whatsapp] QR code received as base64 image.");
         console.log("[whatsapp] Open the Evolution API dashboard to scan the QR code.");
@@ -278,6 +291,32 @@ export class WhatsAppAdapter implements ChannelAdapter {
     if (this.webhookServer) return;
 
     const server = Fastify({ logger: false });
+
+    // ── Signature verification preHandler (F10.M3 / #364) ──────────
+    // Runs BEFORE any payload parsing so an unauthenticated request
+    // never reaches `messages.upsert` decoding. The bridge handler is
+    // only invoked when the verdict is { ok: true }. Health endpoint
+    // is exempt (it returns no inbound data and is the operator's
+    // "is this thing up?" probe).
+    server.addHook("preHandler", async (request, reply) => {
+      if (request.routerPath === "/health" || request.url === "/health") return;
+      const secret = process.env.EVOLUTION_WEBHOOK_SECRET;
+      const strict = isStrictMode(process.env.WHATSAPP_WEBHOOK_STRICT_MODE);
+      const providedHeader = request.headers[EVOLUTION_SIGNATURE_HEADER] as
+        | string
+        | undefined;
+      const verdict = verifyEvolutionSignature({ providedHeader, secret, strict });
+      if (!verdict.ok) {
+        reply.status(401).send({ error: "invalid_signature", reason: verdict.reason });
+        return reply;
+      }
+      if (verdict.reason === "no_secret_relaxed" && !this.warnedAboutUnsignedWebhook) {
+        this.warnedAboutUnsignedWebhook = true;
+        console.warn(
+          "[whatsapp] EVOLUTION_WEBHOOK_SECRET not set — webhook accepts unsigned requests. Set WHATSAPP_WEBHOOK_STRICT_MODE=true to reject in production.",
+        );
+      }
+    });
 
     server.post("/webhook", async (request) => {
       if (!this.messageHandler) return { ok: true };
@@ -295,6 +334,14 @@ export class WhatsAppAdapter implements ChannelAdapter {
       // Skip messages with no content at all
       if (!message) return { ok: true };
 
+      // Idempotency: short-circuit duplicate Evolution-API redeliveries
+      // (F10.M4 / #366). The dedupe key is (channelType, key.id) so the
+      // agent is only invoked once per logical message.
+      if (key.id) {
+        const fresh = await this.dedupe.seenBefore("whatsapp", key.id);
+        if (!fresh) return { ok: true };
+      }
+
       const rawText =
         message.conversation ||
         message.extendedTextMessage?.text ||
@@ -304,7 +351,10 @@ export class WhatsAppAdapter implements ChannelAdapter {
       const remoteJid = key.remoteJid;
       if (!remoteJid) return { ok: true };
 
-      // Extract attachments (images, documents)
+      // Extract attachments (images, documents). Pass-through only —
+      // M4 explicitly does NOT download / OCR / vision-pipeline the
+      // remote content; every non-text attachment gets a one-line WARN
+      // log so operators know an inbound message had media we ignored.
       const attachments: Attachment[] = [];
 
       if (message.imageMessage) {
@@ -313,12 +363,17 @@ export class WhatsAppAdapter implements ChannelAdapter {
           message.imageMessage.mediaUrl ||
           message.imageMessage.directPath;
         if (mediaUrl) {
+          const mimeType = message.imageMessage.mimetype || "image/jpeg";
           attachments.push({
             type: "image",
             url: mediaUrl,
-            mimeType: message.imageMessage.mimetype || "image/jpeg",
+            mimeType,
             filename: "whatsapp_image.jpg",
           });
+          console.warn(
+            "[whatsapp] attachment received but not retrieved",
+            JSON.stringify({ messageId: key.id ?? null, type: "image", mimeType }),
+          );
         }
       }
 
@@ -327,13 +382,22 @@ export class WhatsAppAdapter implements ChannelAdapter {
           message.documentMessage.url ||
           message.documentMessage.mediaUrl;
         if (mediaUrl) {
-          const isImage = message.documentMessage.mimetype?.startsWith("image/") ?? false;
+          const mimeType = message.documentMessage.mimetype || "application/octet-stream";
+          const isImage = mimeType.startsWith("image/");
           attachments.push({
             type: isImage ? "image" : "file",
             url: mediaUrl,
-            mimeType: message.documentMessage.mimetype || "application/octet-stream",
+            mimeType,
             filename: message.documentMessage.fileName || "document",
           });
+          console.warn(
+            "[whatsapp] attachment received but not retrieved",
+            JSON.stringify({
+              messageId: key.id ?? null,
+              type: isImage ? "image" : "document",
+              mimeType,
+            }),
+          );
         }
       }
 
@@ -376,9 +440,25 @@ export class WhatsAppAdapter implements ChannelAdapter {
     console.log(`[whatsapp] Webhook server listening on port ${this.webhookPort}`);
   }
 
+  /**
+   * Resolve the URL Evolution API should POST inbound events to.
+   *
+   * Resolution order:
+   *   1. WHATSAPP_WEBHOOK_URL (full URL override)
+   *   2. http://${WHATSAPP_WEBHOOK_HOST}:${WHATSAPP_WEBHOOK_PORT}/webhook
+   *   3. host.docker.internal default (local dev: Evolution in Docker,
+   *      runtime on host).
+   */
+  private resolveWebhookUrl(): string {
+    const explicit = process.env.WHATSAPP_WEBHOOK_URL?.trim();
+    if (explicit) return explicit;
+    const host = process.env.WHATSAPP_WEBHOOK_HOST?.trim() || "host.docker.internal";
+    return `http://${host}:${this.webhookPort}/webhook`;
+  }
+
   /** Register this webhook URL with the Evolution API instance. */
   private async registerWebhook(): Promise<void> {
-    const webhookUrl = `http://host.docker.internal:${this.webhookPort}/webhook`;
+    const webhookUrl = this.resolveWebhookUrl();
 
     try {
       await fetch(`${this.apiUrl}/webhook/set/${this.instanceName}`, {
@@ -393,5 +473,39 @@ export class WhatsAppAdapter implements ChannelAdapter {
     } catch (err) {
       console.warn("[whatsapp] Failed to register webhook:", err);
     }
+  }
+}
+
+/**
+ * Render a QR-code payload as ASCII to stdout. Uses qrcode-terminal
+ * when available so the operator can scan from the terminal without
+ * leaving the runtime. Falls back to a one-line value preview when
+ * the dependency is unavailable (graceful in tests / minimal builds).
+ *
+ * Exported for unit testing — the test mocks `qrcode-terminal` so the
+ * branch is exercised without requiring the real dep to be installed.
+ */
+export async function renderQrAscii(value: string): Promise<void> {
+  try {
+    type QrTerminal = {
+      generate: (text: string, options?: { small?: boolean }) => void;
+    };
+    const mod = (await import("qrcode-terminal")) as
+      | QrTerminal
+      | { default?: QrTerminal };
+    const qrTerm: QrTerminal | undefined =
+      "generate" in mod ? mod : mod.default;
+    if (qrTerm && typeof qrTerm.generate === "function") {
+      qrTerm.generate(value, { small: true });
+      return;
+    }
+    throw new Error("qrcode-terminal module missing `generate`");
+  } catch {
+    console.log(
+      `[whatsapp] QR code value: ${value.substring(0, 60)}${value.length > 60 ? "..." : ""}`,
+    );
+    console.log(
+      "[whatsapp] Install qrcode-terminal to render the QR as ASCII in the terminal.",
+    );
   }
 }
