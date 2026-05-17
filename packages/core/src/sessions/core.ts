@@ -26,7 +26,7 @@
 import { randomUUID } from "node:crypto";
 import type { Session, StorageProvider } from "../storage/types.js";
 import type { McpServerSpec } from "../mcp/types.js";
-import { generateSmartResponse, type AgentContext } from "../ai/smart-responder.js";
+import { runChatLoop } from "../chat-loop/index.js";
 
 /** Channel type for sessions created via the HTTP `/sessions` route. */
 export const HTTP_CHANNEL_TYPE = "http" as const;
@@ -239,41 +239,18 @@ export async function closeSessionById(
   return storage.closeSession(id);
 }
 
-/** Build the AgentContext passed to generateSmartResponse for this
- *  session. Mirrors the shape the legacy HTTP send handler used so the
- *  contract test continues to pass unchanged. */
-function makeAgentContext(session: Session): AgentContext {
-  const createdAt = Date.parse(session.createdAt) || Date.now();
-  return {
-    agentId: `session-${session.id.slice(0, 8)}`,
-    projectId: session.projectId,
-    autonomyLevel: 1,
-    tasksHandled: 0,
-    uptimeMinutes: Math.round((Date.now() - createdAt) / 60_000),
-    recentAudit: [],
-    memoryStats: { total: 0, byCategory: {} },
-    linkedChannels: [],
-  };
-}
-
 /**
  * Send an inbound message into a session and return the AI response.
- * Identical AI invocation path as the legacy `POST /sessions/:id/send`
- * handler. Channel bridges call this directly; the HTTP route is a
- * thin wrapper that also handles SSE streaming.
+ * Delegates to the chat loop so both call sites — the HTTP route
+ * (`POST /sessions/:id/send`) and channel webhook bridges (WhatsApp
+ * inbound, etc.) — converge on the same agent reasoning path. Without
+ * this, the HTTP route would use the real chat loop while inbound
+ * channel traffic would silently hit a different code path.
  */
 export async function sendInboundMessage(
   session: Session,
   message: string,
 ): Promise<SendResult> {
-  const ctx = makeAgentContext(session);
   const trimmed = message.trim() || "hello";
-  const aiText = await generateSmartResponse(trimmed, ctx);
-  const responseText =
-    aiText ?? "Message received. Set ANTHROPIC_API_KEY for AI responses.";
-  return {
-    message: responseText,
-    tool_calls: [],
-    iterations: 1,
-  };
+  return runChatLoop(trimmed, session);
 }

@@ -18,7 +18,13 @@ import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { createLogger } from "../observability/logger.js";
 import { translateMcpResult } from "./result-translator.js";
-import { MCP_ERROR_CODES, type McpServerSpec, type ToolResult } from "./types.js";
+import {
+  MCP_ERROR_CODES,
+  type ListToolsResult,
+  type McpServerSpec,
+  type McpToolDescriptor,
+  type ToolResult,
+} from "./types.js";
 
 const log = createLogger("mcp-bridge");
 
@@ -33,6 +39,7 @@ export interface McpRegistryLike {
 }
 
 interface PendingCall {
+  kind: "tools/call";
   resolve: (result: ToolResult) => void;
   timer: NodeJS.Timeout | null;
   baseFields: Pick<
@@ -42,9 +49,19 @@ interface PendingCall {
   startedAt: number;
 }
 
+interface PendingList {
+  kind: "tools/list";
+  resolve: (result: ListToolsResult) => void;
+  timer: NodeJS.Timeout | null;
+  serverId: string;
+  startedAt: number;
+}
+
+type PendingEntry = PendingCall | PendingList;
+
 interface ChildHandle {
   child: ChildProcessWithoutNullStreams;
-  pending: Map<string, PendingCall>;
+  pending: Map<string, PendingEntry>;
   pendingOrder: string[];
   stdoutBuf: string;
   stderrBuf: string;
@@ -75,6 +92,67 @@ function buildFailure(
     duration: Date.now() - startedAt,
     ...base,
   };
+}
+
+function buildListFailure(
+  serverId: string,
+  errorCode: string,
+  startedAt: number,
+): ListToolsResult {
+  return {
+    success: false,
+    tools: [],
+    error: errorCode,
+    server: serverId,
+    duration: Date.now() - startedAt,
+  };
+}
+
+function rejectPending(
+  entry: PendingEntry,
+  errorCode: string,
+  startedAtOverride?: number,
+): void {
+  if (entry.kind === "tools/call") {
+    const startedAt = startedAtOverride ?? entry.startedAt;
+    entry.resolve(buildFailure(entry.baseFields, errorCode, startedAt));
+    return;
+  }
+  const startedAt = startedAtOverride ?? entry.startedAt;
+  entry.resolve(buildListFailure(entry.serverId, errorCode, startedAt));
+}
+
+/**
+ * Normalise the JSON-RPC `result` payload of a `tools/list` reply.
+ *
+ * Canonical MCP servers reply with `{ tools: [{ name, description?,
+ * inputSchema? }] }`. Returns `null` when the shape is missing the
+ * `tools` array — callers surface that as `unknown_response_shape`.
+ */
+function parseToolsListResult(result: unknown): McpToolDescriptor[] | null {
+  if (!result || typeof result !== "object") return null;
+  const raw = (result as { tools?: unknown }).tools;
+  if (!Array.isArray(raw)) return null;
+  const out: McpToolDescriptor[] = [];
+  for (const entry of raw) {
+    if (!entry || typeof entry !== "object") continue;
+    const e = entry as {
+      name?: unknown;
+      description?: unknown;
+      inputSchema?: unknown;
+      input_schema?: unknown;
+    };
+    if (typeof e.name !== "string" || e.name.length === 0) continue;
+    const tool: McpToolDescriptor = { name: e.name };
+    if (typeof e.description === "string") tool.description = e.description;
+    // Tolerate either `inputSchema` (MCP canonical) or `input_schema`
+    // (Anthropic-style snake_case) — the chat-loop's tool catalog
+    // normalises into the Anthropic shape downstream either way.
+    if (e.inputSchema !== undefined) tool.inputSchema = e.inputSchema;
+    else if (e.input_schema !== undefined) tool.inputSchema = e.input_schema;
+    out.push(tool);
+  }
+  return out;
 }
 
 export class McpProcessManager {
@@ -113,29 +191,7 @@ export class McpProcessManager {
       return buildFailure(baseFields, MCP_ERROR_CODES.unknown_server, startedAt);
     }
 
-    const key = buildKey(sessionId, serverId);
-    let handle = this.#children.get(key);
-    if (!handle) {
-      const env = { ...process.env, ...(spec.env ?? {}) };
-      const child = spawn(spec.command[0], spec.command.slice(1), {
-        env,
-        stdio: ["pipe", "pipe", "pipe"],
-      });
-      handle = {
-        child,
-        pending: new Map(),
-        pendingOrder: [],
-        stdoutBuf: "",
-        stderrBuf: "",
-        nextRpcId: 1,
-        serverId,
-        sessionId,
-        exited: false,
-      };
-      this.#children.set(key, handle);
-      this.#wireChild(handle);
-    }
-
+    const handle = this.#ensureChild(sessionId, serverId, spec);
     const id = String(handle.nextRpcId++);
     const request = {
       jsonrpc: "2.0",
@@ -149,30 +205,29 @@ export class McpProcessManager {
       const timer =
         timeoutMs > 0
           ? setTimeout(() => {
-              const entry = handle!.pending.get(id);
+              const entry = handle.pending.get(id);
               if (!entry) return;
-              this.#removePending(handle!, id);
-              entry.resolve(
-                buildFailure(baseFields, MCP_ERROR_CODES.timeout, startedAt),
-              );
+              this.#removePending(handle, id);
+              rejectPending(entry, MCP_ERROR_CODES.timeout, startedAt);
             }, timeoutMs)
           : null;
 
-      handle!.pending.set(id, {
+      handle.pending.set(id, {
+        kind: "tools/call",
         resolve,
         timer,
         baseFields,
         startedAt,
       });
-      handle!.pendingOrder.push(id);
+      handle.pendingOrder.push(id);
 
       try {
-        handle!.child.stdin.write(JSON.stringify(request) + "\n");
+        handle.child.stdin.write(JSON.stringify(request) + "\n");
       } catch (err) {
         // Write failed (e.g. child closed stdin). Surface as parse_error
         // so callers see a structured failure; the cache entry will be
         // evicted by the exit handler.
-        this.#removePending(handle!, id);
+        this.#removePending(handle, id);
         if (timer) clearTimeout(timer);
         log.warn("stdin write failed", {
           serverId,
@@ -184,6 +239,97 @@ export class McpProcessManager {
         );
       }
     });
+  }
+
+  /**
+   * Forward an MCP `tools/list` JSON-RPC call to the child for
+   * `(sessionId, serverId)`. Reuses the same child cached for `call`,
+   * so a session that has already dispatched a tool gets its list back
+   * from the running process — no second spawn.
+   */
+  async listTools(
+    sessionId: string,
+    serverId: string,
+    opts?: { timeoutMs?: number; specOverride?: McpServerSpec },
+  ): Promise<ListToolsResult> {
+    const startedAt = Date.now();
+    const spec = opts?.specOverride ?? this.#registry.resolve(serverId);
+    if (!spec) {
+      return buildListFailure(serverId, MCP_ERROR_CODES.unknown_server, startedAt);
+    }
+
+    const handle = this.#ensureChild(sessionId, serverId, spec);
+    const id = String(handle.nextRpcId++);
+    const request = {
+      jsonrpc: "2.0",
+      id,
+      method: "tools/list",
+      params: {},
+    };
+
+    return new Promise<ListToolsResult>((resolve) => {
+      const timeoutMs = opts?.timeoutMs ?? this.#defaultTimeoutMs;
+      const timer =
+        timeoutMs > 0
+          ? setTimeout(() => {
+              const entry = handle.pending.get(id);
+              if (!entry) return;
+              this.#removePending(handle, id);
+              rejectPending(entry, MCP_ERROR_CODES.timeout, startedAt);
+            }, timeoutMs)
+          : null;
+
+      handle.pending.set(id, {
+        kind: "tools/list",
+        resolve,
+        timer,
+        serverId,
+        startedAt,
+      });
+      handle.pendingOrder.push(id);
+
+      try {
+        handle.child.stdin.write(JSON.stringify(request) + "\n");
+      } catch (err) {
+        this.#removePending(handle, id);
+        if (timer) clearTimeout(timer);
+        log.warn("stdin write failed (tools/list)", {
+          serverId,
+          sessionId,
+          err: err instanceof Error ? err.message : String(err),
+        });
+        resolve(buildListFailure(serverId, MCP_ERROR_CODES.child_exit, startedAt));
+      }
+    });
+  }
+
+  #ensureChild(
+    sessionId: string,
+    serverId: string,
+    spec: McpServerSpec,
+  ): ChildHandle {
+    const key = buildKey(sessionId, serverId);
+    let handle = this.#children.get(key);
+    if (handle) return handle;
+    const env = { ...process.env, ...(spec.env ?? {}) };
+    const child = spawn(spec.command[0], spec.command.slice(1), {
+      env,
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+    handle = {
+      child,
+      pending: new Map(),
+      pendingOrder: [],
+      stdoutBuf: "",
+      stderrBuf: "",
+      nextRpcId: 1,
+      serverId,
+      sessionId,
+      exited: false,
+    };
+    this.#children.set(key, handle);
+    this.#wireChild(handle);
+    return handle;
   }
 
   async closeSession(sessionId: string): Promise<void> {
@@ -271,13 +417,7 @@ export class McpProcessManager {
         if (!entry) continue;
         if (entry.timer) clearTimeout(entry.timer);
         handle.pending.delete(id);
-        entry.resolve(
-          buildFailure(
-            entry.baseFields,
-            MCP_ERROR_CODES.child_exit,
-            entry.startedAt,
-          ),
-        );
+        rejectPending(entry, MCP_ERROR_CODES.child_exit);
       }
       handle.pendingOrder = [];
 
@@ -347,13 +487,34 @@ export class McpProcessManager {
     const obj = parsed as { result?: unknown; error?: unknown };
     if (obj.error !== undefined) {
       // JSON-RPC error envelope — surface as structured failure.
-      entry.resolve(
-        buildFailure(
-          entry.baseFields,
-          MCP_ERROR_CODES.child_exit,
-          entry.startedAt,
-        ),
-      );
+      rejectPending(entry, MCP_ERROR_CODES.child_exit);
+      return;
+    }
+
+    if (entry.kind === "tools/list") {
+      const tools = parseToolsListResult(obj.result);
+      if (tools === null) {
+        log.warn("mcp tools/list response shape unknown", {
+          serverId: handle.serverId,
+          sessionId: handle.sessionId,
+          pid: handle.child.pid,
+        });
+        entry.resolve(
+          buildListFailure(
+            entry.serverId,
+            MCP_ERROR_CODES.unknown_response_shape,
+            entry.startedAt,
+          ),
+        );
+        return;
+      }
+      entry.resolve({
+        success: true,
+        tools,
+        error: "",
+        server: entry.serverId,
+        duration: Date.now() - entry.startedAt,
+      });
       return;
     }
 
@@ -380,9 +541,7 @@ export class McpProcessManager {
     }
     this.#removePending(handle, id);
     if (entry.timer) clearTimeout(entry.timer);
-    entry.resolve(
-      buildFailure(entry.baseFields, errorCode, entry.startedAt),
-    );
+    rejectPending(entry, errorCode);
   }
 
   #removePending(handle: ChildHandle, id: string): void {

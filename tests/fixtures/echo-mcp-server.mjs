@@ -117,6 +117,34 @@ async function handleLine(line) {
     // Non-JSON input — ignore, do not echo back garbage.
     return;
   }
+  if (req.method === "tools/list") {
+    if (delayMs > 0) await sleep(delayMs);
+    process.stdout.write(
+      JSON.stringify({
+        jsonrpc: "2.0",
+        id: req.id,
+        result: {
+          tools: [
+            {
+              name: "ping",
+              description: "Echo the input back to the caller.",
+              inputSchema: {
+                type: "object",
+                properties: { message: { type: "string" } },
+              },
+            },
+            {
+              name: "tools/echo",
+              description: "Echo arbitrary JSON input.",
+              inputSchema: { type: "object" },
+            },
+          ],
+        },
+      }) + "\n",
+    );
+    return;
+  }
+
   if (req.method !== "tools/call") {
     // Not a tools/call — reply with method-not-found.
     if (delayMs > 0) await sleep(delayMs);

@@ -38,6 +38,22 @@ export const mcpBridge = {
     knownSessions.add(sessionId);
     return getBridge().call(sessionId, serverId, tool, input, opts);
   },
+  /**
+   * Forward an MCP `tools/list` call to the child for
+   * `(sessionId, serverId)`. Used by the chat loop to discover what
+   * tools each connected MCP server exposes so the LLM call can carry a
+   * concrete `tools[]` array. Reuses the cached child the same way
+   * `call` does — no second spawn when both methods target the same
+   * server within one session.
+   */
+  listTools(
+    sessionId: string,
+    serverId: string,
+    opts?: { timeoutMs?: number; specOverride?: McpServerSpec },
+  ): ReturnType<McpProcessManager["listTools"]> {
+    knownSessions.add(sessionId);
+    return getBridge().listTools(sessionId, serverId, opts);
+  },
   async closeSession(sessionId: string): Promise<void> {
     knownSessions.delete(sessionId);
     if (!bridgeInstance) return;
