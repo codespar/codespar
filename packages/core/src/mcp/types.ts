@@ -6,6 +6,34 @@
  * etc.) lives in the implementation files and is not re-exported.
  */
 
+/**
+ * Tool descriptor as returned by an MCP server's `tools/list` JSON-RPC
+ * method. Mirrors the canonical MCP spec shape — `name` is the tool id,
+ * `description` is the human-readable summary, `inputSchema` is the
+ * JSON Schema describing the tool's accepted input.
+ *
+ * Consumers (the chat-loop tool catalog) take this shape and re-emit it
+ * to the LLM in the provider-specific tools[] format.
+ */
+export interface McpToolDescriptor {
+  name: string;
+  description?: string;
+  inputSchema?: unknown;
+}
+
+/**
+ * Wire shape returned by `mcpBridge.listTools` — same field set as the
+ * MCP `tools/list` response plus structured failure surfacing so callers
+ * can render a partial catalog when a single server fails.
+ */
+export interface ListToolsResult {
+  success: boolean;
+  tools: McpToolDescriptor[];
+  error: string;
+  server: string;
+  duration: number;
+}
+
 /** A single MCP server entry — drives the spawn arguments verbatim. */
 export interface McpServerSpec {
   /**

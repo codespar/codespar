@@ -28,17 +28,24 @@
 import { randomUUID, createHash, timingSafeEqual } from "node:crypto";
 import type { RouteFn, ServerContext } from "./types.js";
 import { getAllAgentMetadata } from "../../agents/agent-registry.js";
+import {
+  runChatLoop,
+  runChatLoopStream,
+  type StreamEvent,
+} from "../../chat-loop/index.js";
 import { mcpBridge } from "../../mcp/index.js";
 import type { McpServerSpec } from "../../mcp/index.js";
+import { createLogger } from "../../observability/logger.js";
 import {
   clearSessionStore as clearCoreStore,
   closeSessionById,
   createSessionForHttp,
   getHttpSessionMap,
   getSessionById,
-  sendInboundMessage,
 } from "../../sessions/core.js";
 import type { Session } from "../../storage/types.js";
+
+const sendLog = createLogger("sessions:send");
 
 /**
  * Validate the optional `server_specs` body field on POST /sessions.
@@ -287,15 +294,17 @@ export function registerSessionRoutes(route: RouteFn, ctx: ServerContext | null 
     };
   });
 
-  // POST /sessions/:id/send — send a message, responds with JSON or SSE
+  // POST /sessions/:id/send — send a message, responds with JSON or SSE.
   //
   // JSON mode (Accept: application/json or default):
-  //   Returns SendResult immediately after the agent responds.
+  //   Returns SendResult once the chat loop terminates. SendResult is
+  //   `{ message, tool_calls, iterations }` where `tool_calls` lists every
+  //   MCP dispatch the agent performed during this send.
   //
   // SSE mode (Accept: text/event-stream):
-  //   Streams user_message → assistant_text → done events. When
-  //   ANTHROPIC_API_KEY is unset the assistant_text is a fallback string
-  //   so the contract test passes without any credentials.
+  //   Streams events in this order:
+  //     user_message → (assistant_text | tool_use | tool_result)* → done
+  //   On failure the terminal event is `error` instead of `done`.
   route("post", "/sessions/:id/send", async (request: any, reply: any) => {
     if (!checkBearerAuth(request)) {
       return reply.status(401).send({ error: "Missing or invalid Bearer token" });
@@ -311,8 +320,6 @@ export function registerSessionRoutes(route: RouteFn, ctx: ServerContext | null 
     const message = typeof body?.message === "string" ? body.message.trim() : "";
     const accept = (request.headers["accept"] as string | undefined) ?? "";
 
-    const sendResult = await sendInboundMessage(session, message);
-
     if (accept.includes("text/event-stream")) {
       reply.raw.writeHead(200, {
         "Content-Type": "text/event-stream",
@@ -324,15 +331,29 @@ export function registerSessionRoutes(route: RouteFn, ctx: ServerContext | null 
         reply.raw.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
       };
 
-      emit("user_message", { content: message });
-      emit("assistant_text", { content: sendResult.message, iteration: 1 });
-      emit("done", sendResult);
-
-      reply.raw.end();
+      try {
+        for await (const ev of runChatLoopStream(message, session)) {
+          const { type, ...rest } = ev as StreamEvent & Record<string, unknown>;
+          emit(type, rest);
+        }
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        sendLog.error("chat loop stream failed", { sessionId: id, error: msg });
+        emit("error", { message: msg });
+      } finally {
+        reply.raw.end();
+      }
       return reply;
     }
 
-    return sendResult;
+    try {
+      const result = await runChatLoop(message, session);
+      return result;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      sendLog.error("chat loop failed", { sessionId: id, error: msg });
+      return reply.status(500).send({ error: "chat_loop_failed", message: msg });
+    }
   });
 
   // GET /sessions/:id/connections — list connections associated with this session

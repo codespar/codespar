@@ -7,7 +7,13 @@
  * land as a drop-in replacement.
  */
 
-export type { McpServerSpec, ToolResult, McpErrorCode } from "./types.js";
+export type {
+  ListToolsResult,
+  McpErrorCode,
+  McpServerSpec,
+  McpToolDescriptor,
+  ToolResult,
+} from "./types.js";
 export { MCP_ERROR_CODES } from "./types.js";
 export { McpServerRegistry } from "./registry.js";
 export { mcpBridge, clearMcpBridge } from "./bridge.js";
