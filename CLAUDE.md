@@ -199,7 +199,18 @@ npm run db:generate && npm run db:migrate    # from packages/core/
 2. **Plan** — for schema changes, draft the migration first and check the backfill path + rollout (nullable → NOT NULL in a later migration).
 3. **Implement** — small diffs; run `npx tsc --noEmit` after each significant edit.
 4. **Verify** — `npx vitest run`. Integration tests use Testcontainers for Postgres + Redis.
-5. **Commit** — descriptive commit message.
+5. **Live LLM smoke** (REQUIRED before pushing changes that touch the chat loop in `packages/core/src/chat-loop/`, the MCP bridge surface, or anything that affects the Anthropic SDK request shape). The unit + integration tests in this repo use a stub Anthropic client and the in-test mock at `packages/core/src/server/routes/__tests__/sessions-send-chat-loop.test.ts` — none of them enforce Anthropic's actual tool-name regex or model-id validity. To catch that class of regression, run the live smoke in the consumer repo against your local fix branch:
+
+   ```bash
+   # In codespar-core (sibling clone):
+   cd ../codespar-core
+   ANTHROPIC_API_KEY=sk-ant-... CODESPAR_RUNTIME_DIR=<absolute path to this codespar checkout> \
+     (cd examples/pix-nfse-skeleton && npm run validate:live) && \
+     (cd examples/nfse-from-natural-language && npm run validate:live)
+   ```
+
+   Costs a few cents per run. Not wired into CI here or in codespar-core — too expensive and too probabilistic for every PR — but mandatory before pushing chat-loop changes. The live smoke is what caught the tool-name `/` separator bug (`tools.0.custom.name` regex violation) and the `claude-3-5-sonnet-latest` model-id bug (404 not_found_error); both passed every unit + integration test unchallenged.
+6. **Commit** — descriptive commit message.
 
 ### Git Workflow
 - `main` — stable, tested code only

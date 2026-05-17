@@ -165,7 +165,7 @@ describe("POST /sessions/:id/send (chat loop)", () => {
           {
             type: "tool_use",
             id: "tu_int_1",
-            name: "echo/tools/echo",
+            name: "echo__ping",
             input: { hello: "loop" },
           },
         ],
@@ -196,7 +196,7 @@ describe("POST /sessions/:id/send (chat loop)", () => {
     expect(Array.isArray(body.tool_calls)).toBe(true);
     expect(body.tool_calls.length).toBeGreaterThanOrEqual(1);
     expect(body.tool_calls[0]).toMatchObject({
-      tool_name: "echo/tools/echo",
+      tool_name: "echo__ping",
       server_id: "echo",
       status: "success",
     });
@@ -208,7 +208,7 @@ describe("POST /sessions/:id/send (chat loop)", () => {
       {
         stop_reason: "tool_use",
         content: [
-          { type: "tool_use", id: "tu_sse_1", name: "echo/tools/echo", input: { x: 1 } },
+          { type: "tool_use", id: "tu_sse_1", name: "echo__ping", input: { x: 1 } },
         ],
       },
       {

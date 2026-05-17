@@ -49,7 +49,7 @@ function stubBridge(
 }
 
 describe("buildToolCatalog", () => {
-  it("namespaces tool names as serverId/toolName for canonical MCP shape", async () => {
+  it("namespaces tool names as serverId__toolName for Anthropic-compatible shape", async () => {
     const session = makeSession(["nuvem-fiscal"]);
     const bridge = stubBridge({
       "nuvem-fiscal": {
@@ -72,7 +72,9 @@ describe("buildToolCatalog", () => {
     });
     const tools = await buildToolCatalog(session, bridge);
     expect(tools).toHaveLength(1);
-    expect(tools[0].name).toBe("nuvem-fiscal/create_nfse");
+    expect(tools[0].name).toBe("nuvem-fiscal__create_nfse");
+    // Confirm the encoded name still matches Anthropic's tools.*.custom.name regex.
+    expect(tools[0].name).toMatch(/^[a-zA-Z0-9_-]{1,128}$/);
     expect(tools[0].description).toBe("Issue an NFS-e");
     expect(tools[0].input_schema.type).toBe("object");
     expect(tools[0].input_schema.required).toEqual(["servico"]);
@@ -98,7 +100,7 @@ describe("buildToolCatalog", () => {
     });
     const tools = await buildToolCatalog(session, bridge);
     const names = tools.map((t) => t.name).sort();
-    expect(names).toEqual(["a/ping", "b/echo", "b/pong"]);
+    expect(names).toEqual(["a__ping", "b__echo", "b__pong"]);
   });
 
   it("skips servers that fail to list tools (partial catalog)", async () => {
@@ -121,7 +123,7 @@ describe("buildToolCatalog", () => {
     });
     const tools = await buildToolCatalog(session, bridge);
     expect(tools).toHaveLength(1);
-    expect(tools[0].name).toBe("good/ok");
+    expect(tools[0].name).toBe("good__ok");
   });
 
   it("returns an empty array when the session has no servers", async () => {
@@ -149,23 +151,37 @@ describe("buildToolCatalog", () => {
 });
 
 describe("splitNamespacedToolName", () => {
-  it("splits the canonical serverId/toolName form", () => {
-    expect(splitNamespacedToolName("nuvem-fiscal/create_nfse")).toEqual({
+  it("splits the canonical serverId__toolName form", () => {
+    expect(splitNamespacedToolName("nuvem-fiscal__create_nfse")).toEqual({
       serverId: "nuvem-fiscal",
       toolName: "create_nfse",
     });
   });
 
-  it("splits only on the first slash so MCP tools with `/` in their name survive", () => {
-    expect(splitNamespacedToolName("echo/tools/echo")).toEqual({
+  it("splits on the first `__` so MCP tool names with embedded `__` survive", () => {
+    // First `__` wins — server `echo`, tool `nested__bar`.
+    expect(splitNamespacedToolName("echo__nested__bar")).toEqual({
       serverId: "echo",
-      toolName: "tools/echo",
+      toolName: "nested__bar",
     });
   });
 
-  it("returns null for names without a slash, or with a leading/trailing slash", () => {
+  it("preserves single underscores inside server IDs and tool names", () => {
+    // Hyphens in server IDs and single underscores in tool names round-trip cleanly.
+    expect(splitNamespacedToolName("nuvem-fiscal__create_nfse")).toEqual({
+      serverId: "nuvem-fiscal",
+      toolName: "create_nfse",
+    });
+    expect(splitNamespacedToolName("z-api__send_text")).toEqual({
+      serverId: "z-api",
+      toolName: "send_text",
+    });
+  });
+
+  it("returns null for names without `__`, or with a leading/trailing `__`", () => {
     expect(splitNamespacedToolName("plain")).toBeNull();
-    expect(splitNamespacedToolName("/leading")).toBeNull();
-    expect(splitNamespacedToolName("trailing/")).toBeNull();
+    expect(splitNamespacedToolName("single_underscore_only")).toBeNull();
+    expect(splitNamespacedToolName("__leading")).toBeNull();
+    expect(splitNamespacedToolName("trailing__")).toBeNull();
   });
 });

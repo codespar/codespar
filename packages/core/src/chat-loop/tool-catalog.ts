@@ -5,9 +5,14 @@
  * connected MCP server (`session.metadata.servers`), call `tools/list`
  * per server, and
  * return an Anthropic-shape `tools[]` array. Tool names are namespaced
- * as `${serverId}/${toolName}` so the loop's dispatch path can recover
+ * as `${serverId}__${toolName}` so the loop's dispatch path can recover
  * the routing from the LLM's `tool_use.name` field without an extra
- * lookup.
+ * lookup. The double-underscore separator is chosen because Anthropic's
+ * tool-name regex (`^[a-zA-Z0-9_-]{1,128}$`) forbids `/`, and because
+ * single `-` collides with server IDs that contain hyphens
+ * (`nuvem-fiscal`, `z-api`) while single `_` collides with MCP tool
+ * names that use snake_case (`create_nfse`, `send_text`). Double `_` is
+ * unambiguous in both directions.
  *
  * Servers that fail to list (process crash, unknown_server, parse
  * error) are skipped with a structured warning — the loop continues
@@ -102,7 +107,7 @@ export async function buildToolCatalog(
     }
     for (const tool of result.tools) {
       tools.push({
-        name: `${serverId}/${tool.name}`,
+        name: `${serverId}__${tool.name}`,
         ...(tool.description !== undefined ? { description: tool.description } : {}),
         input_schema: normaliseInputSchema(tool.inputSchema),
       });
@@ -113,19 +118,21 @@ export async function buildToolCatalog(
 
 /**
  * Split a namespaced tool name back into `(serverId, toolName)`. The
- * loop produces names with `${serverId}/${toolName}`; the dispatch
+ * loop produces names with `${serverId}__${toolName}`; the dispatch
  * path uses this to route through the MCP bridge.
  *
- * Splits on the first `/` only — MCP tool names like `tools/echo`
- * survive the round-trip intact.
+ * Splits on the first `__` only — MCP tool names that contain `_`
+ * (snake_case like `create_nfse`) survive the round-trip intact, as do
+ * tool names that happen to contain `__` themselves (the first `__`
+ * boundary wins).
  */
 export function splitNamespacedToolName(
   name: string,
 ): { serverId: string; toolName: string } | null {
-  const slashIdx = name.indexOf("/");
-  if (slashIdx <= 0 || slashIdx === name.length - 1) return null;
+  const sepIdx = name.indexOf("__");
+  if (sepIdx <= 0 || sepIdx >= name.length - 2) return null;
   return {
-    serverId: name.slice(0, slashIdx),
-    toolName: name.slice(slashIdx + 1),
+    serverId: name.slice(0, sepIdx),
+    toolName: name.slice(sepIdx + 2),
   };
 }
