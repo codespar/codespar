@@ -121,7 +121,7 @@ describe("runChatLoop", () => {
         stop_reason: "tool_use",
         content: [
           { type: "text", text: "calling tool" },
-          { type: "tool_use", id: "tu_1", name: "echo/ping", input: { hi: 1 } },
+          { type: "tool_use", id: "tu_1", name: "echo__ping", input: { hi: 1 } },
         ],
       },
       {
@@ -140,7 +140,7 @@ describe("runChatLoop", () => {
     expect(result.message).toBe("all done");
     expect(result.tool_calls).toHaveLength(1);
     expect(result.tool_calls[0]).toMatchObject({
-      tool_name: "echo/ping",
+      tool_name: "echo__ping",
       server_id: "echo",
       status: "success",
       input: { hi: 1 },
@@ -173,7 +173,7 @@ describe("runChatLoop", () => {
       stop_reason: "tool_use",
       content: [
         { type: "text", text: "thinking..." },
-        { type: "tool_use", id: "t", name: "echo/ping", input: {} },
+        { type: "tool_use", id: "t", name: "echo__ping", input: {} },
       ],
     };
     const { client, calls } = stubAnthropic([looper, looper, looper, looper]);
@@ -222,7 +222,7 @@ describe("runChatLoop", () => {
       {
         stop_reason: "tool_use",
         content: [
-          { type: "tool_use", id: "tu1", name: "echo/ping", input: {} },
+          { type: "tool_use", id: "tu1", name: "echo__ping", input: {} },
         ],
       },
       {
@@ -359,7 +359,7 @@ describe("runChatLoopStream", () => {
       {
         stop_reason: "tool_use",
         content: [
-          { type: "tool_use", id: "tu1", name: "echo/ping", input: { a: 1 } },
+          { type: "tool_use", id: "tu1", name: "echo__ping", input: { a: 1 } },
         ],
       },
       {

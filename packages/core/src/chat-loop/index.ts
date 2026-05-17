@@ -59,9 +59,12 @@ const log = createLogger("chat-loop");
  *  buggy or malicious tool can't lock a session in a loop. */
 export const MAX_LOOP_ITERATIONS = 8;
 
-/** Default model — kept current with the latest stable Sonnet alias.
- *  Override via `CODESPAR_CHAT_MODEL`. */
-const DEFAULT_MODEL = "claude-3-5-sonnet-latest";
+/** Default model — current stable Sonnet (Claude 4.6 family).
+ *  Override via `CODESPAR_CHAT_MODEL` to pin a specific version or
+ *  switch to Haiku / Opus. The Anthropic `*-latest` alias is not
+ *  accepted by the API for every model family, so we pin an explicit
+ *  model id here instead of relying on it. */
+const DEFAULT_MODEL = "claude-sonnet-4-6";
 const DEFAULT_MAX_TOKENS = 4096;
 
 /**
