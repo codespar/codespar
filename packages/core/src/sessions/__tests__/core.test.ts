@@ -12,6 +12,17 @@
  */
 
 import { describe, it, expect, beforeEach, vi } from "vitest";
+
+// Mock the chat-loop before importing core.js so sendInboundMessage's
+// delegation can be observed without a real Anthropic call.
+vi.mock("../../chat-loop/index.js", () => ({
+  runChatLoop: vi.fn(async (message: string) => ({
+    message: `echo:${message}`,
+    tool_calls: [],
+    iterations: 1,
+  })),
+}));
+
 import {
   clearSessionStore,
   closeSessionById,
@@ -24,6 +35,7 @@ import {
   ttlCutoffIso,
   DEFAULT_SESSION_IDLE_TTL_DAYS,
 } from "../core.js";
+import { runChatLoop } from "../../chat-loop/index.js";
 import type { Session, StorageProvider } from "../../storage/types.js";
 
 // Minimal StorageProvider mock — only the methods sessions/core uses.
@@ -261,29 +273,38 @@ describe("sessions/core — HTTP-route surface", () => {
 });
 
 describe("sessions/core — sendInboundMessage", () => {
-  it("returns a SendResult with non-empty fallback message when ANTHROPIC_API_KEY is unset", async () => {
-    const prior = process.env.ANTHROPIC_API_KEY;
-    delete process.env.ANTHROPIC_API_KEY;
-    try {
-      const session: Session = {
-        id: "sess-msg",
-        orgId: "org-1",
-        projectId: "prj_1",
-        channelType: "whatsapp",
-        channelUserId: "user-A",
-        status: "active",
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-        metadata: {},
-      };
-      const result = await sendInboundMessage(session, "olá");
-      expect(result.iterations).toBe(1);
-      expect(result.tool_calls).toEqual([]);
-      expect(typeof result.message).toBe("string");
-      expect(result.message.length).toBeGreaterThan(0);
-    } finally {
-      if (prior !== undefined) process.env.ANTHROPIC_API_KEY = prior;
-    }
+  it("delegates to runChatLoop so HTTP and channel-bridge call sites share the same agent path", async () => {
+    const session: Session = {
+      id: "sess-msg",
+      orgId: "org-1",
+      projectId: "prj_1",
+      channelType: "whatsapp",
+      channelUserId: "user-A",
+      status: "active",
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      metadata: {},
+    };
+    const result = await sendInboundMessage(session, "olá");
+    expect(runChatLoop).toHaveBeenCalledWith("olá", session);
+    expect(result.message).toBe("echo:olá");
+  });
+
+  it("falls back to 'hello' when the inbound message is empty so the chat loop never sees an empty user turn", async () => {
+    const session: Session = {
+      id: "sess-msg-empty",
+      orgId: "org-1",
+      projectId: "prj_1",
+      channelType: "whatsapp",
+      channelUserId: "user-B",
+      status: "active",
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      metadata: {},
+    };
+    const result = await sendInboundMessage(session, "   ");
+    expect(runChatLoop).toHaveBeenCalledWith("hello", session);
+    expect(result.message).toBe("echo:hello");
   });
 });
 
