@@ -128,6 +128,61 @@ bash scripts/validate-bridge.sh
 The bridge source itself has no env-var branching — every code path
 serves OSS demos, CI integration, and production identically.
 
+## Session mocks (test mode)
+
+The session API accepts an optional `mocks` field on `POST /sessions`.
+Declared mocks intercept tool dispatch before the MCP bridge, so an
+agent author can run integration tests without ever touching a real
+upstream provider. The wire shape, error envelopes, and counter
+semantics match the managed runtime byte-for-byte, so the same agent
+code runs unchanged in either place.
+
+Two value shapes, keyed by canonical `server/tool` form:
+
+```bash
+curl -X POST http://localhost:3000/sessions \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "user_id": "u",
+    "servers": ["asaas"],
+    "mocks": {
+      "asaas/create_payment": { "id": "pay_test_42", "status": "PENDING" },
+      "asaas/get_payment": [
+        { "id": "pay_test_42", "status": "PENDING" },
+        { "id": "pay_test_42", "status": "CONFIRMED" }
+      ]
+    }
+  }'
+```
+
+- A non-null **object** is a single-shot mock — every matching call
+  returns the same payload.
+- An **array of objects** is a stateful sequence — call N returns
+  entry N, the counter advances on success only, and the (N+1)th call
+  past the array length returns `mocks_exhausted`.
+
+**Strict-mode is structural.** A non-empty `mocks` field puts the
+session in strict-mode: any tool call whose canonical name has no
+entry returns `tool_not_mocked` instead of falling through to a real
+MCP server. A typo in `asaas/create_paymnet` or an unregistered server
+prefix surfaces the same way — fail loud, never leak to a live
+provider. Sessions created without the field behave exactly as before.
+
+The four error envelopes:
+
+| Code | When | HTTP status |
+|------|------|-------------|
+| `mocks_invalid` | `mocks` field fails shape validation at create. Carries an RFC 6901 `field` pointer. | 400 |
+| `mocks_payload_too_large` | Stringified `mocks` exceeds 64 KiB. | 413 |
+| `tool_not_mocked` | Strict-mode session, tool has no entry. | 422 |
+| `mocks_exhausted` | Stateful array counter already at the cap. | 422 |
+
+See [`docs/test-mode.md`](./docs/test-mode.md) for the longer write-up
+(storage model, dispatcher seam, chat-loop integration, how to write
+tests). A runnable end-to-end script lives at
+[`examples/session-mocks.sh`](./examples/session-mocks.sh).
+
 ## What's in the box
 
 - **Runtime**: agent supervisor, message router, task queue, vector

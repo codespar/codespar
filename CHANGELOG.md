@@ -4,6 +4,11 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Added
+- Session mocks API: optional `mocks` field on `POST /sessions` that intercepts tool dispatch before the MCP bridge, returning scripted outputs instead of calling a real upstream provider. Supports single-shot (object) and stateful (array) entries keyed by canonical `server/tool` form. A non-empty `mocks` field puts the session in strict-mode — any tool call without a matching entry returns `tool_not_mocked` rather than leaking to a live provider. Four error envelopes: `mocks_invalid` (400, with RFC 6901 field pointer), `mocks_payload_too_large` (413, 64 KiB cap), `tool_not_mocked` (422), `mocks_exhausted` (422). Applies equally to direct `/execute` calls and chat-loop tool dispatch via `/send`. Counters persist for channel-bridge sessions and live in-memory for HTTP sessions. See [`docs/test-mode.md`](docs/test-mode.md) and [`examples/session-mocks.sh`](examples/session-mocks.sh). ([#113](https://github.com/codespar/codespar/pull/113))
+
 ## [0.4.0] - 2026-03-22
 
 ### Added
