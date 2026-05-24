@@ -24,7 +24,7 @@
  */
 
 import { randomUUID } from "node:crypto";
-import type { Session, StorageProvider } from "../storage/types.js";
+import type { MockValue, Session, StorageProvider } from "../storage/types.js";
 import type { McpServerSpec } from "../mcp/types.js";
 import { runChatLoop } from "../chat-loop/index.js";
 
@@ -38,9 +38,48 @@ export const HTTP_CHANNEL_TYPE = "http" as const;
  */
 const httpSessions = new Map<string, Session>();
 
-/** Exported for test teardown — clears the in-memory store. */
+/**
+ * Per-HTTP-session per-tool consume counters. The persistent counter
+ * mirror lives on the StorageProvider; HTTP-route sessions never reach
+ * storage so we keep an in-process map indexed by `${sessionId}::${tool}`.
+ * Lifetime is tied to the process the same way `httpSessions` is.
+ */
+const httpSessionToolCallCounts = new Map<string, number>();
+
+function counterKey(sessionId: string, toolName: string): string {
+  return `${sessionId}::${toolName}`;
+}
+
+/** Exported for test teardown — clears the in-memory session map AND
+ *  the in-memory counter mirror. */
 export function clearSessionStore(): void {
   httpSessions.clear();
+  httpSessionToolCallCounts.clear();
+}
+
+/** Read the in-memory counter for an HTTP session. Returns 0 when no
+ *  entry exists. */
+export function getHttpSessionToolCallCount(
+  sessionId: string,
+  toolName: string,
+): number {
+  return httpSessionToolCallCounts.get(counterKey(sessionId, toolName)) ?? 0;
+}
+
+/** Advance the in-memory counter for an HTTP session capped at `cap`.
+ *  Mirrors `StorageProvider.bumpSessionToolCallCount` so the dispatcher
+ *  can treat both paths the same way. */
+export function bumpHttpSessionToolCallCount(
+  sessionId: string,
+  toolName: string,
+  cap: number,
+): { n: number; bumped: boolean } {
+  const key = counterKey(sessionId, toolName);
+  const prior = httpSessionToolCallCounts.get(key) ?? 0;
+  if (prior >= cap) return { n: prior, bumped: false };
+  const next = prior + 1;
+  httpSessionToolCallCounts.set(key, next);
+  return { n: next, bumped: true };
 }
 
 /** Result of sending an inbound message into a session. Shape matches
@@ -63,6 +102,10 @@ export interface CreateHttpSessionInput {
    *  `mcp-servers.json` file. Stored on `metadata.serverSpecs` for HTTP
    *  (in-memory) sessions; channel sessions never carry this field. */
   serverSpecs?: Record<string, McpServerSpec>;
+  /** Optional canonical-keyed mock store. When present and non-empty,
+   *  the session enters strict-mode — tool calls without a matching
+   *  entry return `tool_not_mocked` instead of reaching the bridge. */
+  mocks?: Record<string, MockValue>;
 }
 
 /** Create an HTTP-route session. The session is held in-memory only —
@@ -82,6 +125,7 @@ export function createSessionForHttp(input: CreateHttpSessionInput): Session {
     createdAt: nowIso,
     updatedAt: nowIso,
     metadata,
+    ...(input.mocks !== undefined ? { mocks: input.mocks } : {}),
   };
   httpSessions.set(id, session);
   return session;
@@ -246,11 +290,17 @@ export async function closeSessionById(
  * inbound, etc.) — converge on the same agent reasoning path. Without
  * this, the HTTP route would use the real chat loop while inbound
  * channel traffic would silently hit a different code path.
+ *
+ * Channel-bridge callers pass their `StorageProvider` so the hosted-
+ * test-mode mocks engine can persist its per-session per-tool counter
+ * for stateful array mocks. HTTP routes use the in-memory counter
+ * mirror and pass nothing.
  */
 export async function sendInboundMessage(
   session: Session,
   message: string,
+  storage?: StorageProvider | null,
 ): Promise<SendResult> {
   const trimmed = message.trim() || "hello";
-  return runChatLoop(trimmed, session);
+  return runChatLoop(trimmed, session, { storage: storage ?? null });
 }

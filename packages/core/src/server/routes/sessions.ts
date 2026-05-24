@@ -43,7 +43,12 @@ import {
   getHttpSessionMap,
   getSessionById,
 } from "../../sessions/core.js";
-import type { Session } from "../../storage/types.js";
+import {
+  checkMocksSize,
+  validateMocksShape,
+} from "../../sessions/mocks-validation.js";
+import { tryMockedDispatchWithStorage } from "../../sessions/mock-dispatch.js";
+import type { MockValue, Session } from "../../storage/types.js";
 
 const sendLog = createLogger("sessions:send");
 
@@ -172,6 +177,15 @@ function readServers(session: Session): string[] {
   return Array.isArray(raw) ? (raw as string[]) : [];
 }
 
+/** True when the session declares a non-empty `mocks` field — used to
+ *  trigger strict-mode behaviour for unknown server prefixes. */
+function hasNonEmptyMocks(session: Session): boolean {
+  const m = session.mocks;
+  return Boolean(
+    m && typeof m === "object" && !Array.isArray(m) && Object.keys(m).length > 0,
+  );
+}
+
 /**
  * Resolve `(orgId, projectId)` for a request using the shared
  * ServerContext when present. When ctx is null (legacy registration
@@ -206,11 +220,32 @@ export function registerSessionRoutes(route: RouteFn, ctx: ServerContext | null 
       servers?: string[];
       server_specs?: unknown;
       user_id?: string;
+      mocks?: unknown;
     } | undefined;
 
     const parsed = parseServerSpecs(body?.server_specs);
     if (!parsed.ok) {
       return reply.status(400).send({ error: parsed.error });
+    }
+
+    // Optional mocks field — strict shape validation in two gates so
+    // the cheaper byte-size cap rejects oversized payloads before the
+    // full traversal. Mirrors the wire envelope codespar-enterprise
+    // emits for the managed runtime so the superset relationship holds.
+    // The OSS route omits the per-tenant test-environment gate the
+    // managed runtime enforces; OSS has no project.environment model
+    // and accepts mocks unconditionally.
+    let mocks: Record<string, MockValue> | undefined;
+    if (body?.mocks !== undefined) {
+      const sizeError = checkMocksSize(body.mocks);
+      if (sizeError !== null) {
+        return reply.status(413).send(sizeError);
+      }
+      const shapeError = validateMocksShape(body.mocks);
+      if (shapeError !== null) {
+        return reply.status(400).send(shapeError);
+      }
+      mocks = body.mocks as Record<string, MockValue>;
     }
 
     const declared = Array.isArray(body?.servers) ? body.servers : [];
@@ -227,6 +262,7 @@ export function registerSessionRoutes(route: RouteFn, ctx: ServerContext | null 
       userId: typeof body?.user_id === "string" ? body.user_id : "anonymous",
       servers: mergedServers,
       ...(parsed.specs !== undefined ? { serverSpecs: parsed.specs } : {}),
+      ...(mocks !== undefined ? { mocks } : {}),
     });
 
     return reply.status(201).send({ id: session.id, status: session.status });
@@ -261,10 +297,54 @@ export function registerSessionRoutes(route: RouteFn, ctx: ServerContext | null 
       const serverId = toolName.slice(0, slashIdx);
       const subTool = toolName.slice(slashIdx + 1);
       if (serverId && subTool && readServers(session).includes(serverId)) {
+        // Mocks-first: when the session declares a non-empty `mocks`
+        // store, consult it before reaching the bridge. Three outcomes
+        // surface as HTTP error envelopes (`tool_not_mocked` 422,
+        // `mocks_exhausted` 422, `mocks_engine_error` 503); a successful
+        // `consumed` outcome returns the synthesised `ToolResult` and a
+        // `passthrough` returns null so the bridge handles it.
+        const mocked = await tryMockedDispatchWithStorage(
+          session,
+          serverId,
+          subTool,
+          body?.input ?? {},
+          ctx?.storageProvider ?? null,
+        );
+        if (mocked) {
+          if (mocked.outcome.kind === "tool_not_mocked") {
+            return reply.status(422).send(mocked.result.data);
+          }
+          if (mocked.outcome.kind === "exhausted") {
+            return reply.status(422).send(mocked.result.data);
+          }
+          if (mocked.outcome.kind === "mocks_engine_error") {
+            return reply.status(503).send(mocked.result.data);
+          }
+          // consumed
+          return mocked.result;
+        }
+
         const specOverride = readServerSpecs(session)?.[serverId];
         return mcpBridge.call(id, serverId, subTool, body?.input ?? {}, {
           ...(specOverride !== undefined ? { specOverride } : {}),
         });
+      }
+      // Unknown server prefix. When strict mocks are declared we keep
+      // the same 422 `tool_not_mocked` envelope as for known-server
+      // mismatches so a misspelled prefix surfaces the same way as a
+      // misspelled tool name. Without mocks, the legacy 200 shape is
+      // preserved for byte-for-byte parity with pre-mocks callers.
+      if (hasNonEmptyMocks(session)) {
+        const mocked = await tryMockedDispatchWithStorage(
+          session,
+          serverId,
+          subTool,
+          body?.input ?? {},
+          ctx?.storageProvider ?? null,
+        );
+        if (mocked && mocked.outcome.kind === "tool_not_mocked") {
+          return reply.status(422).send(mocked.result.data);
+        }
       }
       return {
         success: false,
@@ -332,7 +412,9 @@ export function registerSessionRoutes(route: RouteFn, ctx: ServerContext | null 
       };
 
       try {
-        for await (const ev of runChatLoopStream(message, session)) {
+        for await (const ev of runChatLoopStream(message, session, {
+          storage: ctx?.storageProvider ?? null,
+        })) {
           const { type, ...rest } = ev as StreamEvent & Record<string, unknown>;
           emit(type, rest);
         }
@@ -347,7 +429,9 @@ export function registerSessionRoutes(route: RouteFn, ctx: ServerContext | null 
     }
 
     try {
-      const result = await runChatLoop(message, session);
+      const result = await runChatLoop(message, session, {
+        storage: ctx?.storageProvider ?? null,
+      });
       return result;
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);

@@ -60,6 +60,9 @@ export class FileStorage implements StorageProvider {
   private readonly channelLinksPath: string;
   /** Durable channel/HTTP-bridge sessions (F10.M2). */
   private readonly sessionsPath: string;
+  /** Per-session per-tool consume counters for the hosted-test-mode
+   *  mocks API. Mirrors the `session_tool_call_counts` Postgres table. */
+  private readonly sessionToolCallCountsPath: string;
 
   /**
    * @param baseDir  Root storage directory (default ".codespar")
@@ -81,6 +84,10 @@ export class FileStorage implements StorageProvider {
     this.projectEnvsPath = path.join(this.dir, "project-envs.json");
     this.channelLinksPath = path.join(this.dir, "channel-links.json");
     this.sessionsPath = path.join(this.dir, "sessions.json");
+    this.sessionToolCallCountsPath = path.join(
+      this.dir,
+      "session-tool-call-counts.json",
+    );
   }
 
   // ── Agent Memory ───────────────────────────────────────────────
@@ -504,6 +511,16 @@ export class FileStorage implements StorageProvider {
       updatedAt: nowIso,
       metadata: session.metadata ?? {},
       ...(session.instanceId !== undefined ? { instanceId: session.instanceId } : prior?.instanceId !== undefined ? { instanceId: prior.instanceId } : {}),
+      // mocks precedence: explicit input wins (including explicit null to
+      // clear), otherwise carry the prior row's mocks forward so a
+      // routine touch update doesn't drop the test-mode store.
+      ...(session.mocks !== undefined
+        ? session.mocks === null
+          ? {}
+          : { mocks: session.mocks }
+        : prior?.mocks !== undefined && prior.mocks !== null
+          ? { mocks: prior.mocks }
+          : {}),
     };
     if (idx >= 0) all[idx] = full;
     else all.push(full);
@@ -536,6 +553,34 @@ export class FileStorage implements StorageProvider {
     }
     if (closed > 0) await this.writeFile(this.sessionsPath, all);
     return closed;
+  }
+
+  // ── Session tool-call counters (hosted-test-mode mocks) ────────
+
+  async getSessionToolCallCount(
+    sessionId: string,
+    toolName: string,
+  ): Promise<number> {
+    const all = await this.readSessionToolCallCountsFile();
+    return all[sessionId]?.[toolName] ?? 0;
+  }
+
+  async bumpSessionToolCallCount(
+    sessionId: string,
+    toolName: string,
+    cap: number,
+  ): Promise<{ n: number; bumped: boolean }> {
+    const all = await this.readSessionToolCallCountsFile();
+    const perSession = all[sessionId] ?? {};
+    const prior = perSession[toolName] ?? 0;
+    if (prior >= cap) {
+      return { n: prior, bumped: false };
+    }
+    const next = prior + 1;
+    perSession[toolName] = next;
+    all[sessionId] = perSession;
+    await this.writeFile(this.sessionToolCallCountsPath, all);
+    return { n: next, bumped: true };
   }
 
   // ── Internal helpers ───────────────────────────────────────────
@@ -625,6 +670,22 @@ export class FileStorage implements StorageProvider {
       return Array.isArray(parsed) ? (parsed as Session[]) : [];
     } catch {
       return [];
+    }
+  }
+
+  /** Read the on-disk counter file. Shape:
+   *    { [sessionId]: { [toolName]: n } } */
+  private async readSessionToolCallCountsFile(): Promise<
+    Record<string, Record<string, number>>
+  > {
+    try {
+      const raw = await fs.readFile(this.sessionToolCallCountsPath, "utf-8");
+      const parsed = JSON.parse(raw);
+      return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+        ? (parsed as Record<string, Record<string, number>>)
+        : {};
+    } catch {
+      return {};
     }
   }
 

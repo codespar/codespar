@@ -21,6 +21,7 @@ import {
   projects,
   channelLinks,
   sessions as sessionsTable,
+  sessionToolCallCounts,
   auditLog,
   subscribers,
   slackInstallations,
@@ -40,6 +41,7 @@ import type {
   CreateProjectInput,
   UpdateProjectInput,
   ChannelLink,
+  MockValue,
   Session,
   SessionInput,
 } from "./types.js";
@@ -728,6 +730,7 @@ export class PgStorage implements StorageProvider {
     createdAt: Date;
     updatedAt: Date;
     metadata: Record<string, unknown>;
+    mocks?: Record<string, unknown> | null;
   }): Session {
     return {
       id: r.id,
@@ -740,6 +743,9 @@ export class PgStorage implements StorageProvider {
       createdAt: r.createdAt.toISOString(),
       updatedAt: r.updatedAt.toISOString(),
       metadata: r.metadata ?? {},
+      ...(r.mocks !== undefined && r.mocks !== null
+        ? { mocks: r.mocks as Record<string, MockValue> }
+        : {}),
     };
   }
 
@@ -775,6 +781,8 @@ export class PgStorage implements StorageProvider {
   async setSession(session: SessionInput): Promise<Session> {
     const id = session.id ?? randomUUID();
     const now = new Date();
+    const mocksValue =
+      session.mocks === undefined ? undefined : session.mocks ?? null;
     const rows = await this.db
       .insert(sessionsTable)
       .values({
@@ -787,6 +795,7 @@ export class PgStorage implements StorageProvider {
         status: session.status,
         metadata: session.metadata ?? {},
         updatedAt: now,
+        ...(mocksValue !== undefined ? { mocks: mocksValue } : {}),
         ...(session.createdAt ? { createdAt: new Date(session.createdAt) } : {}),
       })
       .onConflictDoUpdate({
@@ -799,6 +808,7 @@ export class PgStorage implements StorageProvider {
           instanceId: session.instanceId ?? null,
           status: session.status,
           metadata: session.metadata ?? {},
+          ...(mocksValue !== undefined ? { mocks: mocksValue } : {}),
           updatedAt: now,
         },
       })
@@ -828,5 +838,63 @@ export class PgStorage implements StorageProvider {
       )
       .returning({ id: sessionsTable.id });
     return res.length;
+  }
+
+  // ── Session tool-call counters (hosted-test-mode mocks) ────────
+
+  async getSessionToolCallCount(
+    sessionId: string,
+    toolName: string,
+  ): Promise<number> {
+    const rows = await this.db
+      .select()
+      .from(sessionToolCallCounts)
+      .where(
+        and(
+          eq(sessionToolCallCounts.sessionId, sessionId),
+          eq(sessionToolCallCounts.toolName, toolName),
+        ),
+      )
+      .limit(1);
+    return rows[0]?.n ?? 0;
+  }
+
+  async bumpSessionToolCallCount(
+    sessionId: string,
+    toolName: string,
+    cap: number,
+  ): Promise<{ n: number; bumped: boolean }> {
+    // Cap-respecting UPSERT — the CASE in the DO UPDATE clause keeps n
+    // at cap once reached so a concurrent caller cannot overshoot. The
+    // prior fetch is a FOR UPDATE row lock that serialises concurrent
+    // bumps against the same (session, tool) key.
+    // Cast `tx` to the broader Sql shape — postgres-js's TransactionSql
+    // generic narrowing makes the template-tag call signature invisible
+    // to TS under NodeNext module resolution. The cast keeps the runtime
+    // behaviour identical (TransactionSql IS-A Sql at runtime).
+    const result = await this.client.begin(async (txRaw) => {
+      const tx = txRaw as unknown as ReturnType<typeof postgres>;
+      const prior = await tx<{ n: number }[]>`
+        SELECT n FROM session_tool_call_counts
+        WHERE session_id = ${sessionId} AND tool_name = ${toolName}
+        FOR UPDATE
+      `;
+      const oldN = prior.length === 0 ? 0 : Number(prior[0]!.n);
+      const rows = await tx<{ n: number }[]>`
+        INSERT INTO session_tool_call_counts (session_id, tool_name, n)
+        VALUES (${sessionId}, ${toolName}, 1)
+        ON CONFLICT (session_id, tool_name) DO UPDATE SET
+          n = CASE
+            WHEN session_tool_call_counts.n < ${cap}
+            THEN session_tool_call_counts.n + 1
+            ELSE session_tool_call_counts.n
+          END,
+          updated_at = now()
+        RETURNING n
+      `;
+      const n = rows.length === 0 ? oldN : Number(rows[0]!.n);
+      return { n, bumped: n > oldN };
+    });
+    return result;
   }
 }
