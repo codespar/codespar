@@ -181,15 +181,6 @@ function readServers(session: Session): string[] {
   return Array.isArray(raw) ? (raw as string[]) : [];
 }
 
-/** True when the session declares a non-empty `mocks` field — used to
- *  trigger strict-mode behaviour for unknown server prefixes. */
-function hasNonEmptyMocks(session: Session): boolean {
-  const m = session.mocks;
-  return Boolean(
-    m && typeof m === "object" && !Array.isArray(m) && Object.keys(m).length > 0,
-  );
-}
-
 /**
  * Resolve `(orgId, projectId)` for a request using the shared
  * ServerContext when present. When ctx is null (legacy registration
@@ -302,19 +293,21 @@ export function registerSessionRoutes(route: RouteFn, ctx: ServerContext | null 
     // MCP dispatch — `prefix/tool` names route to a spawned MCP server
     // when the prefix is registered on this session. Split on the first
     // `/` only so tool paths like `nuvem-fiscal/foo/bar` resolve to
-    // server="nuvem-fiscal", tool="foo/bar". Unknown prefixes return the
-    // existing `Tool not registered` shape (HTTP 200), not 403.
+    // server="nuvem-fiscal", tool="foo/bar".
+    //
+    // Mocks-first: the dispatch seam is consulted before anything
+    // else. Under per-deployment strict mode
+    // (`CODESPAR_TEST_MODE_ENABLED` on), the seam ALWAYS returns a
+    // result — `consumed`/`exhausted`/`tool_not_mocked`/
+    // `mocks_engine_error` — never null. With the flag off the seam
+    // short-circuits to null and the dispatcher falls through to the
+    // bridge (registered prefix) or the legacy `Tool not registered`
+    // envelope (unknown prefix) exactly as before mocks shipped.
     if (toolName.includes("/")) {
       const slashIdx = toolName.indexOf("/");
       const serverId = toolName.slice(0, slashIdx);
       const subTool = toolName.slice(slashIdx + 1);
-      if (serverId && subTool && readServers(session).includes(serverId)) {
-        // Mocks-first: when the session declares a non-empty `mocks`
-        // store, consult it before reaching the bridge. Three outcomes
-        // surface as HTTP error envelopes (`tool_not_mocked` 422,
-        // `mocks_exhausted` 422, `mocks_engine_error` 503); a successful
-        // `consumed` outcome returns the synthesised `ToolResult` and a
-        // `passthrough` returns null so the bridge handles it.
+      if (serverId && subTool) {
         const mocked = await tryMockedDispatchWithStorage(
           session,
           serverId,
@@ -335,28 +328,15 @@ export function registerSessionRoutes(route: RouteFn, ctx: ServerContext | null 
           // consumed
           return mocked.result;
         }
+      }
 
+      // Flag off — passthrough to bridge for registered prefixes or
+      // the legacy envelope for unknown ones.
+      if (serverId && subTool && readServers(session).includes(serverId)) {
         const specOverride = readServerSpecs(session)?.[serverId];
         return mcpBridge.call(id, serverId, subTool, body?.input ?? {}, {
           ...(specOverride !== undefined ? { specOverride } : {}),
         });
-      }
-      // Unknown server prefix. When strict mocks are declared we keep
-      // the same 422 `tool_not_mocked` envelope as for known-server
-      // mismatches so a misspelled prefix surfaces the same way as a
-      // misspelled tool name. Without mocks, the legacy 200 shape is
-      // preserved for byte-for-byte parity with pre-mocks callers.
-      if (hasNonEmptyMocks(session)) {
-        const mocked = await tryMockedDispatchWithStorage(
-          session,
-          serverId,
-          subTool,
-          body?.input ?? {},
-          ctx?.storageProvider ?? null,
-        );
-        if (mocked && mocked.outcome.kind === "tool_not_mocked") {
-          return reply.status(422).send(mocked.result.data);
-        }
       }
       return {
         success: false,

@@ -5,25 +5,35 @@
  * `tryMockedDispatch` is the thin wrapper both dispatchers call BEFORE
  * touching the raw MCP bridge. It:
  *
- *   1. Consults the session's `mocks` field via `evaluateSessionMock`.
- *   2. Translates the discriminated union into the same `ToolResult`
- *      wire shape the bridge emits, so the dispatcher can return it
- *      without further branching.
- *   3. Returns `null` when the dispatch should fall through to the
- *      bridge (no mocks declared, or empty mocks object).
+ *   1. Short-circuits to `null` (passthrough) when
+ *      `CODESPAR_TEST_MODE_ENABLED` is off — the mocks engine never
+ *      runs and the bridge handles every call. Deployments without
+ *      the flag look exactly like they did before the feature shipped.
+ *   2. With the flag on, consults the session's `mocks` field via
+ *      `evaluateSessionMock` and translates the discriminated outcome
+ *      into a `ToolResult`-shaped envelope.
+ *   3. Promotes a `passthrough` outcome (no mocks declared on the
+ *      session, or the called tool has no entry) into a
+ *      `tool_not_mocked` envelope. This is the per-deployment
+ *      strict-mode semantic: in test mode, every external tool
+ *      dispatch requires a mock match. There is no "flag-on but
+ *      session has no mocks → real upstream call" state — that would
+ *      contradict the principle of test mode.
  *
- * Strict-mode: when the session's mocks are non-empty and the called
- * tool has no entry, the wrapper synthesises a `tool_not_mocked`
- * ToolResult with `success: false` and the dispatcher MUST NOT then
- * call the bridge. This is the structural fix that prevents a
- * misspelled tool from leaking to a real upstream provider.
+ * Built-in tools (the documented `BUILT_IN_TOOLS` allow-list in the
+ * route handler — today: `codespar_list_tools`) bypass this seam
+ * entirely. They are metadata-only operations with no external side
+ * effects, and they are dispatched before the seam ever runs. Any
+ * future built-in that would reach external state must NOT join that
+ * allow-list — it must be declared in `session.mocks` like any other
+ * external dispatch. See README + docs/test-mode.md for the spec.
  *
  * The OSS ToolResult shape mirrors enterprise's error-envelope payload
- * (`code`, `message`, optional `tool_name`) so the four error codes
- * the contract sweep checks (`tool_not_mocked`, `mocks_exhausted`,
+ * (`code`, `message`, optional `tool_name`) so the error codes the
+ * contract sweep checks (`tool_not_mocked`, `mocks_exhausted`,
  * `mocks_engine_error`, plus the HTTP-level `mocks_invalid` /
- * `mocks_payload_too_large` envelopes emitted at create time) line up
- * byte-for-byte across the two runtimes.
+ * `mocks_payload_too_large` / `mocks_not_permitted` envelopes emitted
+ * at create time) line up byte-for-byte across the two runtimes.
  */
 
 import { randomUUID } from "node:crypto";
@@ -74,13 +84,11 @@ export async function tryMockedDispatch(
   toolName: string,
   input: unknown,
 ): Promise<MockDispatchOk | null> {
-  // Defense in depth: when the deployment-level flag is off the
-  // dispatcher refuses to honour any mocks that may already sit on
-  // the session (e.g. created during a previous flag-on window). The
-  // session-create gate above blocks new sessions; this seam guards
-  // the live-dispatch path so an operator-side flip-to-off doesn't
-  // leave behind a window where a stored mock still intercepts a
-  // real call.
+  // Flag off — short-circuit. The mocks engine never runs and the
+  // dispatcher falls through to the real bridge as if the feature
+  // weren't shipped. Defense in depth for the case where an operator
+  // flips the flag off after sessions had mocks declared: every
+  // stored mock is ignored and every dispatch goes to the bridge.
   if (!isTestModeEnabled()) return null;
   const canonical = `${serverId}/${toolName}`;
   // HTTP-route sessions live in-memory and persist nothing. Their
@@ -100,9 +108,7 @@ export async function tryMockedDispatch(
     sessionId: session.id,
   });
 
-  if (outcome.kind === "passthrough") return null;
-  const result = mockOutcomeToToolResult(session.id, serverId, toolName, outcome);
-  return { result, outcome };
+  return promoteOutcome(session.id, serverId, toolName, outcome);
 }
 
 /**
@@ -133,9 +139,37 @@ export async function tryMockedDispatchWithStorage(
     storage: effectiveStorage,
     sessionId: session.id,
   });
-  if (outcome.kind === "passthrough") return null;
-  const result = mockOutcomeToToolResult(session.id, serverId, toolName, outcome);
-  return { result, outcome };
+  return promoteOutcome(session.id, serverId, toolName, outcome);
+}
+
+/**
+ * Translate the evaluator's outcome into the dispatch-seam return.
+ * Called only after the flag-on check has already passed.
+ *
+ * Under per-deployment strict mode, a `passthrough` outcome (no
+ * mocks declared on the session, or no entry for this tool) is
+ * promoted to a synthesised `tool_not_mocked` envelope — the seam
+ * never returns `null` while the flag is on. The only way the
+ * caller sees `null` is the flag-off short-circuit at the top of
+ * each helper.
+ *
+ * Every other outcome (`consumed`, `exhausted`, `tool_not_mocked`,
+ * `mocks_engine_error`) translates through the same `ToolResult`
+ * mapper so the dispatcher returns one shape regardless of which
+ * mock branch fired.
+ */
+function promoteOutcome(
+  sessionId: string,
+  serverId: string,
+  toolName: string,
+  outcome: MockMatchResult,
+): MockDispatchOk {
+  const effective: MockMatchResult =
+    outcome.kind === "passthrough"
+      ? { kind: "tool_not_mocked", tool_name: `${serverId}/${toolName}` }
+      : outcome;
+  const result = mockOutcomeToToolResult(sessionId, serverId, toolName, effective);
+  return { result, outcome: effective };
 }
 
 /** Translate the discriminated `MockMatchResult` into the bridge's
