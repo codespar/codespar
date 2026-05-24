@@ -130,26 +130,47 @@ serves OSS demos, CI integration, and production identically.
 
 ## Session mocks (test mode)
 
-The session API accepts an optional `mocks` field on `POST /sessions`,
-**but only when the deployment has opted in** by setting
-`CODESPAR_TEST_MODE_ENABLED=true` (or `=1`, case-insensitive). The
-default is off — a production deployment that never sets the env var
-will reject any request that carries `mocks` with HTTP 501 and a
-`mocks_not_permitted` envelope, and the dispatch path refuses to
-honour mocks even if a session already holds them. Declared mocks
-intercept tool dispatch before the MCP bridge, so an agent author can
-run integration tests without ever touching a real upstream provider.
-The wire shape, error envelopes, and counter semantics match the
-managed runtime byte-for-byte, so the same agent code runs unchanged
-in either place.
+`CODESPAR_TEST_MODE_ENABLED` is the deployment's mode switch. When
+the flag is on (`true` or `1`, case-insensitive), the runtime is in
+**test mode**: every external tool dispatch requires a matching mock
+entry, and the bridge is never reached for an external call without
+one. When the flag is off — the default — the mocks feature is
+inactive end-to-end and every dispatch goes to the real bridge as if
+the feature weren't shipped. There is no in-between state: a runtime
+is either in test mode or it is not.
 
-Enable the feature for a self-hosted runtime by exporting the env var
-before starting the server:
+Concretely, with the flag off:
+
+- `POST /sessions` rejects any request that carries `mocks` with
+  HTTP 501 and a `mocks_not_permitted` envelope.
+- The dispatch path refuses to honour mocks even if a session
+  already holds them — every external call falls through to the
+  bridge.
+
+With the flag on:
+
+- `POST /sessions` accepts the optional `mocks` field. The field
+  declares what's available to the session.
+- Every external tool dispatch consults the mocks engine. A matching
+  entry returns its scripted output; no match returns HTTP 422
+  `tool_not_mocked` — regardless of whether the session declared
+  `mocks` at all. A session created without `mocks` (or with an
+  empty `{}` map) cannot dispatch external tools in test mode; it
+  can only dispatch built-ins (see below).
+
+Enable the feature for a self-hosted runtime by exporting the env
+var before starting the server:
 
 ```bash
 export CODESPAR_TEST_MODE_ENABLED=true
 npm run start:server
 ```
+
+The wire shape, error envelopes, and counter semantics match the
+managed runtime byte-for-byte, so the same agent code runs unchanged
+in either place.
+
+### Declaring mocks
 
 Two value shapes, keyed by canonical `server/tool` form:
 
@@ -176,21 +197,29 @@ curl -X POST http://localhost:3000/sessions \
   entry N, the counter advances on success only, and the (N+1)th call
   past the array length returns `mocks_exhausted`.
 
-**Strict-mode is structural.** A non-empty `mocks` field puts the
-session in strict-mode: any tool call whose canonical name has no
-entry returns `tool_not_mocked` instead of falling through to a real
-MCP server. A typo in `asaas/create_paymnet` or an unregistered server
-prefix surfaces the same way — fail loud, never leak to a live
-provider. Sessions created without the field behave exactly as before.
+### Built-in tools bypass the gate (allow-list)
 
-The five error envelopes:
+In test mode, **every external tool dispatch requires a matching
+mock**. Runtime built-ins — metadata-only operations with no external
+side effects — bypass this gate because gating them would break the
+agent's ability to introspect the runtime in test mode without buying
+nothing for the safety principle. The current built-in allow-list is:
+
+- `codespar_list_tools` — list the registered agent skills
+
+If a future built-in performs an external dispatch (i.e. could leak
+to a real provider), it must NOT join this allow-list. It must be
+declared in `mocks` like any other external dispatch. The allow-list
+is the spec, not an implementation accident.
+
+### Error envelopes
 
 | Code | When | HTTP status |
 |------|------|-------------|
 | `mocks_not_permitted` | `mocks` sent on `POST /sessions` while `CODESPAR_TEST_MODE_ENABLED` is not truthy. Gate runs before size and shape. | 501 |
 | `mocks_invalid` | `mocks` field fails shape validation at create. Carries an RFC 6901 `field` pointer. | 400 |
 | `mocks_payload_too_large` | Stringified `mocks` exceeds 64 KiB. | 413 |
-| `tool_not_mocked` | Strict-mode session, tool has no entry. | 422 |
+| `tool_not_mocked` | Flag on, external tool dispatched, no matching mock entry. Returned for missing entries, missing sessions-`mocks` field entirely, and unknown server prefixes — every external dispatch in test mode must match a mock. | 422 |
 | `mocks_exhausted` | Stateful array counter already at the cap. | 422 |
 
 See [`docs/test-mode.md`](./docs/test-mode.md) for the longer write-up

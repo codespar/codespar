@@ -107,13 +107,16 @@ execute "asaas/get_payment"
 echo
 
 # ---------------------------------------------------------------------------
-# 5. Strict-mode — call an undeclared tool, observe tool_not_mocked.
+# 5. Test mode is strict — call an undeclared tool, observe tool_not_mocked.
 #
-# Because the session declared a non-empty mocks field, the runtime
-# refuses to fall through to a real MCP server for any tool that has
-# no entry. A typo in the tool name surfaces here.
+# In test mode the runtime requires a matching mock for every external
+# dispatch. A typo in the tool name (or any other undeclared call)
+# surfaces here as `tool_not_mocked` — the runtime never falls through
+# to a real MCP server. This is per-deployment, not per-session: a
+# session created without any `mocks` field at all behaves the same
+# way, every call returns tool_not_mocked.
 # ---------------------------------------------------------------------------
-echo "--- strict-mode: asaas/create_paymnet (typo — tool_not_mocked)"
+echo "--- test mode: asaas/create_paymnet (typo — tool_not_mocked)"
 execute "asaas/create_paymnet"
 echo
 
