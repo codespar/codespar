@@ -13,11 +13,22 @@
  *     emits an error tool_result with `error_code: "tool_not_mocked"`.
  */
 
-import { describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { runChatLoop } from "../index.js";
 import { clearSessionStore } from "../../sessions/core.js";
 import type { Session } from "../../storage/types.js";
 import type { ListToolsResult, ToolResult } from "../../mcp/index.js";
+
+const TEST_MODE_ENV_KEY = "CODESPAR_TEST_MODE_ENABLED";
+const originalTestMode = process.env[TEST_MODE_ENV_KEY];
+
+beforeAll(() => {
+  process.env[TEST_MODE_ENV_KEY] = "true";
+});
+afterAll(() => {
+  if (originalTestMode === undefined) delete process.env[TEST_MODE_ENV_KEY];
+  else process.env[TEST_MODE_ENV_KEY] = originalTestMode;
+});
 
 function makeMockedSession(mocks: Session["mocks"]): Session {
   return {

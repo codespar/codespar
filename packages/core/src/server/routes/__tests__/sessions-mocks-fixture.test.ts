@@ -31,12 +31,18 @@ function createTestApp() {
   return app;
 }
 
+const TEST_MODE_ENV_KEY = "CODESPAR_TEST_MODE_ENABLED";
+const originalTestMode = process.env[TEST_MODE_ENV_KEY];
+
 describe("canonical mocks fixture round-trip", () => {
   beforeEach(async () => {
+    process.env[TEST_MODE_ENV_KEY] = "true";
     clearSessionStore();
     await clearMcpBridge();
   });
   afterEach(async () => {
+    if (originalTestMode === undefined) delete process.env[TEST_MODE_ENV_KEY];
+    else process.env[TEST_MODE_ENV_KEY] = originalTestMode;
     await clearMcpBridge();
   });
 

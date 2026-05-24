@@ -35,6 +35,7 @@ import {
   HTTP_CHANNEL_TYPE,
 } from "./core.js";
 import { evaluateSessionMock, type MockMatchResult } from "./mocks.js";
+import { isTestModeEnabled } from "./test-mode-flag.js";
 
 const MOCK_SERVER_LABEL = "mock";
 
@@ -73,6 +74,14 @@ export async function tryMockedDispatch(
   toolName: string,
   input: unknown,
 ): Promise<MockDispatchOk | null> {
+  // Defense in depth: when the deployment-level flag is off the
+  // dispatcher refuses to honour any mocks that may already sit on
+  // the session (e.g. created during a previous flag-on window). The
+  // session-create gate above blocks new sessions; this seam guards
+  // the live-dispatch path so an operator-side flip-to-off doesn't
+  // leave behind a window where a stored mock still intercepts a
+  // real call.
+  if (!isTestModeEnabled()) return null;
   const canonical = `${serverId}/${toolName}`;
   // HTTP-route sessions live in-memory and persist nothing. Their
   // counter mirror lives on the sessions/core module. Channel-bridge
@@ -108,6 +117,10 @@ export async function tryMockedDispatchWithStorage(
   input: unknown,
   storage: StorageProvider | null,
 ): Promise<MockDispatchOk | null> {
+  // Same flag-off short-circuit as `tryMockedDispatch` — see comment
+  // above for why the seam enforces the gate independently of the
+  // route-level check.
+  if (!isTestModeEnabled()) return null;
   const canonical = `${serverId}/${toolName}`;
   const isHttpSession = session.channelType === HTTP_CHANNEL_TYPE;
   const effectiveStorage = isHttpSession

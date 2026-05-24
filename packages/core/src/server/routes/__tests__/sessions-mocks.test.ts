@@ -10,6 +10,11 @@
  *     return, stateful-array counter advance, exhaustion, and the
  *     strict-mode `tool_not_mocked` 422 envelope when mocks are
  *     declared but the called tool has no entry.
+ *
+ * Every assertion here exercises the flag-on path — the runtime gate
+ * `CODESPAR_TEST_MODE_ENABLED` is set in `beforeEach`. The flag-off
+ * surface (rejection envelope, dispatch passthrough) lives in
+ * `sessions-mocks-flag.test.ts`.
  */
 
 import Fastify from "fastify";
@@ -19,6 +24,9 @@ import {
   registerSessionRoutes,
 } from "../sessions.js";
 import { clearMcpBridge } from "../../../mcp/index.js";
+
+const TEST_MODE_ENV_KEY = "CODESPAR_TEST_MODE_ENABLED";
+const originalTestMode = process.env[TEST_MODE_ENV_KEY];
 
 function createTestApp() {
   const app = Fastify({ logger: false });
@@ -47,10 +55,13 @@ async function createSession(
 
 describe("POST /sessions with mocks", () => {
   beforeEach(async () => {
+    process.env[TEST_MODE_ENV_KEY] = "true";
     clearSessionStore();
     await clearMcpBridge();
   });
   afterEach(async () => {
+    if (originalTestMode === undefined) delete process.env[TEST_MODE_ENV_KEY];
+    else process.env[TEST_MODE_ENV_KEY] = originalTestMode;
     await clearMcpBridge();
   });
 
@@ -118,10 +129,13 @@ describe("POST /sessions with mocks", () => {
 
 describe("POST /sessions/:id/execute with mocks", () => {
   beforeEach(async () => {
+    process.env[TEST_MODE_ENV_KEY] = "true";
     clearSessionStore();
     await clearMcpBridge();
   });
   afterEach(async () => {
+    if (originalTestMode === undefined) delete process.env[TEST_MODE_ENV_KEY];
+    else process.env[TEST_MODE_ENV_KEY] = originalTestMode;
     await clearMcpBridge();
   });
 

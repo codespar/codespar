@@ -48,6 +48,10 @@ import {
   validateMocksShape,
 } from "../../sessions/mocks-validation.js";
 import { tryMockedDispatchWithStorage } from "../../sessions/mock-dispatch.js";
+import {
+  isTestModeEnabled,
+  MOCKS_NOT_PERMITTED_ENVELOPE,
+} from "../../sessions/test-mode-flag.js";
 import type { MockValue, Session } from "../../storage/types.js";
 
 const sendLog = createLogger("sessions:send");
@@ -228,15 +232,23 @@ export function registerSessionRoutes(route: RouteFn, ctx: ServerContext | null 
       return reply.status(400).send({ error: parsed.error });
     }
 
-    // Optional mocks field — strict shape validation in two gates so
-    // the cheaper byte-size cap rejects oversized payloads before the
-    // full traversal. Mirrors the wire envelope codespar-enterprise
-    // emits for the managed runtime so the superset relationship holds.
-    // The OSS route omits the per-tenant test-environment gate the
-    // managed runtime enforces; OSS has no project.environment model
-    // and accepts mocks unconditionally.
+    // Optional mocks field — three gates in order so the cheapest
+    // rejection reason always surfaces verbatim:
+    //   1. Env-flag — deployments that haven't opted in via
+    //      `CODESPAR_TEST_MODE_ENABLED=true` get HTTP 501
+    //      `mocks_not_permitted` regardless of payload validity.
+    //   2. Byte-size cap — 64 KiB ceiling rejects oversized payloads
+    //      before the full traversal.
+    //   3. Shape — strict-on-shape, lenient-on-membership validation.
+    // Mirrors the wire envelope codespar-enterprise emits for the
+    // managed runtime so the superset relationship holds. The OSS
+    // route omits the per-tenant test-environment gate the managed
+    // runtime enforces; the env-flag here is the OSS equivalent.
     let mocks: Record<string, MockValue> | undefined;
     if (body?.mocks !== undefined) {
+      if (!isTestModeEnabled()) {
+        return reply.status(501).send(MOCKS_NOT_PERMITTED_ENVELOPE);
+      }
       const sizeError = checkMocksSize(body.mocks);
       if (sizeError !== null) {
         return reply.status(413).send(sizeError);
