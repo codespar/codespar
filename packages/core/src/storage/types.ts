@@ -126,15 +126,20 @@ export interface ChannelConfig {
 }
 
 /**
- * Mock value attached to a canonical "server/tool" key on a session.
- * A non-null JSON object is a single-shot mock; an array of non-null
- * JSON objects is a stateful sequence consumed once per matching call.
+ * Mock value attached to a canonical "server/tool" key. A non-null JSON
+ * object is a single-shot mock; an array of non-null JSON objects is a
+ * stateful sequence consumed once per matching call.
  *
  * The OSS runtime mirrors the wire contract codespar-enterprise emits
  * for hosted test mode: strict shape at create time, lenient on
  * membership (tool ids are not catalog-validated), counter-advance-on-
  * success-only on consume, strict-mode behaviour when a non-empty
  * `mocks` field is declared on the session.
+ *
+ * OSS holds the mock store in process-local memory on the HTTP
+ * `Session` shape exposed by `sessions/core.ts` — it does not live on
+ * the persistent `Session` row, which is why this storage interface
+ * does not name a `mocks` field.
  */
 export type MockObject = Record<string, unknown>;
 export type MockValue = MockObject | MockObject[];
@@ -156,12 +161,6 @@ export interface Session {
   createdAt: string;
   updatedAt: string;
   metadata: Record<string, unknown>;
-  /** Optional per-session mock store. When present and non-empty the
-   *  session enters strict-mode: any tool call whose canonical name has
-   *  no entry returns `tool_not_mocked` instead of falling through to a
-   *  real MCP server. Absent or null means no mocks declared and every
-   *  dispatch passes through to the bridge. */
-  mocks?: Record<string, MockValue> | null;
 }
 
 /** Input shape for inserting / updating a session row. */
@@ -273,19 +272,6 @@ export interface StorageProvider {
   // Channel configuration
   saveChannelConfig(channel: string, config: Record<string, string>): Promise<void>;
   getChannelConfig(channel: string): Promise<Record<string, string> | null>;
-
-  // Session mock counters (hosted test mode)
-  /** Read the per-session per-tool consume counter. Returns 0 when no
-   *  row exists yet. */
-  getSessionToolCallCount(sessionId: string, toolName: string): Promise<number>;
-  /** Advance the per-session per-tool counter capped at `cap`. Returns
-   *  the post-advance value; equal to the prior value when already at
-   *  cap (no overshoot). */
-  bumpSessionToolCallCount(
-    sessionId: string,
-    toolName: string,
-    cap: number,
-  ): Promise<{ n: number; bumped: boolean }>;
 
   // Audit log
   appendAudit(

@@ -14,14 +14,12 @@
  */
 
 import { describe, it, expect, beforeEach } from "vitest";
-import { evaluateSessionMock, consumeMockEntry } from "../mocks.js";
-import type { StorageProvider } from "../../storage/types.js";
+import { evaluateSessionMock, consumeMockEntry, type MockCounterStorage } from "../mocks.js";
 
-function mkStorage(): StorageProvider {
+function mkStorage(): MockCounterStorage {
   const counters = new Map<string, number>();
   const key = (s: string, t: string) => `${s}::${t}`;
   return {
-    getSessionToolCallCount: async (s, t) => counters.get(key(s, t)) ?? 0,
     bumpSessionToolCallCount: async (s, t, cap) => {
       const prior = counters.get(key(s, t)) ?? 0;
       if (prior >= cap) return { n: prior, bumped: false };
@@ -29,11 +27,11 @@ function mkStorage(): StorageProvider {
       counters.set(key(s, t), next);
       return { n: next, bumped: true };
     },
-  } as unknown as StorageProvider;
+  };
 }
 
 describe("evaluateSessionMock", () => {
-  let storage: StorageProvider;
+  let storage: MockCounterStorage;
   beforeEach(() => {
     storage = mkStorage();
   });
@@ -137,12 +135,11 @@ describe("evaluateSessionMock", () => {
   });
 
   it("returns mocks_engine_error on counter persistence failure", async () => {
-    const broken = {
+    const broken: MockCounterStorage = {
       bumpSessionToolCallCount: async () => {
         throw new Error("disk full");
       },
-      getSessionToolCallCount: async () => 0,
-    } as unknown as StorageProvider;
+    };
     const r = await evaluateSessionMock({
       sessionMocks: { "asaas/foo": [{ a: 1 }] },
       canonicalToolName: "asaas/foo",

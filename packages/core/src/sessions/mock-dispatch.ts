@@ -25,8 +25,8 @@
  * entirely. They are metadata-only operations with no external side
  * effects, and they are dispatched before the seam ever runs. Any
  * future built-in that would reach external state must NOT join that
- * allow-list — it must be declared in `session.mocks` like any other
- * external dispatch. See README + docs/test-mode.md for the spec.
+ * allow-list — it must be declared in the session's `mocks` field like
+ * any other external dispatch. See `docs/test-mode.md` for the spec.
  *
  * The OSS ToolResult shape mirrors enterprise's error-envelope payload
  * (`code`, `message`, optional `tool_name`) so the error codes the
@@ -34,18 +34,35 @@
  * `mocks_engine_error`, plus the HTTP-level `mocks_invalid` /
  * `mocks_payload_too_large` / `mocks_not_permitted` envelopes emitted
  * at create time) line up byte-for-byte across the two runtimes.
+ *
+ * Storage shape: OSS holds session mocks and the per-tool consume
+ * counters in process-local memory. Every session this seam handles is
+ * an HTTP session (the only path that authors mocks today), so the
+ * counter wiring goes through `makeInMemoryCounterStorage` which fronts
+ * the in-process counter map on `sessions/core`. The persistent column
+ * + counter table that the managed runtime uses live in
+ * `codespar-enterprise`, not here.
  */
 
 import { randomUUID } from "node:crypto";
-import type { Session, StorageProvider } from "../storage/types.js";
+import type { MockValue, Session } from "../storage/types.js";
 import type { ToolResult } from "../mcp/types.js";
 import {
   bumpHttpSessionToolCallCount,
-  getHttpSessionToolCallCount,
   HTTP_CHANNEL_TYPE,
 } from "./core.js";
-import { evaluateSessionMock, type MockMatchResult } from "./mocks.js";
+import {
+  evaluateSessionMock,
+  type MockCounterStorage,
+  type MockMatchResult,
+} from "./mocks.js";
 import { isTestModeEnabled } from "./test-mode-flag.js";
+
+/** Session shape this seam reads. The persistent `Session` type has no
+ *  `mocks` column; the in-memory HTTP session adds it structurally. */
+type SessionWithMocks = Session & {
+  mocks?: Record<string, MockValue> | null;
+};
 
 const MOCK_SERVER_LABEL = "mock";
 
@@ -77,9 +94,14 @@ export interface MockDispatchOk {
  *   - a `MockDispatchOk` containing the synthesised `ToolResult` and
  *     the structured outcome the caller can act on (e.g. mapping to
  *     an HTTP status code).
+ *
+ * Channel-bridge sessions (anything not `HTTP_CHANNEL_TYPE`) never
+ * carry mocks under shape E — the in-memory store is HTTP-only. The
+ * seam treats them as if no mock entry applies and short-circuits to
+ * `null`, leaving the real bridge to handle the call.
  */
 export async function tryMockedDispatch(
-  session: Session,
+  session: SessionWithMocks,
   serverId: string,
   toolName: string,
   input: unknown,
@@ -90,55 +112,16 @@ export async function tryMockedDispatch(
   // flips the flag off after sessions had mocks declared: every
   // stored mock is ignored and every dispatch goes to the bridge.
   if (!isTestModeEnabled()) return null;
+  if (session.channelType !== HTTP_CHANNEL_TYPE) return null;
   const canonical = `${serverId}/${toolName}`;
-  // HTTP-route sessions live in-memory and persist nothing. Their
-  // counter mirror lives on the sessions/core module. Channel-bridge
-  // sessions persist to the StorageProvider, so we hand the storage
-  // backend down to the consume helper. The split mirrors how
-  // `getSessionById` already routes lookups based on channelType.
-  const isHttpSession = session.channelType === HTTP_CHANNEL_TYPE;
-  const storage: StorageProvider | null = isHttpSession
-    ? makeInMemoryCounterStorage()
-    : null; // populated by the caller via the route's ctx when needed
   const outcome = await evaluateSessionMock({
     sessionMocks: session.mocks ?? null,
     canonicalToolName: canonical,
     input,
-    storage,
+    storage: makeInMemoryCounterStorage(),
     sessionId: session.id,
   });
 
-  return promoteOutcome(session.id, serverId, toolName, outcome);
-}
-
-/**
- * Channel-bridge variant — same as `tryMockedDispatch` but takes an
- * explicit `StorageProvider` for counter persistence. Used by the
- * chat-loop when running against a persisted channel session.
- */
-export async function tryMockedDispatchWithStorage(
-  session: Session,
-  serverId: string,
-  toolName: string,
-  input: unknown,
-  storage: StorageProvider | null,
-): Promise<MockDispatchOk | null> {
-  // Same flag-off short-circuit as `tryMockedDispatch` — see comment
-  // above for why the seam enforces the gate independently of the
-  // route-level check.
-  if (!isTestModeEnabled()) return null;
-  const canonical = `${serverId}/${toolName}`;
-  const isHttpSession = session.channelType === HTTP_CHANNEL_TYPE;
-  const effectiveStorage = isHttpSession
-    ? makeInMemoryCounterStorage()
-    : storage;
-  const outcome = await evaluateSessionMock({
-    sessionMocks: session.mocks ?? null,
-    canonicalToolName: canonical,
-    input,
-    storage: effectiveStorage,
-    sessionId: session.id,
-  });
   return promoteOutcome(session.id, serverId, toolName, outcome);
 }
 
@@ -256,24 +239,13 @@ export function mockOutcomeToToolResult(
 }
 
 /**
- * Wrap the HTTP-session in-memory counter map behind the
- * `StorageProvider` interface slice the consume helper needs. Letting
- * both the persistent and in-memory paths share the same call signature
- * keeps the dispatch seam straight — no second branch on session
- * channelType inside `evaluateSessionMock`.
- *
- * Only the two counter methods are wired; every other StorageProvider
- * method is irrelevant on the consume path and is left unimplemented.
- * Casting through `unknown` keeps the type-checker honest without
- * forcing a hundred-method stub here.
+ * Wrap the HTTP-session in-memory counter map behind the `MockCounterStorage`
+ * slice the consume helper needs. The slice is intentionally minimal —
+ * just the bump method the engine calls — so the in-memory wiring doesn't
+ * have to satisfy the full persistent `StorageProvider` interface.
  */
-function makeInMemoryCounterStorage(): StorageProvider {
-  const partial = {
-    getSessionToolCallCount: async (
-      sessionId: string,
-      toolName: string,
-    ): Promise<number> =>
-      Promise.resolve(getHttpSessionToolCallCount(sessionId, toolName)),
+function makeInMemoryCounterStorage(): MockCounterStorage {
+  return {
     bumpSessionToolCallCount: async (
       sessionId: string,
       toolName: string,
@@ -281,5 +253,4 @@ function makeInMemoryCounterStorage(): StorageProvider {
     ): Promise<{ n: number; bumped: boolean }> =>
       Promise.resolve(bumpHttpSessionToolCallCount(sessionId, toolName, cap)),
   };
-  return partial as unknown as StorageProvider;
 }

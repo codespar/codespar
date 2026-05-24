@@ -33,10 +33,22 @@
  * surface.
  */
 
-import type { MockObject, MockValue, StorageProvider } from "../storage/types.js";
+import type { MockObject, MockValue } from "../storage/types.js";
 import { createLogger } from "../observability/logger.js";
 
 const log = createLogger("session-mocks");
+
+/** Storage slice the mocks engine needs for stateful-array counter
+ *  persistence. Decoupled from `StorageProvider` so the engine doesn't
+ *  drag the full storage interface (and so the OSS in-memory wiring
+ *  can implement the slice without satisfying the persistent surface). */
+export interface MockCounterStorage {
+  bumpSessionToolCallCount(
+    sessionId: string,
+    toolName: string,
+    cap: number,
+  ): Promise<{ n: number; bumped: boolean }>;
+}
 
 /** Result of evaluating a single canonical tool name against the
  *  session's mock store. */
@@ -51,7 +63,7 @@ const MOCKS_ENGINE_ERROR_MESSAGE =
   "mock engine unavailable; retry the call or contact support";
 
 export interface EvaluateSessionMockArgs {
-  /** The Session.mocks field as loaded — may be undefined, null, or a
+  /** The session's mocks field as loaded — may be undefined, null, or a
    *  populated object. The helper handles every shape. */
   sessionMocks: Record<string, MockValue> | null | undefined;
   /** Canonical "server/tool" name. */
@@ -59,11 +71,10 @@ export interface EvaluateSessionMockArgs {
   /** Tool input — opaque to the helper; reserved for future mock-input
    *  matching variants. */
   input: unknown;
-  /** Per-session storage for counter persistence. When `null` the
-   *  evaluator runs in counter-less mode: stateful arrays return the
-   *  first entry every call and never advance. Used by the in-memory
-   *  HTTP path which keeps its counter in process state instead. */
-  storage: StorageProvider | null;
+  /** Per-session counter store. When `null` the evaluator runs in
+   *  counter-less mode: stateful arrays return the first entry every
+   *  call and never advance. */
+  storage: MockCounterStorage | null;
   /** Session id keyed by the counter. */
   sessionId: string;
 }
@@ -143,9 +154,9 @@ export interface ConsumeMockEntryArgs {
   toolName: string;
   /** The session's mocks object — already-loaded JSON. */
   mocksJsonb: Record<string, unknown>;
-  /** Storage backend used to persist the counter; `null` runs in
-   *  in-memory mode (see [[evaluateSessionMock]] for semantics). */
-  storage: StorageProvider | null;
+  /** Counter store used to persist the per-tool advance; `null` runs in
+   *  counter-less mode (see [[evaluateSessionMock]] for semantics). */
+  storage: MockCounterStorage | null;
 }
 
 /**

@@ -32,11 +32,22 @@ import { runChatLoop } from "../chat-loop/index.js";
 export const HTTP_CHANNEL_TYPE = "http" as const;
 
 /**
+ * Runtime shape of an HTTP-route session. Adds the test-mode `mocks`
+ * field to the persistent `Session`, since OSS holds mocks in process
+ * memory only — the storage layer does not carry a `mocks` column. The
+ * field is structurally optional so callers that don't care about test
+ * mode continue to treat HTTP sessions as plain `Session` values.
+ */
+export type HttpSession = Session & {
+  mocks?: Record<string, MockValue> | null;
+};
+
+/**
  * In-memory store for HTTP sessions. Scoped to process lifetime; CI
  * creates a fresh process per test run so cross-test contamination is
  * impossible. Channel-bridge sessions persist to storage instead.
  */
-const httpSessions = new Map<string, Session>();
+const httpSessions = new Map<string, HttpSession>();
 
 /**
  * Per-HTTP-session per-tool consume counters. The persistent counter
@@ -57,18 +68,9 @@ export function clearSessionStore(): void {
   httpSessionToolCallCounts.clear();
 }
 
-/** Read the in-memory counter for an HTTP session. Returns 0 when no
- *  entry exists. */
-export function getHttpSessionToolCallCount(
-  sessionId: string,
-  toolName: string,
-): number {
-  return httpSessionToolCallCounts.get(counterKey(sessionId, toolName)) ?? 0;
-}
-
-/** Advance the in-memory counter for an HTTP session capped at `cap`.
- *  Mirrors `StorageProvider.bumpSessionToolCallCount` so the dispatcher
- *  can treat both paths the same way. */
+/** Advance the in-memory consume counter for an HTTP session, capped
+ *  at `cap`. Matches the shape the mocks engine expects via its
+ *  `MockCounterStorage` slice. */
 export function bumpHttpSessionToolCallCount(
   sessionId: string,
   toolName: string,
@@ -110,12 +112,12 @@ export interface CreateHttpSessionInput {
 
 /** Create an HTTP-route session. The session is held in-memory only —
  *  this matches the behaviour the SessionBase contract test asserts. */
-export function createSessionForHttp(input: CreateHttpSessionInput): Session {
+export function createSessionForHttp(input: CreateHttpSessionInput): HttpSession {
   const id = randomUUID();
   const nowIso = new Date().toISOString();
   const metadata: Record<string, unknown> = { servers: input.servers };
   if (input.serverSpecs !== undefined) metadata["serverSpecs"] = input.serverSpecs;
-  const session: Session = {
+  const session: HttpSession = {
     id,
     orgId: input.orgId,
     projectId: input.projectId,
@@ -134,7 +136,7 @@ export function createSessionForHttp(input: CreateHttpSessionInput): Session {
 /** Internal accessor for the HTTP map — exported only for the legacy
  *  send route which mutates `servers` in metadata. Channel-bridge code
  *  should NOT use this; it goes through storage. */
-export function getHttpSessionMap(): Map<string, Session> {
+export function getHttpSessionMap(): Map<string, HttpSession> {
   return httpSessions;
 }
 
@@ -291,10 +293,10 @@ export async function closeSessionById(
  * this, the HTTP route would use the real chat loop while inbound
  * channel traffic would silently hit a different code path.
  *
- * Channel-bridge callers pass their `StorageProvider` so the hosted-
- * test-mode mocks engine can persist its per-session per-tool counter
- * for stateful array mocks. HTTP routes use the in-memory counter
- * mirror and pass nothing.
+ * The `storage` argument is forwarded to the chat loop's tool-dispatch
+ * path for non-mock concerns (e.g. session row reads on channel
+ * bridges). Test-mode mocks themselves live in process memory on the
+ * HTTP session — no storage is consulted for them.
  */
 export async function sendInboundMessage(
   session: Session,

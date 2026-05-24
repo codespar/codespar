@@ -10,12 +10,11 @@
  *      runs first in the route's validation chain (before size and
  *      shape), so the rejection reason is always the gate, never a
  *      derivative validation error.
- *   2. The dispatch seam (`tryMockedDispatch` /
- *      `tryMockedDispatchWithStorage`) returns `null` (passthrough)
- *      regardless of what mocks may be stored on the session, so the
- *      bridge handles every call as if mocks were absent. Defense in
- *      depth for the "operator flipped the flag off after sessions
- *      were already running with mocks" scenario.
+ *   2. The dispatch seam (`tryMockedDispatch`) returns `null`
+ *      (passthrough) regardless of what mocks may sit on the session,
+ *      so the bridge handles every call as if mocks were absent.
+ *      Defense in depth for the "operator flipped the flag off after
+ *      sessions were already running with mocks" scenario.
  *
  * Read on every call (matching the per-request env-read pattern used
  * by `checkBearerAuth` in `server/routes/sessions.ts`). The overhead

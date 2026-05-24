@@ -19,6 +19,15 @@ provider, fiscal endpoint, or shipping API during CI.
 The wire shape and error envelopes match the managed runtime exactly,
 so the same agent code passes its tests against either endpoint.
 
+**Storage shape (OSS).** Session mocks live in process-local memory.
+Sessions and their declared mocks are lost on process restart, which
+matches the lifetime of every CI job and every local-dev run. There is
+no database column for `sessions.mocks` and no per-session counter
+table — the schema returns to its pre-mocks shape. For test-mode
+artifacts that need to survive across processes (auditable runs,
+multi-replica deployments, dashboard visibility), use the managed
+runtime, which persists mocks and counters on its own storage.
+
 ## The mode switch: `CODESPAR_TEST_MODE_ENABLED`
 
 The env var is a deployment-level mode switch. Set
@@ -59,8 +68,10 @@ export CODESPAR_TEST_MODE_ENABLED=true
 npm run start:server
 ```
 
-The migration that creates the `session_tool_call_counts` table runs
-unconditionally; with the flag off the table simply stays empty.
+The OSS runtime ships no test-mode-specific database schema. With the
+flag off, the production binary behaves byte-for-byte like it did
+before the mocks feature existed. With the flag on, mocks and the
+per-tool consume counter live in process memory.
 
 ## Wire shape
 
@@ -159,26 +170,22 @@ location is delivered via the JSON Pointer.
 
 ## Counter semantics
 
-Stateful arrays advance their counter **on success only**. The storage
-layer enforces the cap as a SQL invariant via a cap-respecting UPSERT:
-concurrent dispatch cannot overshoot.
+Stateful arrays advance their counter **on success only**. The OSS
+counter lives in a process-local `Map<string, number>` on
+`packages/core/src/sessions/core.ts`, keyed by `${sessionId}::${tool}`.
+The bump helper caps the counter at the array length so successive
+calls can't overshoot. Restarting the process resets every counter.
 
-Two backends:
-
-- **HTTP sessions** live in-memory and never reach storage. A sibling
-  `Map` on `packages/core/src/sessions/core.ts` holds their counters,
-  fronted by the same call signature so the consume helper doesn't
-  branch on session type.
-- **Channel-bridge sessions** (WhatsApp, etc.) persist counters to
-  PostgreSQL via the `session_tool_call_counts` table. FileStorage
-  mirrors the table in JSON so single-tenant deployments get the same
-  behaviour without Postgres.
+Mocks themselves are HTTP-only in OSS — declared by `POST /sessions`
+and held on the in-memory session object. Channel-bridge sessions
+(WhatsApp, Slack, Telegram) cannot declare mocks under shape E; the
+dispatch seam short-circuits to passthrough for any non-HTTP session.
 
 ## Dispatcher seam
 
 Both call sites — `POST /sessions/:id/execute` and the chat-loop
-tool-use branch — call `tryMockedDispatchWithStorage` before reaching
-the bridge. The seam's behaviour depends on the deployment's mode:
+tool-use branch — call `tryMockedDispatch` before reaching the bridge.
+The seam's behaviour depends on the deployment's mode:
 
 - **Production mode (flag off).** The seam short-circuits to `null`
   immediately. The mocks engine never runs and the dispatcher falls
@@ -193,8 +200,10 @@ the bridge. The seam's behaviour depends on the deployment's mode:
   - Other variants (`exhausted`, `mocks_engine_error`) flow
     through unchanged.
 
-The seam never returns `null` in test mode. The only way the
-dispatcher reaches the real bridge is in production mode.
+The seam never returns `null` in test mode for an HTTP session. The
+only way the dispatcher reaches the real bridge is in production mode
+or on a non-HTTP (channel-bridge) session, which OSS treats as
+mock-less by design.
 
 This means mocks apply equally whether the caller hits `/execute`
 directly with a tool name, or the agent reasons over its tools via
@@ -251,6 +260,14 @@ test/live environment separation), a policy-engine wrapper, audit-chain
 stamping for mocked calls, commercial-memory capture from mock
 sessions, and approval-replay coordination. None of those land in the
 OSS layer — they're wrapper concerns of the managed runtime.
+
+OSS also does not persist test-mode state. Sessions, declared mocks,
+and consume counters live for the lifetime of the process; a restart
+loses all of them. Multi-replica OSS deployments cannot share mock
+state across replicas. Neither is a problem for the documented use
+cases — one process per CI job, one process per developer — but it
+matters if you need test-mode artifacts to outlive a single run, in
+which case the managed runtime is the right target.
 
 A session declared with mocks behaves identically under both runtimes
 at the wire boundary; the difference is what happens around the call,

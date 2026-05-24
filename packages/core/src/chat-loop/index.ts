@@ -32,7 +32,7 @@ import type {
 import type { McpServerSpec } from "../mcp/index.js";
 import { mcpBridge } from "../mcp/index.js";
 import { createLogger } from "../observability/logger.js";
-import { tryMockedDispatchWithStorage } from "../sessions/mock-dispatch.js";
+import { tryMockedDispatch } from "../sessions/mock-dispatch.js";
 import type { Session, StorageProvider } from "../storage/types.js";
 import { LATAM_COMMERCE_SYSTEM_PROMPT } from "./system-prompt.js";
 import {
@@ -302,12 +302,11 @@ async function runInternal(ctx: LoopRunContext): Promise<SendResult> {
       // `mocks_engine_error`, plus the `consumed` happy path) all reach
       // the model as a tool_result with `is_error` set when the kind
       // isn't `consumed`.
-      const mocked = await tryMockedDispatchWithStorage(
+      const mocked = await tryMockedDispatch(
         ctx.session,
         split.serverId,
         split.toolName,
         input,
-        ctx.storage,
       );
 
       const sessionSpecs = readSessionServerSpecs(ctx.session);

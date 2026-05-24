@@ -47,7 +47,7 @@ import {
   checkMocksSize,
   validateMocksShape,
 } from "../../sessions/mocks-validation.js";
-import { tryMockedDispatchWithStorage } from "../../sessions/mock-dispatch.js";
+import { tryMockedDispatch } from "../../sessions/mock-dispatch.js";
 import {
   isTestModeEnabled,
   MOCKS_NOT_PERMITTED_ENVELOPE,
@@ -308,12 +308,11 @@ export function registerSessionRoutes(route: RouteFn, ctx: ServerContext | null 
       const serverId = toolName.slice(0, slashIdx);
       const subTool = toolName.slice(slashIdx + 1);
       if (serverId && subTool) {
-        const mocked = await tryMockedDispatchWithStorage(
+        const mocked = await tryMockedDispatch(
           session,
           serverId,
           subTool,
           body?.input ?? {},
-          ctx?.storageProvider ?? null,
         );
         if (mocked) {
           if (mocked.outcome.kind === "tool_not_mocked") {

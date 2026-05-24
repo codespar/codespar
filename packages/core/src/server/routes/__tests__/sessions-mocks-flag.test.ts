@@ -23,10 +23,7 @@
 import Fastify from "fastify";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { clearMcpBridge } from "../../../mcp/index.js";
-import {
-  tryMockedDispatch,
-  tryMockedDispatchWithStorage,
-} from "../../../sessions/mock-dispatch.js";
+import { tryMockedDispatch } from "../../../sessions/mock-dispatch.js";
 import type { Session } from "../../../storage/types.js";
 import { clearSessionStore, registerSessionRoutes } from "../sessions.js";
 
@@ -141,22 +138,13 @@ describe("session mocks: CODESPAR_TEST_MODE_ENABLED gate", () => {
     it("dispatch seam short-circuits to passthrough when flag is off, even for a session that already has mocks", async () => {
       const session = buildSessionWithMocks();
 
-      const out = await tryMockedDispatchWithStorage(
+      const out = await tryMockedDispatch(
         session,
         "asaas",
         "create_payment",
         { value: 1 },
-        null,
       );
       expect(out).toBeNull();
-
-      const out2 = await tryMockedDispatch(
-        session,
-        "asaas",
-        "create_payment",
-        { value: 1 },
-      );
-      expect(out2).toBeNull();
     });
   });
 
@@ -197,12 +185,11 @@ describe("session mocks: CODESPAR_TEST_MODE_ENABLED gate", () => {
 
     it("dispatch seam honours mocks when flag is on", async () => {
       const session = buildSessionWithMocks();
-      const out = await tryMockedDispatchWithStorage(
+      const out = await tryMockedDispatch(
         session,
         "asaas",
         "create_payment",
         { value: 1 },
-        null,
       );
       expect(out).not.toBeNull();
       expect(out?.outcome.kind).toBe("consumed");

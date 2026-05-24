@@ -170,6 +170,15 @@ The wire shape, error envelopes, and counter semantics match the
 managed runtime byte-for-byte, so the same agent code runs unchanged
 in either place.
 
+**Storage shape.** OSS holds mocks and the per-tool consume counter
+in process-local memory. A restart loses every session and every
+declared mock — fine for CI (one process per job) and local dev (one
+process per developer), and the only documented use cases. There is
+no database column for `sessions.mocks` and no per-session counter
+table; the OSS schema is the same with or without the feature
+enabled. For test-mode state that needs to outlive a single process
+or be shared across replicas, use the managed runtime.
+
 ### Declaring mocks
 
 Two value shapes, keyed by canonical `server/tool` form:

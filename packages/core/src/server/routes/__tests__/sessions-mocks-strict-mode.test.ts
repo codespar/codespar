@@ -16,7 +16,7 @@
  * Three surfaces under test:
  *   1. `POST /sessions/:id/execute` against an external tool on a
  *      session with no mocks — returns 422 `tool_not_mocked`.
- *   2. Dispatch seam (`tryMockedDispatchWithStorage`) — returns a
+ *   2. Dispatch seam (`tryMockedDispatch`) — returns a
  *      tool_not_mocked envelope on flag-on + no-mocks instead of
  *      passthrough (null).
  *   3. Built-in dispatch (`codespar_list_tools`) — succeeds without a
@@ -31,10 +31,7 @@
 import Fastify from "fastify";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { clearMcpBridge } from "../../../mcp/index.js";
-import {
-  tryMockedDispatch,
-  tryMockedDispatchWithStorage,
-} from "../../../sessions/mock-dispatch.js";
+import { tryMockedDispatch } from "../../../sessions/mock-dispatch.js";
 import type { Session } from "../../../storage/types.js";
 import { clearSessionStore, registerSessionRoutes } from "../sessions.js";
 
@@ -170,14 +167,13 @@ describe("session mocks: per-deployment strict mode (flag-on requires mock match
   });
 
   describe("dispatch seam on session without mocks", () => {
-    it("returns tool_not_mocked envelope from tryMockedDispatchWithStorage (no mocks declared)", async () => {
+    it("returns tool_not_mocked envelope from tryMockedDispatch (no mocks declared)", async () => {
       const session = buildSessionWithoutMocks();
-      const out = await tryMockedDispatchWithStorage(
+      const out = await tryMockedDispatch(
         session,
         "asaas",
         "create_payment",
         { value: 1 },
-        null,
       );
       expect(out).not.toBeNull();
       expect(out?.outcome.kind).toBe("tool_not_mocked");
@@ -188,14 +184,13 @@ describe("session mocks: per-deployment strict mode (flag-on requires mock match
       expect(envelope.tool_name).toBe("asaas/create_payment");
     });
 
-    it("returns tool_not_mocked envelope from tryMockedDispatchWithStorage (empty {} mocks)", async () => {
+    it("returns tool_not_mocked envelope from tryMockedDispatch (empty {} mocks)", async () => {
       const session = buildSessionWithEmptyMocks();
-      const out = await tryMockedDispatchWithStorage(
+      const out = await tryMockedDispatch(
         session,
         "asaas",
         "create_payment",
         { value: 1 },
-        null,
       );
       expect(out).not.toBeNull();
       expect(out?.outcome.kind).toBe("tool_not_mocked");

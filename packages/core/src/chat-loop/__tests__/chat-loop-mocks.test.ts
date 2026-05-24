@@ -15,8 +15,7 @@
 
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { runChatLoop } from "../index.js";
-import { clearSessionStore } from "../../sessions/core.js";
-import type { Session } from "../../storage/types.js";
+import { clearSessionStore, type HttpSession } from "../../sessions/core.js";
 import type { ListToolsResult, ToolResult } from "../../mcp/index.js";
 
 const TEST_MODE_ENV_KEY = "CODESPAR_TEST_MODE_ENABLED";
@@ -30,7 +29,7 @@ afterAll(() => {
   else process.env[TEST_MODE_ENV_KEY] = originalTestMode;
 });
 
-function makeMockedSession(mocks: Session["mocks"]): Session {
+function makeMockedSession(mocks: HttpSession["mocks"]): HttpSession {
   return {
     id: `sess-mocks-${Math.random().toString(36).slice(2, 10)}`,
     orgId: "org",

@@ -124,30 +124,10 @@ export const sessions = pgTable("sessions", {
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
   metadata: jsonb("metadata").$type<Record<string, unknown>>().default({}).notNull(),
-  // mocks is nullable — sessions created without the mocks field land
-  // with mocks IS NULL so byte-for-byte INSERT parity holds for the
-  // pre-mocks code path. See drizzle/0004_session_mocks.sql.
-  mocks: jsonb("mocks").$type<Record<string, unknown> | null>(),
 }, (table) => [
   index("sessions_org_idx").on(table.orgId),
   index("sessions_project_idx").on(table.projectId),
   index("sessions_updated_idx").on(table.updatedAt),
-]);
-
-// ── Session tool-call counters (hosted-test-mode mocks API) ────
-// One row per (session_id, canonical tool name). n is the count of
-// successful mock-consume calls for the stateful-array variant; the
-// dispatcher's bump helper caps it at the array length so the value
-// never overshoots the configured sequence.
-
-export const sessionToolCallCounts = pgTable("session_tool_call_counts", {
-  sessionId: text("session_id").notNull(),
-  toolName: text("tool_name").notNull(),
-  n: integer("n").default(0).notNull(),
-  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
-}, (table) => [
-  uniqueIndex("session_tool_call_counts_pk_idx").on(table.sessionId, table.toolName),
-  index("session_tool_call_counts_session_idx").on(table.sessionId),
 ]);
 
 // ── Audit Log ─────────────────────────────────────────────────
