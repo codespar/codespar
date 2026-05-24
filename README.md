@@ -130,12 +130,26 @@ serves OSS demos, CI integration, and production identically.
 
 ## Session mocks (test mode)
 
-The session API accepts an optional `mocks` field on `POST /sessions`.
-Declared mocks intercept tool dispatch before the MCP bridge, so an
-agent author can run integration tests without ever touching a real
-upstream provider. The wire shape, error envelopes, and counter
-semantics match the managed runtime byte-for-byte, so the same agent
-code runs unchanged in either place.
+The session API accepts an optional `mocks` field on `POST /sessions`,
+**but only when the deployment has opted in** by setting
+`CODESPAR_TEST_MODE_ENABLED=true` (or `=1`, case-insensitive). The
+default is off — a production deployment that never sets the env var
+will reject any request that carries `mocks` with HTTP 501 and a
+`mocks_not_permitted` envelope, and the dispatch path refuses to
+honour mocks even if a session already holds them. Declared mocks
+intercept tool dispatch before the MCP bridge, so an agent author can
+run integration tests without ever touching a real upstream provider.
+The wire shape, error envelopes, and counter semantics match the
+managed runtime byte-for-byte, so the same agent code runs unchanged
+in either place.
+
+Enable the feature for a self-hosted runtime by exporting the env var
+before starting the server:
+
+```bash
+export CODESPAR_TEST_MODE_ENABLED=true
+npm run start:server
+```
 
 Two value shapes, keyed by canonical `server/tool` form:
 
@@ -169,10 +183,11 @@ MCP server. A typo in `asaas/create_paymnet` or an unregistered server
 prefix surfaces the same way — fail loud, never leak to a live
 provider. Sessions created without the field behave exactly as before.
 
-The four error envelopes:
+The five error envelopes:
 
 | Code | When | HTTP status |
 |------|------|-------------|
+| `mocks_not_permitted` | `mocks` sent on `POST /sessions` while `CODESPAR_TEST_MODE_ENABLED` is not truthy. Gate runs before size and shape. | 501 |
 | `mocks_invalid` | `mocks` field fails shape validation at create. Carries an RFC 6901 `field` pointer. | 400 |
 | `mocks_payload_too_large` | Stringified `mocks` exceeds 64 KiB. | 413 |
 | `tool_not_mocked` | Strict-mode session, tool has no entry. | 422 |

@@ -7,15 +7,22 @@
 # demonstrates the strict-mode `tool_not_mocked` envelope by calling
 # an undeclared tool. Cleans up at the end.
 #
-# Requires a running OSS runtime — start one with:
-#   npm run start:server
+# Requires a running OSS runtime started with the test-mode flag on:
+#   CODESPAR_TEST_MODE_ENABLED=true npm run start:server
+#
+# Without that flag the runtime rejects any request with `mocks` and
+# returns HTTP 501 `mocks_not_permitted`.
 #
 # Usage:
-#   bash examples/session-mocks.sh
+#   CODESPAR_TEST_MODE_ENABLED=true bash examples/session-mocks.sh
 #
 # Environment overrides:
-#   CODESPAR_BASE_URL  default http://localhost:3000
-#   ENGINE_API_TOKEN   default "test" (matches the runtime's local mode)
+#   CODESPAR_BASE_URL            default http://localhost:3000
+#   ENGINE_API_TOKEN             default "test" (matches the runtime's local mode)
+#   CODESPAR_TEST_MODE_ENABLED   must be truthy on the SERVER process for
+#                                this script to succeed; setting it on the
+#                                client (this script) has no effect on the
+#                                runtime's gate.
 
 set -euo pipefail
 

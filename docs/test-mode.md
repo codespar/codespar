@@ -9,6 +9,33 @@ real payment provider, fiscal endpoint, or shipping API during CI.
 The wire shape and error envelopes match the managed runtime exactly,
 so the same agent code passes its tests against either endpoint.
 
+## Prerequisite: `CODESPAR_TEST_MODE_ENABLED`
+
+The mocks API is gated behind a deployment-level env var. Set
+`CODESPAR_TEST_MODE_ENABLED=true` (or `=1`, case-insensitive) before
+starting the runtime. With the flag unset:
+
+- `POST /sessions` returns HTTP 501 with a `mocks_not_permitted`
+  envelope when the request body carries `mocks`. The gate runs
+  before the size cap and the shape validator, so the rejection
+  reason is always the gate, never a derivative validation error.
+- The dispatch seam refuses to honour any mocks that may already
+  sit on a session — defense in depth for the case where the flag
+  is flipped off after sessions were created with mocks declared.
+  Every tool call falls through to the bridge as if mocks were
+  absent.
+
+The flag is intended to keep mocks out of production deployments by
+default. CI environments and local development opt in explicitly.
+
+```bash
+export CODESPAR_TEST_MODE_ENABLED=true
+npm run start:server
+```
+
+The migration that creates the `session_tool_call_counts` table runs
+unconditionally; with the flag off the table simply stays empty.
+
 ## Wire shape
 
 `POST /sessions` accepts:
@@ -70,6 +97,7 @@ caller is affected.
 
 | Code | When | HTTP | Notes |
 |------|------|------|-------|
+| `mocks_not_permitted` | `mocks` sent on `POST /sessions` while `CODESPAR_TEST_MODE_ENABLED` is not truthy. | 501 | Gate runs before size and shape, so an oversized or malformed `mocks` payload sent to a flag-off deployment still surfaces this envelope, not `mocks_payload_too_large` or `mocks_invalid`. |
 | `mocks_invalid` | `mocks` field fails shape validation at create. | 400 | Carries an RFC 6901 JSON Pointer in `field`. `asaas/create_payment` lands at `/mocks/asaas~1create_payment` per RFC 6901's `/` escape. |
 | `mocks_payload_too_large` | Stringified `mocks` exceeds 64 KiB. | 413 | Hard cap. Keeps a runaway client from shipping a multi-megabyte mock blob in a single POST. |
 | `tool_not_mocked` | Strict-mode session, tool has no entry. | 422 | Returned for both missing tool entries and unknown server prefixes. The envelope carries `tool_name` with the canonical form. |
@@ -115,7 +143,8 @@ behaves the same way.
 
 ## Writing tests against the OSS runtime
 
-A minimal pattern, in shell:
+A minimal pattern, in shell (assumes the server was started with
+`CODESPAR_TEST_MODE_ENABLED=true`):
 
 ```bash
 # 1. Create a session with mocks declared.
