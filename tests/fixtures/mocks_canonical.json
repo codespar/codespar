@@ -1,0 +1,1 @@
+{"servers":["asaas"],"user_id":"user_demo","mocks":{"asaas/create_payment":{"id":"pay_test_42","status":"PENDING"},"asaas/get_payment":[{"id":"pay_test_42","status":"PENDING"},{"id":"pay_test_42","status":"CONFIRMED"}]}}

@@ -32,7 +32,8 @@ import type {
 import type { McpServerSpec } from "../mcp/index.js";
 import { mcpBridge } from "../mcp/index.js";
 import { createLogger } from "../observability/logger.js";
-import type { Session } from "../storage/types.js";
+import { tryMockedDispatch } from "../sessions/mock-dispatch.js";
+import type { Session, StorageProvider } from "../storage/types.js";
 import { LATAM_COMMERCE_SYSTEM_PROMPT } from "./system-prompt.js";
 import {
   buildToolCatalog,
@@ -123,6 +124,11 @@ export interface ChatLoopOptions {
   model?: string;
   /** Override max_tokens per Anthropic call. Defaults to DEFAULT_MAX_TOKENS. */
   maxTokens?: number;
+  /** Optional storage provider used by the mocks engine to persist
+   *  per-session per-tool counters for channel-bridge sessions. HTTP
+   *  (in-memory) sessions keep their counter in process state and
+   *  ignore this. */
+  storage?: StorageProvider | null;
 }
 
 /** Build the default Anthropic client, honouring ANTHROPIC_BASE_URL so
@@ -186,6 +192,7 @@ interface LoopRunContext {
   maxIterations: number;
   toolCalls: ToolCallRecord[];
   messages: MessageParam[];
+  storage: StorageProvider | null;
   emit?: (event: StreamEvent) => void;
 }
 
@@ -287,16 +294,33 @@ async function runInternal(ctx: LoopRunContext): Promise<SendResult> {
       }
 
       const input = coerceToolInput(tu.input);
-      const sessionSpecs = readSessionServerSpecs(ctx.session);
-      const specOverride = sessionSpecs?.[split.serverId];
-      const callOpts = specOverride !== undefined ? { specOverride } : undefined;
-      const callResult = await ctx.bridge.call(
-        ctx.session.id,
+
+      // Mocks-first: when the session declares a `mocks` field, the
+      // engine answers before the bridge is ever consulted. A
+      // passthrough (mocks absent or empty) falls through to the bridge.
+      // The four error envelopes (`tool_not_mocked`, `mocks_exhausted`,
+      // `mocks_engine_error`, plus the `consumed` happy path) all reach
+      // the model as a tool_result with `is_error` set when the kind
+      // isn't `consumed`.
+      const mocked = await tryMockedDispatch(
+        ctx.session,
         split.serverId,
         split.toolName,
         input,
-        callOpts,
       );
+
+      const sessionSpecs = readSessionServerSpecs(ctx.session);
+      const specOverride = sessionSpecs?.[split.serverId];
+      const callOpts = specOverride !== undefined ? { specOverride } : undefined;
+      const callResult = mocked
+        ? mocked.result
+        : await ctx.bridge.call(
+            ctx.session.id,
+            split.serverId,
+            split.toolName,
+            input,
+            callOpts,
+          );
 
       const status: "success" | "error" = callResult.success ? "success" : "error";
       const record: ToolCallRecord = {
@@ -361,6 +385,7 @@ export async function runChatLoop(
     maxIterations: opts.maxIterations ?? MAX_LOOP_ITERATIONS,
     toolCalls: [],
     messages: [{ role: "user", content: message }],
+    storage: opts.storage ?? null,
   };
   return runInternal(ctx);
 }
@@ -422,6 +447,7 @@ export async function* runChatLoopStream(
         maxIterations: opts.maxIterations ?? MAX_LOOP_ITERATIONS,
         toolCalls: [],
         messages: [{ role: "user", content: message }],
+        storage: opts.storage ?? null,
         emit: push,
       };
       loopResult = await runInternal(ctx);

@@ -286,7 +286,7 @@ describe("sessions/core — sendInboundMessage", () => {
       metadata: {},
     };
     const result = await sendInboundMessage(session, "olá");
-    expect(runChatLoop).toHaveBeenCalledWith("olá", session);
+    expect(runChatLoop).toHaveBeenCalledWith("olá", session, { storage: null });
     expect(result.message).toBe("echo:olá");
   });
 
@@ -303,7 +303,7 @@ describe("sessions/core — sendInboundMessage", () => {
       metadata: {},
     };
     const result = await sendInboundMessage(session, "   ");
-    expect(runChatLoop).toHaveBeenCalledWith("hello", session);
+    expect(runChatLoop).toHaveBeenCalledWith("hello", session, { storage: null });
     expect(result.message).toBe("echo:hello");
   });
 });

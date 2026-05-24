@@ -126,6 +126,25 @@ export interface ChannelConfig {
 }
 
 /**
+ * Mock value attached to a canonical "server/tool" key. A non-null JSON
+ * object is a single-shot mock; an array of non-null JSON objects is a
+ * stateful sequence consumed once per matching call.
+ *
+ * The OSS runtime mirrors the wire contract codespar-enterprise emits
+ * for hosted test mode: strict shape at create time, lenient on
+ * membership (tool ids are not catalog-validated), counter-advance-on-
+ * success-only on consume, strict-mode behaviour when a non-empty
+ * `mocks` field is declared on the session.
+ *
+ * OSS holds the mock store in process-local memory on the HTTP
+ * `Session` shape exposed by `sessions/core.ts` — it does not live on
+ * the persistent `Session` row, which is why this storage interface
+ * does not name a `mocks` field.
+ */
+export type MockObject = Record<string, unknown>;
+export type MockValue = MockObject | MockObject[];
+
+/**
  * Durable session bound to a (project, channelType, channelUserId)
  * triple. Created by the channel → session bridge (F10.M2) or by the
  * HTTP `/sessions` route. `status === 'closed'` rows are retained for

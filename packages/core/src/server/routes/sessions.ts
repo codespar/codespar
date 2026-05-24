@@ -43,7 +43,16 @@ import {
   getHttpSessionMap,
   getSessionById,
 } from "../../sessions/core.js";
-import type { Session } from "../../storage/types.js";
+import {
+  checkMocksSize,
+  validateMocksShape,
+} from "../../sessions/mocks-validation.js";
+import { tryMockedDispatch } from "../../sessions/mock-dispatch.js";
+import {
+  isTestModeEnabled,
+  MOCKS_NOT_PERMITTED_ENVELOPE,
+} from "../../sessions/test-mode-flag.js";
+import type { MockValue, Session } from "../../storage/types.js";
 
 const sendLog = createLogger("sessions:send");
 
@@ -206,11 +215,40 @@ export function registerSessionRoutes(route: RouteFn, ctx: ServerContext | null 
       servers?: string[];
       server_specs?: unknown;
       user_id?: string;
+      mocks?: unknown;
     } | undefined;
 
     const parsed = parseServerSpecs(body?.server_specs);
     if (!parsed.ok) {
       return reply.status(400).send({ error: parsed.error });
+    }
+
+    // Optional mocks field — three gates in order so the cheapest
+    // rejection reason always surfaces verbatim:
+    //   1. Env-flag — deployments that haven't opted in via
+    //      `CODESPAR_TEST_MODE_ENABLED=true` get HTTP 501
+    //      `mocks_not_permitted` regardless of payload validity.
+    //   2. Byte-size cap — 64 KiB ceiling rejects oversized payloads
+    //      before the full traversal.
+    //   3. Shape — strict-on-shape, lenient-on-membership validation.
+    // Mirrors the wire envelope codespar-enterprise emits for the
+    // managed runtime so the superset relationship holds. The OSS
+    // route omits the per-tenant test-environment gate the managed
+    // runtime enforces; the env-flag here is the OSS equivalent.
+    let mocks: Record<string, MockValue> | undefined;
+    if (body?.mocks !== undefined) {
+      if (!isTestModeEnabled()) {
+        return reply.status(501).send(MOCKS_NOT_PERMITTED_ENVELOPE);
+      }
+      const sizeError = checkMocksSize(body.mocks);
+      if (sizeError !== null) {
+        return reply.status(413).send(sizeError);
+      }
+      const shapeError = validateMocksShape(body.mocks);
+      if (shapeError !== null) {
+        return reply.status(400).send(shapeError);
+      }
+      mocks = body.mocks as Record<string, MockValue>;
     }
 
     const declared = Array.isArray(body?.servers) ? body.servers : [];
@@ -227,6 +265,7 @@ export function registerSessionRoutes(route: RouteFn, ctx: ServerContext | null 
       userId: typeof body?.user_id === "string" ? body.user_id : "anonymous",
       servers: mergedServers,
       ...(parsed.specs !== undefined ? { serverSpecs: parsed.specs } : {}),
+      ...(mocks !== undefined ? { mocks } : {}),
     });
 
     return reply.status(201).send({ id: session.id, status: session.status });
@@ -254,12 +293,44 @@ export function registerSessionRoutes(route: RouteFn, ctx: ServerContext | null 
     // MCP dispatch — `prefix/tool` names route to a spawned MCP server
     // when the prefix is registered on this session. Split on the first
     // `/` only so tool paths like `nuvem-fiscal/foo/bar` resolve to
-    // server="nuvem-fiscal", tool="foo/bar". Unknown prefixes return the
-    // existing `Tool not registered` shape (HTTP 200), not 403.
+    // server="nuvem-fiscal", tool="foo/bar".
+    //
+    // Mocks-first: the dispatch seam is consulted before anything
+    // else. Under per-deployment strict mode
+    // (`CODESPAR_TEST_MODE_ENABLED` on), the seam ALWAYS returns a
+    // result — `consumed`/`exhausted`/`tool_not_mocked`/
+    // `mocks_engine_error` — never null. With the flag off the seam
+    // short-circuits to null and the dispatcher falls through to the
+    // bridge (registered prefix) or the legacy `Tool not registered`
+    // envelope (unknown prefix) exactly as before mocks shipped.
     if (toolName.includes("/")) {
       const slashIdx = toolName.indexOf("/");
       const serverId = toolName.slice(0, slashIdx);
       const subTool = toolName.slice(slashIdx + 1);
+      if (serverId && subTool) {
+        const mocked = await tryMockedDispatch(
+          session,
+          serverId,
+          subTool,
+          body?.input ?? {},
+        );
+        if (mocked) {
+          if (mocked.outcome.kind === "tool_not_mocked") {
+            return reply.status(422).send(mocked.result.data);
+          }
+          if (mocked.outcome.kind === "exhausted") {
+            return reply.status(422).send(mocked.result.data);
+          }
+          if (mocked.outcome.kind === "mocks_engine_error") {
+            return reply.status(503).send(mocked.result.data);
+          }
+          // consumed
+          return mocked.result;
+        }
+      }
+
+      // Flag off — passthrough to bridge for registered prefixes or
+      // the legacy envelope for unknown ones.
       if (serverId && subTool && readServers(session).includes(serverId)) {
         const specOverride = readServerSpecs(session)?.[serverId];
         return mcpBridge.call(id, serverId, subTool, body?.input ?? {}, {
@@ -332,7 +403,9 @@ export function registerSessionRoutes(route: RouteFn, ctx: ServerContext | null 
       };
 
       try {
-        for await (const ev of runChatLoopStream(message, session)) {
+        for await (const ev of runChatLoopStream(message, session, {
+          storage: ctx?.storageProvider ?? null,
+        })) {
           const { type, ...rest } = ev as StreamEvent & Record<string, unknown>;
           emit(type, rest);
         }
@@ -347,7 +420,9 @@ export function registerSessionRoutes(route: RouteFn, ctx: ServerContext | null 
     }
 
     try {
-      const result = await runChatLoop(message, session);
+      const result = await runChatLoop(message, session, {
+        storage: ctx?.storageProvider ?? null,
+      });
       return result;
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
