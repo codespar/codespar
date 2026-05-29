@@ -1,6 +1,6 @@
 # Deploy — codespar
 
-This repo provides the Railway service **`codespar`** (OSS runtime, MIT). In staging, `ENABLE_WHATSAPP=false` (WhatsApp channel off — the Evolution API service `calm-prosperity` in staging is at `NO DEPLOYMENT` to keep cost at zero).
+This repo provides the Railway service **`codespar`** (OSS runtime, MIT). In staging, `ENABLE_WHATSAPP=false` (WhatsApp channel off — the staging Evolution API service is at `NO DEPLOYMENT` to keep cost at zero).
 
 ## Staging
 
@@ -39,7 +39,3 @@ railway up -s calm-prosperity     # bring Evolution API back up (currently NO DE
 ## Prerequisites
 
 - `railway login` + `railway link --project codespar`
-
-## More context
-
-Full staging topology in `~/projects/codespar/.local-dev/STAGING.md`.

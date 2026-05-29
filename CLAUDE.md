@@ -194,7 +194,7 @@ npm run db:generate && npm run db:migrate    # from packages/core/
 
 ## Deploy
 
-See [`DEPLOY.md`](DEPLOY.md) for shipping this runtime to Railway (service `codespar`) in staging (any branch) or prod (push to `main` → auto-deploy). In staging, `ENABLE_WHATSAPP=false` and the `calm-prosperity` (Evolution API) service is at `NO DEPLOYMENT`. Full staging topology in `~/projects/codespar/.local-dev/STAGING.md`.
+See [`DEPLOY.md`](DEPLOY.md) for shipping this runtime to Railway (service `codespar`) in staging (any branch) or prod (push to `main` → auto-deploy). In staging, `ENABLE_WHATSAPP=false` and the Evolution API service is at `NO DEPLOYMENT`.
 
 ## Workflow Standards
 
