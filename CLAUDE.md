@@ -192,10 +192,6 @@ npm run db:generate && npm run db:migrate    # from packages/core/
 
 **Required env:** `ANTHROPIC_API_KEY` (for agents that use Claude). **Optional:** `CODESPAR_BASE_URL` to override the SDK's default endpoint, `DATABASE_URL` to switch from FileStorage to PgStorage.
 
-## Deploy
-
-See [`DEPLOY.md`](DEPLOY.md) for shipping this runtime to Railway (service `codespar`) in staging (any branch) or prod (push to `main` → auto-deploy). In staging, `ENABLE_WHATSAPP=false` and the Evolution API service is at `NO DEPLOYMENT`.
-
 ## Workflow Standards
 
 ### Plan Before You Code
