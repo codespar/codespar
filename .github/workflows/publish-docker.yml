@@ -2,12 +2,14 @@ name: Publish Docker image
 
 on:
   push:
+    branches:
+      - main
     tags:
       - "v*"
   workflow_dispatch:
     inputs:
       tag:
-        description: "Image tag to publish (e.g. v0.1.0 or latest-test). Pushed alongside latest."
+        description: "Image tag to publish (e.g. v0.1.0 or latest-test). Pushed as the ONLY tag for this dispatch (use `latest` explicitly if you want to update the latest tag)."
         required: true
         default: "latest"
 
@@ -32,17 +34,20 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Derive image tag
-        id: tag
-        run: |
-          # On a v* push, the tag is github.ref_name (e.g. v0.1.0). On manual
-          # dispatch, it's the user-supplied input. Both code paths also push
-          # `latest`.
-          if [ "${{ github.event_name }}" = "push" ]; then
-            echo "primary=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
-          else
-            echo "primary=${{ inputs.tag }}" >> "$GITHUB_OUTPUT"
-          fi
+      - name: Derive image tags
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}
+          # Tagging matrix:
+          #   push of v* tag    -> :<v-tag> + :latest (stable channel — only path that mints :latest)
+          #   push to main      -> :main              (bleeding-edge channel)
+          #   workflow_dispatch -> :<input tag>       (manual override; type `latest` as the input to update :latest)
+          tags: |
+            type=ref,event=branch,enable=${{ github.event_name == 'push' }}
+            type=ref,event=tag,enable=${{ github.event_name == 'push' }}
+            type=raw,value=${{ inputs.tag }},enable=${{ github.event_name == 'workflow_dispatch' }}
+            type=raw,value=latest,enable=${{ github.event_name == 'push' && github.ref_type == 'tag' }}
 
       - name: Build and push image
         uses: docker/build-push-action@v5
@@ -51,8 +56,7 @@ jobs:
           file: Dockerfile
           push: true
           platforms: linux/amd64
-          tags: |
-            ghcr.io/${{ github.repository }}:${{ steps.tag.outputs.primary }}
-            ghcr.io/${{ github.repository }}:latest
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
