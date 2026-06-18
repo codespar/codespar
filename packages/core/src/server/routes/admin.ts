@@ -37,6 +37,45 @@ async function sendWelcomeEmail(email: string): Promise<void> {
   }
 }
 
+// Notify a human about a lead (e.g. the enterprise demo form) via Resend.
+// Env-gated by LEAD_NOTIFY_TO; reuses the newsletter Resend setup. Best-effort —
+// a missing config or send failure never breaks the subscribe response.
+async function notifyLead(email: string, source: string, metadata: Record<string, unknown> | undefined): Promise<void> {
+  const apiKey = process.env.RESEND_API_KEY;
+  const to = process.env.LEAD_NOTIFY_TO;
+  if (!apiKey || !to) return;
+  const m = metadata ?? {};
+  const name = String(m.name ?? "").trim();
+  const company = String(m.company ?? "").trim();
+  const useCase = String(m.useCase ?? "").trim();
+  const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  const rows: [string, string][] = [
+    ["Email", email],
+    ["Name", name || "—"],
+    ["Company", company || "—"],
+    ["Building", useCase || "—"],
+  ];
+  try {
+    await fetch("https://api.resend.com/emails", {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        from: process.env.RESEND_FROM_EMAIL || "CodeSpar <dispatch@codespar.dev>",
+        to: to.split(",").map((s) => s.trim()).filter(Boolean),
+        reply_to: email,
+        subject: `New lead (${source}) — ${name || email}${company ? ` · ${company}` : ""}`,
+        html: `<h2>New ${esc(source)} lead</h2><table cellpadding="6">${rows.map(([k, v]) => `<tr><td><strong>${esc(k)}</strong></td><td>${esc(v)}</td></tr>`).join("")}</table>`,
+      }),
+    });
+    newsletterLog.info("Lead notification sent", { email, source });
+  } catch (err) {
+    newsletterLog.error("Failed to send lead notification", { email, source, error: err instanceof Error ? err.message : String(err) });
+  }
+}
+
 export function registerAdminRoutes(route: RouteFn, ctx: ServerContext): void {
     // ── Integration token management (org-scoped) ──────────────────
 
@@ -162,7 +201,7 @@ export function registerAdminRoutes(route: RouteFn, ctx: ServerContext): void {
     // Subscribe to newsletter
     route("post", "/api/newsletter/subscribe",
       async (request: any, reply: any) => {
-        const { email, source } = request.body as { email?: string; source?: string };
+        const { email, source, metadata } = request.body as { email?: string; source?: string; metadata?: Record<string, unknown> };
 
         if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
           return reply.status(400).send({ error: "Valid email is required" });
@@ -176,6 +215,12 @@ export function registerAdminRoutes(route: RouteFn, ctx: ServerContext): void {
         );
 
         const subscriber = await storage.addSubscriber(email, source ?? "homepage");
+
+        // Notify a human about lead sources (e.g. the enterprise demo form),
+        // regardless of subscription state — a repeat requester must still reach us.
+        if ((source ?? "") === "enterprise-contact") {
+          await notifyLead(subscriber.email, source ?? "", metadata);
+        }
 
         if (existing) {
           return { success: true, message: "Already subscribed" };
