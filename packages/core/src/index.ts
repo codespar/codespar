@@ -121,6 +121,13 @@ export type {
 } from "./server/webhook-server.js";
 export { WebhookServer, broadcastEvent } from "./server/webhook-server.js";
 
+// Session routes — the Fastify route registrar behind POST /sessions/:id/execute.
+// Exported so self-hosters (and the meta-tool adapter example) can mount the
+// real execute path in their own Fastify app and dispatch registered
+// meta-tools end-to-end, without standing up the full WebhookServer.
+export { registerSessionRoutes } from "./server/routes/sessions.js";
+export type { RouteFn } from "./server/routes/types.js";
+
 // Agents (Plugin Registry)
 export {
   registerAgentType,

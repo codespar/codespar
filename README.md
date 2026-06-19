@@ -254,8 +254,12 @@ tests). A runnable end-to-end script lives at
   `pluginRegistry.registerMetaTool(...)` and the runtime dispatches it by
   name through the standard execute path. A self-hoster, a community
   plugin, or the managed runtime can each register their own. See
-  [`examples/meta-tool-adapter`](examples/meta-tool-adapter) for a
-  runnable registrant.
+  [`examples/meta-tool-adapter`](examples/meta-tool-adapter) — a complete,
+  end-to-end-tested custom meta-tool. It's the canonical pattern to copy
+  when registering your own: its integration test mounts the real
+  `registerSessionRoutes` in a Fastify app and dispatches the example
+  through the real `POST /sessions/:id/execute` route, so copying it gives
+  you a registrant proven against the actual seam, not a sketch.
 - **Tenancy**: Organization → Project, mirroring the enterprise
   contract. `x-codespar-project` header on every `/v1` route; optional
   on inbound channel messages via `channel_links` bindings. See
