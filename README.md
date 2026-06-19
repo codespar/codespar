@@ -254,7 +254,7 @@ tests). A runnable end-to-end script lives at
   `pluginRegistry.registerMetaTool(...)` and the runtime dispatches it by
   name through the standard execute path. A self-hoster, a community
   plugin, or the managed runtime can each register their own. See
-  [`examples/oss-meta-tool-adapter`](examples/oss-meta-tool-adapter) for a
+  [`examples/meta-tool-adapter`](examples/meta-tool-adapter) for a
   minimal registrant.
 - **Tenancy**: Organization → Project, mirroring the enterprise
   contract. `x-codespar-project` header on every `/v1` route; optional

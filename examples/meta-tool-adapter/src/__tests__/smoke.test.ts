@@ -35,7 +35,7 @@ describe("example adapter — registration + dispatch", () => {
     const registry = new PluginRegistry();
     registerExampleMetaTool(registry);
     const hook = registry.getMetaTool(EXAMPLE_TOOL_NAME);
-    expect(hook?.id).toBe("oss-example");
+    expect(hook?.id).toBe("example");
   });
 
   it("is advertised through metaToolDefinitions after registration", () => {
@@ -50,7 +50,7 @@ describe("example adapter — registration + dispatch", () => {
     registerExampleMetaTool(registry);
     const hook = registry.getMetaTool(EXAMPLE_TOOL_NAME)!;
     const result = await hook.execute(EXAMPLE_TOOL_NAME, { action: "search" }, ctx);
-    expect(result.server_id).toBe("oss-example");
+    expect(result.server_id).toBe("example");
     const data = result.output as { products: { sku_id: string }[] };
     expect(data.products[0]?.sku_id).toBe("example-sku-001");
   });

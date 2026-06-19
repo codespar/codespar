@@ -1,9 +1,9 @@
-# Example: OSS meta-tool adapter
+# Example: meta-tool adapter
 
 A minimal MIT example that registers a meta-tool against the runtime's
 `MetaToolHook` registration seam (the fifth plugin hook) and proves it
-dispatches end-to-end on a fresh, self-hosted OSS install — with no
-managed-tier dependency.
+dispatches end-to-end on a fresh self-hosted install — with nothing
+beyond the framework.
 
 ## What it shows
 
@@ -14,7 +14,7 @@ managed-tier dependency.
 
 ```ts
 import { pluginRegistry } from "@codespar/core";
-import { registerExampleMetaTool } from "@codespar/example-oss-meta-tool-adapter";
+import { registerExampleMetaTool } from "@codespar/example-meta-tool-adapter";
 
 registerExampleMetaTool(pluginRegistry);
 // pluginRegistry.seal();  // lock the registry after bootstrap

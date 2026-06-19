@@ -124,7 +124,7 @@ export interface MetaToolResult {
  * sandbox registrants.
  */
 export interface MetaToolHook {
-  /** Diagnostic id for this registrant, e.g. "oss-example". */
+  /** Diagnostic id for this registrant, e.g. "example". */
   id: string;
   /** Meta-tool names this hook serves. */
   handles: string[];

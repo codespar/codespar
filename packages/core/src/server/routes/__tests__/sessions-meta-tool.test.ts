@@ -97,13 +97,13 @@ describe("sessions meta-tool dispatch", () => {
   });
 
   it("dispatches a registered meta-tool and returns a success envelope", async () => {
-    pluginRegistry.registerMetaTool(makeHook("oss-example", "codespar_shop"));
+    pluginRegistry.registerMetaTool(makeHook("example", "codespar_shop"));
     const app = createTestApp();
     const id = await createSession(app);
 
     const result = await execute(app, id, "codespar_shop", { action: "search" });
     expect(result.success).toBe(true);
-    expect(result.server).toBe("oss-example");
+    expect(result.server).toBe("example");
     expect(result.data).toEqual({ ok: true, echoed: "codespar_shop" });
     expect(result.error).toBe("");
     await app.close();
@@ -121,7 +121,7 @@ describe("sessions meta-tool dispatch", () => {
   });
 
   it("advertises registered meta-tools through codespar_list_tools", async () => {
-    pluginRegistry.registerMetaTool(makeHook("oss-example", "codespar_shop"));
+    pluginRegistry.registerMetaTool(makeHook("example", "codespar_shop"));
     const app = createTestApp();
     const id = await createSession(app);
 
@@ -134,7 +134,7 @@ describe("sessions meta-tool dispatch", () => {
 
   it("surfaces a thrown hook as a failure envelope without leaking a raw error", async () => {
     pluginRegistry.registerMetaTool(
-      makeHook("oss-example", "codespar_shop", async () => {
+      makeHook("example", "codespar_shop", async () => {
         throw new Error("provider unavailable");
       }),
     );
@@ -144,7 +144,7 @@ describe("sessions meta-tool dispatch", () => {
     const result = await execute(app, id, "codespar_shop");
     expect(result.success).toBe(false);
     expect(result.error).toBe("provider unavailable");
-    expect(result.server).toBe("oss-example");
+    expect(result.server).toBe("example");
     await app.close();
   });
 });

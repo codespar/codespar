@@ -180,7 +180,7 @@ export class PluginRegistry {
 
   /** Get the meta-tool hook registered for a name, or null when none is.
    *  Null is the permissive default — the dispatch path falls through to
-   *  the normal "Tool not registered" envelope, so an OSS runtime with no
+   *  the normal "Tool not registered" envelope, so a runtime with no
    *  registrant behaves exactly as before the seam existed. */
   getMetaTool(name: string): MetaToolHook | null {
     return this.metaTools.get(name) ?? null;

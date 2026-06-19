@@ -37,7 +37,7 @@ describe("PluginRegistry meta-tool seam", () => {
 
   it("registers a hook and retrieves it by name", () => {
     const registry = new PluginRegistry();
-    const hook = makeHook("oss-example", ["codespar_shop"]);
+    const hook = makeHook("example", ["codespar_shop"]);
     registry.registerMetaTool(hook);
     expect(registry.getMetaTool("codespar_shop")).toBe(hook);
   });

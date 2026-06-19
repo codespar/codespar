@@ -1,7 +1,7 @@
 /**
  * Example MIT meta-tool adapter — proves the MetaToolHook registration
- * seam works end-to-end on a fresh OSS install, with zero managed-tier
- * dependency.
+ * seam works end-to-end on a fresh self-hosted install, with nothing
+ * beyond the framework.
  *
  * !! DO NOT USE THIS AS A SKELETON FOR A REAL ADAPTER. !!
  *
@@ -71,7 +71,7 @@ const DEFINITIONS: MetaToolDefinition[] = [
  * self-hoster experimenting with override semantics) can register two
  * distinct instances.
  */
-export function createExampleMetaToolHook(id = "oss-example"): MetaToolHook {
+export function createExampleMetaToolHook(id = "example"): MetaToolHook {
   return {
     id,
     handles: [EXAMPLE_TOOL_NAME],
