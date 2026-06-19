@@ -4,7 +4,11 @@ export default defineConfig({
   test: {
     globals: true,
     environment: "node",
-    include: ["packages/**/src/**/__tests__/**/*.test.ts", "tests/**/*.test.ts"],
+    include: [
+      "packages/**/src/**/__tests__/**/*.test.ts",
+      "examples/**/src/**/__tests__/**/*.test.ts",
+      "tests/**/*.test.ts",
+    ],
   },
   resolve: {
     // Include the "development" condition so @codespar/types/testing resolves

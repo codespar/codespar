@@ -5,7 +5,8 @@
   "workspaces": [
     "packages/*",
     "packages/agents/*",
-    "packages/channels/*"
+    "packages/channels/*",
+    "examples/*"
   ],
   "scripts": {
     "build": "turbo run build",

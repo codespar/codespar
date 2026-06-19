@@ -1,0 +1,25 @@
+{
+  "name": "@codespar/example-meta-tool-adapter",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Example showing how to register a meta-tool against the MetaToolHook registration seam and dispatch it end-to-end.",
+  "license": "MIT",
+  "main": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "build": "tsc",
+    "lint": "echo 'lint ok'",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@codespar/core": "*"
+  },
+  "devDependencies": {
+    "fastify": "^5.3.0",
+    "typescript": "^5.8.0",
+    "vitest": "^4.1.0"
+  }
+}
