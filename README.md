@@ -247,8 +247,15 @@ tests). A runnable end-to-end script lives at
 - **Storage**: PostgreSQL (Drizzle) + Redis, with a file-storage fallback
   for single-tenant installs.
 - **Plugin hooks**: `PolicyHook`, `ObservabilityHook`, `SecretsHook`,
-  `IntegrationHook` — the managed tier's governance layer plugs in
-  here; public core never imports enterprise packages.
+  `IntegrationHook`, and `MetaToolHook` — the managed tier's governance
+  layer and meta-tool implementations plug in here; public core never
+  imports enterprise packages. `MetaToolHook` is the meta-tool
+  registration seam: register a named higher-level tool with
+  `pluginRegistry.registerMetaTool(...)` and the runtime dispatches it by
+  name through the standard execute path. A self-hoster, a community
+  plugin, or the managed runtime can each register their own. See
+  [`examples/oss-meta-tool-adapter`](examples/oss-meta-tool-adapter) for a
+  minimal registrant.
 - **Tenancy**: Organization → Project, mirroring the enterprise
   contract. `x-codespar-project` header on every `/v1` route; optional
   on inbound channel messages via `channel_links` bindings. See
@@ -281,8 +288,13 @@ are rejected even when the secret is unset.
 
 ## What's not in OSS yet
 
-The OSS runtime is functionally complete for self-hosting an agent that
-transacts on LATAM rails — but the following surfaces live only in
+The OSS runtime is a complete framework for self-hosting an agent that
+transacts on LATAM rails — the runtime, channel adapters, SDK, plugin
+hooks (including the `MetaToolHook` registration seam), and an example
+registrant. Higher-level meta-tools are dispatched through the seam: a
+self-hoster registers their own implementation, pulls in a community
+plugin, or points at the managed runtime. The following surfaces live
+only in
 [`codespar-enterprise`](https://github.com/codespar/codespar-enterprise) today
 and are on the OSS roadmap:
 

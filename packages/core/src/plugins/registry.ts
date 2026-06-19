@@ -18,6 +18,8 @@ import type {
   ObservabilityHook,
   SecretsHook,
   IntegrationHook,
+  MetaToolHook,
+  MetaToolDefinition,
   PolicyDecision,
   ToolMetric,
 } from "./types.js";
@@ -30,6 +32,8 @@ export class PluginRegistry {
   private observability: ObservabilityHook | null = null;
   private secrets: SecretsHook | null = null;
   private integrations: Map<string, IntegrationHook> = new Map();
+  /** Meta-tool hooks keyed by the meta-tool name they handle. */
+  private metaTools: Map<string, MetaToolHook> = new Map();
   private sealed = false;
 
   /** Register a policy engine plugin.
@@ -66,6 +70,42 @@ export class PluginRegistry {
   registerIntegration(hook: IntegrationHook): void {
     this.integrations.set(hook.id, hook);
     log.info("Integration plugin registered", { id: hook.id, name: hook.name });
+  }
+
+  /** Register a meta-tool hook.
+   *
+   * The hook is indexed by every name in `hook.handles`. This seam is
+   * hardened beyond `registerIntegration`'s silent overwrite because it
+   * carries money-path names (a registered meta-tool runs arbitrary
+   * in-process code on the execute path):
+   *
+   *   - It honors `seal()`: registering after the registry is sealed
+   *     throws, closing the post-boot registration window — matching
+   *     `registerPolicy`'s safety intent.
+   *   - It logs a warning on every name-override, carrying the incoming
+   *     and shadowed registrant ids plus the shadowed name, so a
+   *     money-path shadow is observable rather than silent.
+   *
+   * Last-registrant-wins is retained as the intended override mechanism
+   * (a self-hoster overriding an example adapter) — the logging makes it
+   * auditable, not blocked.
+   */
+  registerMetaTool(hook: MetaToolHook): void {
+    if (this.sealed) {
+      throw new Error("Plugin registry is sealed; no further registrations are allowed.");
+    }
+    for (const name of hook.handles) {
+      const existing = this.metaTools.get(name);
+      if (existing && existing.id !== hook.id) {
+        log.warn("Meta-tool name override", {
+          name,
+          shadowedBy: hook.id,
+          shadowed: existing.id,
+        });
+      }
+      this.metaTools.set(name, hook);
+    }
+    log.info("Meta-tool plugin registered", { id: hook.id, handles: hook.handles });
   }
 
   /** Seal the registry against any further policy registrations.
@@ -136,6 +176,29 @@ export class PluginRegistry {
     return Array.from(this.integrations.values());
   }
 
+  // ── Meta-tools API ──────────────────────────────────────────
+
+  /** Get the meta-tool hook registered for a name, or null when none is.
+   *  Null is the permissive default — the dispatch path falls through to
+   *  the normal "Tool not registered" envelope, so an OSS runtime with no
+   *  registrant behaves exactly as before the seam existed. */
+  getMetaTool(name: string): MetaToolHook | null {
+    return this.metaTools.get(name) ?? null;
+  }
+
+  /** Advertised definitions across all registered meta-tool hooks, so
+   *  tool-listing surfaces track what is actually registered. Definitions
+   *  are de-duplicated by name (last-registrant-wins, mirroring dispatch). */
+  metaToolDefinitions(): MetaToolDefinition[] {
+    const byName = new Map<string, MetaToolDefinition>();
+    for (const hook of new Set(this.metaTools.values())) {
+      for (const def of hook.definitions?.() ?? []) {
+        byName.set(def.name, def);
+      }
+    }
+    return Array.from(byName.values());
+  }
+
   // ── Diagnostics ─────────────────────────────────────────────
 
   /** Get a summary of registered plugins (for health/status endpoints) */
@@ -144,6 +207,7 @@ export class PluginRegistry {
     observability: boolean;
     secrets: boolean;
     integrations: string[];
+    metaTools: string[];
     sealed: boolean;
   } {
     return {
@@ -151,6 +215,7 @@ export class PluginRegistry {
       observability: this.observability !== null,
       secrets: this.secrets !== null,
       integrations: Array.from(this.integrations.keys()),
+      metaTools: Array.from(this.metaTools.keys()),
       sealed: this.sealed,
     };
   }

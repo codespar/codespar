@@ -1,0 +1,23 @@
+{
+  "name": "@codespar/example-oss-meta-tool-adapter",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Minimal MIT example proving the MetaToolHook registration seam end-to-end. Not production coverage — register a real implementation against the seam for live use.",
+  "license": "MIT",
+  "main": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "build": "tsc",
+    "lint": "echo 'lint ok'",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@codespar/core": "*"
+  },
+  "devDependencies": {
+    "typescript": "^5.8.0"
+  }
+}

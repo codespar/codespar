@@ -186,6 +186,10 @@ export type {
   ObservabilityHook,
   SecretsHook,
   IntegrationHook,
+  MetaToolHook,
+  MetaToolExecutionContext,
+  MetaToolDefinition,
+  MetaToolResult,
   PluginHooks,
 } from "./plugins/index.js";
 

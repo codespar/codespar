@@ -36,6 +36,8 @@ import {
 import { mcpBridge } from "../../mcp/index.js";
 import type { McpServerSpec } from "../../mcp/index.js";
 import { createLogger } from "../../observability/logger.js";
+import { pluginRegistry } from "../../plugins/index.js";
+import type { MetaToolExecutionContext } from "../../plugins/index.js";
 import {
   clearSessionStore as clearCoreStore,
   closeSessionById,
@@ -148,9 +150,18 @@ function executeBuiltIn(toolName: string, sessionId: string): {
 
   if (toolName === "codespar_list_tools") {
     const allMeta = getAllAgentMetadata();
-    const tools = allMeta.flatMap((m) =>
+    const agentTools = allMeta.flatMap((m) =>
       m.skills.map((s) => ({ id: s.id, name: s.name, agentType: m.type }))
     );
+    // Advertise registered meta-tools alongside agent skills so the
+    // listed surface tracks what the runtime can actually dispatch. With
+    // no registrant, metaToolDefinitions() is empty and this is a no-op.
+    const metaTools = pluginRegistry.metaToolDefinitions().map((d) => ({
+      id: d.name,
+      name: d.name,
+      agentType: "meta-tool",
+    }));
+    const tools = [...agentTools, ...metaTools];
     return {
       success: true,
       data: { tools },
@@ -351,6 +362,55 @@ export function registerSessionRoutes(route: RouteFn, ctx: ServerContext | null 
 
     if (BUILT_IN_TOOLS.has(toolName)) {
       return executeBuiltIn(toolName, id);
+    }
+
+    // Meta-tool dispatch — consult the plugin registry for a hook
+    // registered under this name. Meta-tool names contain no `/`, so this
+    // is unreachable for MCP-prefixed names (handled in the branch above)
+    // and can never shadow them. With no registrant, getMetaTool returns
+    // null and the runtime falls through to "Tool not registered" exactly
+    // as before the seam existed.
+    const metaHook = pluginRegistry.getMetaTool(toolName);
+    if (metaHook) {
+      const metaCtx: MetaToolExecutionContext = {
+        orgId: session.orgId,
+        projectId: session.projectId,
+        sessionId: id,
+        environment: "live",
+        ...(request.raw?.signal instanceof AbortSignal
+          ? { signal: request.raw.signal }
+          : {}),
+      };
+      const tool_call_id = `${id}-${randomUUID().slice(0, 8)}`;
+      const called_at = new Date().toISOString();
+      try {
+        const result = await metaHook.execute(toolName, body?.input ?? {}, metaCtx);
+        return {
+          success: true,
+          data: result.output,
+          error: "",
+          duration: result.duration_ms,
+          server: result.server_id,
+          tool: toolName,
+          tool_call_id,
+          called_at,
+        };
+      } catch (err) {
+        // Sanitize the failure message — registrants own redaction of
+        // sensitive fields, but the runtime must not leak a raw error
+        // object across the envelope boundary either.
+        const message = err instanceof Error ? err.message : "meta-tool execution failed";
+        return {
+          success: false,
+          data: {},
+          error: message,
+          duration: 0,
+          server: metaHook.id,
+          tool: toolName,
+          tool_call_id,
+          called_at,
+        };
+      }
     }
 
     return {
