@@ -74,17 +74,17 @@ export class PluginRegistry {
 
   /** Register a meta-tool hook.
    *
-   * The hook is indexed by every name in `hook.handles`. This seam is
-   * hardened beyond `registerIntegration`'s silent overwrite because it
-   * carries money-path names (a registered meta-tool runs arbitrary
-   * in-process code on the execute path):
+   * The hook is indexed by every name in `hook.handles`. A registered
+   * meta-tool runs arbitrary in-process code on the execute path, and a
+   * registrant can shadow a name another registrant already handles, so
+   * this seam is hardened beyond `registerIntegration`'s silent overwrite:
    *
    *   - It honors `seal()`: registering after the registry is sealed
    *     throws, closing the post-boot registration window — matching
    *     `registerPolicy`'s safety intent.
    *   - It logs a warning on every name-override, carrying the incoming
-   *     and shadowed registrant ids plus the shadowed name, so a
-   *     money-path shadow is observable rather than silent.
+   *     and shadowed registrant ids plus the shadowed name, so a name
+   *     shadow is observable rather than silent.
    *
    * Last-registrant-wins is retained as the intended override mechanism
    * (a self-hoster overriding an example adapter) — the logging makes it

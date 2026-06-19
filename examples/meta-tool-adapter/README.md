@@ -1,16 +1,15 @@
 # Example: meta-tool adapter
 
-A minimal MIT example that registers a meta-tool against the runtime's
-`MetaToolHook` registration seam (the fifth plugin hook) and proves it
-dispatches end-to-end on a fresh self-hosted install — with nothing
-beyond the framework.
+An example that registers a meta-tool against the runtime's `MetaToolHook`
+registration seam (the fifth plugin hook) and shows it dispatch end-to-end on a
+fresh self-hosted install — with nothing beyond the framework.
 
 ## What it shows
 
 - How to implement a `MetaToolHook` (`id`, `handles`, `definitions`, `execute`).
 - How to register it on the `pluginRegistry` singleton during bootstrap.
 - How the runtime then dispatches `POST /sessions/:id/execute` with
-  `{ "tool": "codespar_shop" }` through your hook by name.
+  `{ "tool": "example_echo" }` through your hook by name.
 
 ```ts
 import { pluginRegistry } from "@codespar/core";
@@ -20,14 +19,12 @@ registerExampleMetaTool(pluginRegistry);
 // pluginRegistry.seal();  // lock the registry after bootstrap
 ```
 
-## What it is NOT
+The example tool (`example_echo`) is deliberately neutral: it echoes its input,
+upper-cases it on `action: "uppercase"`, and returns a fixed pong on
+`action: "ping"`. Swap the hook body for whatever your meta-tool needs to do —
+the registration and dispatch wiring is the same.
 
-This adapter is illustrative, not production coverage. It mints a clearly
-fake, non-payable sample code and settles nothing. It implements none of
-the input-validation obligations a real adapter must honor (SSRF
-normalization, host allow-listing, DoS bounds, PII/secret redaction), and
-it rejects any request carrying a real `url` or `merchant` so the
-"fork the example" path cannot silently ship an unsafe dereference.
-
-Do not use it as a skeleton for a real adapter. Register a real
-implementation against the seam for live coverage.
+A registered hook runs arbitrary in-process code on the execute path, so treat
+any registrant with the same scrutiny as a dependency you import and call. The
+seam does not sandbox registrants: a real registrant owns its own input
+validation, host allow-listing, resource bounds, and log redaction.

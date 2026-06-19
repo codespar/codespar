@@ -3,7 +3,7 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "Minimal MIT example proving the MetaToolHook registration seam end-to-end. Not production coverage — register a real implementation against the seam for live use.",
+  "description": "Example showing how to register a meta-tool against the MetaToolHook registration seam and dispatch it end-to-end.",
   "license": "MIT",
   "main": "./src/index.ts",
   "exports": {

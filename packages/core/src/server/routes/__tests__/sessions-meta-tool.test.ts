@@ -97,14 +97,14 @@ describe("sessions meta-tool dispatch", () => {
   });
 
   it("dispatches a registered meta-tool and returns a success envelope", async () => {
-    pluginRegistry.registerMetaTool(makeHook("example", "codespar_shop"));
+    pluginRegistry.registerMetaTool(makeHook("example", "example_echo"));
     const app = createTestApp();
     const id = await createSession(app);
 
-    const result = await execute(app, id, "codespar_shop", { action: "search" });
+    const result = await execute(app, id, "example_echo", { action: "search" });
     expect(result.success).toBe(true);
     expect(result.server).toBe("example");
-    expect(result.data).toEqual({ ok: true, echoed: "codespar_shop" });
+    expect(result.data).toEqual({ ok: true, echoed: "example_echo" });
     expect(result.error).toBe("");
     await app.close();
   });
@@ -113,35 +113,35 @@ describe("sessions meta-tool dispatch", () => {
     const app = createTestApp();
     const id = await createSession(app);
 
-    const result = await execute(app, id, "codespar_shop", { action: "search" });
+    const result = await execute(app, id, "example_echo", { action: "search" });
     expect(result.success).toBe(false);
-    expect(result.error).toBe("Tool not registered: codespar_shop");
+    expect(result.error).toBe("Tool not registered: example_echo");
     expect(result.server).toBe("oss-runtime");
     await app.close();
   });
 
   it("advertises registered meta-tools through codespar_list_tools", async () => {
-    pluginRegistry.registerMetaTool(makeHook("example", "codespar_shop"));
+    pluginRegistry.registerMetaTool(makeHook("example", "example_echo"));
     const app = createTestApp();
     const id = await createSession(app);
 
     const result = await execute(app, id, "codespar_list_tools");
     expect(result.success).toBe(true);
     const tools = (result.data as { tools: { name: string }[] }).tools;
-    expect(tools.some((t) => t.name === "codespar_shop")).toBe(true);
+    expect(tools.some((t) => t.name === "example_echo")).toBe(true);
     await app.close();
   });
 
   it("surfaces a thrown hook as a failure envelope without leaking a raw error", async () => {
     pluginRegistry.registerMetaTool(
-      makeHook("example", "codespar_shop", async () => {
+      makeHook("example", "example_echo", async () => {
         throw new Error("provider unavailable");
       }),
     );
     const app = createTestApp();
     const id = await createSession(app);
 
-    const result = await execute(app, id, "codespar_shop");
+    const result = await execute(app, id, "example_echo");
     expect(result.success).toBe(false);
     expect(result.error).toBe("provider unavailable");
     expect(result.server).toBe("example");

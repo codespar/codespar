@@ -1,10 +1,8 @@
 /**
  * Fresh-install smoke for the example meta-tool adapter.
  *
- * Proves the registration seam accepts the example as a registrant and
- * dispatches it, and asserts the SSRF-hardening stance: the example
- * rejects any real url/merchant outright (it implements no input
- * validation, so refusal is the only safe behavior).
+ * Proves the registration seam accepts the example as a registrant, lists
+ * it through its advertised definitions, and dispatches it by name.
  *
  * This is the example's own smoke — it depends only on the published
  * `@codespar/core` seam surface (PluginRegistry + the MetaToolHook type),
@@ -20,7 +18,6 @@ import {
   createExampleMetaToolHook,
   registerExampleMetaTool,
   EXAMPLE_TOOL_NAME,
-  SAMPLE_NON_PAYABLE_CODE,
 } from "../index.js";
 
 const ctx: MetaToolExecutionContext = {
@@ -45,37 +42,27 @@ describe("example adapter — registration + dispatch", () => {
     expect(names).toContain(EXAMPLE_TOOL_NAME);
   });
 
-  it("dispatches a search through the registered hook", async () => {
+  it("echoes the message through the registered hook", async () => {
     const registry = new PluginRegistry();
     registerExampleMetaTool(registry);
     const hook = registry.getMetaTool(EXAMPLE_TOOL_NAME)!;
-    const result = await hook.execute(EXAMPLE_TOOL_NAME, { action: "search" }, ctx);
+    const result = await hook.execute(EXAMPLE_TOOL_NAME, { action: "echo", message: "hi" }, ctx);
     expect(result.server_id).toBe("example");
-    const data = result.output as { products: { sku_id: string }[] };
-    expect(data.products[0]?.sku_id).toBe("example-sku-001");
+    const data = result.output as { message: string };
+    expect(data.message).toBe("hi");
   });
 
-  it("returns a non-payable sample code (mints nothing real)", async () => {
+  it("upper-cases the message for action uppercase", async () => {
     const hook = createExampleMetaToolHook();
-    const result = await hook.execute(EXAMPLE_TOOL_NAME, { action: "checkout_status" }, ctx);
-    const output = result.output as { pix_copia_e_cola: string };
-    expect(output.pix_copia_e_cola).toBe(SAMPLE_NON_PAYABLE_CODE);
-    expect(output.pix_copia_e_cola).toContain("NON-PAYABLE");
-  });
-});
-
-describe("example adapter — SSRF hardening", () => {
-  it("rejects a real url outright (no validation, so no dereference)", async () => {
-    const hook = createExampleMetaToolHook();
-    await expect(
-      hook.execute(EXAMPLE_TOOL_NAME, { action: "checkout", url: "http://169.254.169.254/" }, ctx),
-    ).rejects.toThrow(/rejects real url\/merchant/);
+    const result = await hook.execute(EXAMPLE_TOOL_NAME, { action: "uppercase", message: "hi" }, ctx);
+    const output = result.output as { message: string };
+    expect(output.message).toBe("HI");
   });
 
-  it("rejects a real merchant outright", async () => {
+  it("returns a fixed pong for action ping", async () => {
     const hook = createExampleMetaToolHook();
-    await expect(
-      hook.execute(EXAMPLE_TOOL_NAME, { action: "search", merchant: "evil-store" }, ctx),
-    ).rejects.toThrow(/rejects real url\/merchant/);
+    const result = await hook.execute(EXAMPLE_TOOL_NAME, { action: "ping" }, ctx);
+    const output = result.output as { pong: boolean };
+    expect(output.pong).toBe(true);
   });
 });

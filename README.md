@@ -255,7 +255,7 @@ tests). A runnable end-to-end script lives at
   name through the standard execute path. A self-hoster, a community
   plugin, or the managed runtime can each register their own. See
   [`examples/meta-tool-adapter`](examples/meta-tool-adapter) for a
-  minimal registrant.
+  runnable registrant.
 - **Tenancy**: Organization → Project, mirroring the enterprise
   contract. `x-codespar-project` header on every `/v1` route; optional
   on inbound channel messages via `channel_links` bindings. See
