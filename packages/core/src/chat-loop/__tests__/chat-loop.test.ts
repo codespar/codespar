@@ -16,6 +16,26 @@ import {
 } from "../index.js";
 import type { Session } from "../../storage/types.js";
 import type { ListToolsResult, ToolResult } from "../../mcp/index.js";
+import type {
+  MetaToolDefinition,
+  MetaToolExecutionContext,
+  MetaToolHook,
+  MetaToolResult,
+} from "../../plugins/index.js";
+
+/** Minimal registry stub exposing the two methods the loop consumes:
+ *  `metaToolDefinitions` (catalog) and `getMetaTool` (dispatch). */
+function stubRegistry(hook: MetaToolHook | null): {
+  metaToolDefinitions: () => MetaToolDefinition[];
+  getMetaTool: (name: string) => MetaToolHook | null;
+} {
+  const defs = hook?.definitions?.() ?? [];
+  return {
+    metaToolDefinitions: () => defs,
+    getMetaTool: (name: string) =>
+      hook?.handles.includes(name) ? hook : null,
+  };
+}
 
 function makeSession(servers: string[]): Session {
   return {
@@ -299,6 +319,147 @@ describe("runChatLoop", () => {
     expect(result.iterations).toBe(1);
     expect(result.tool_calls).toEqual([]);
     expect(result.message).toBe("hi there");
+  });
+
+  it("dispatches a registered meta-tool (bare name, no `__`) through the registry", async () => {
+    const session = makeSession([]);
+    const bridge = stubBridge({});
+    const execute = vi.fn(
+      async (
+        _name: string,
+        input: Record<string, unknown>,
+        _ctx: MetaToolExecutionContext,
+      ): Promise<MetaToolResult> => ({
+        server_id: "shop-provider",
+        output: { items: ["a", "b"], echoedInput: input },
+        duration_ms: 7,
+      }),
+    );
+    const hook: MetaToolHook = {
+      id: "example-shop",
+      handles: ["codespar_shop"],
+      definitions: () => [
+        {
+          name: "codespar_shop",
+          description: "Shop a catalog",
+          input_schema: { type: "object", properties: {} },
+        },
+      ],
+      execute,
+    };
+
+    const { client, calls } = stubAnthropic([
+      {
+        stop_reason: "tool_use",
+        content: [
+          { type: "tool_use", id: "tu1", name: "codespar_shop", input: { query: "shoes" } },
+        ],
+      },
+      {
+        stop_reason: "end_turn",
+        content: [{ type: "text", text: "found 2 items" }],
+      },
+    ]);
+
+    const result = await runChatLoop("buy shoes", session, {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      anthropicClient: client as any,
+      bridge,
+      registry: stubRegistry(hook),
+    });
+
+    // The meta-tool definition reached the LLM via the catalog.
+    const sentTools = (calls[0].tools ?? []) as Array<{ name: string }>;
+    expect(sentTools.map((t) => t.name)).toContain("codespar_shop");
+
+    // It dispatched through the registry hook, not the MCP bridge.
+    expect(execute).toHaveBeenCalledTimes(1);
+    expect(execute.mock.calls[0][0]).toBe("codespar_shop");
+    expect(execute.mock.calls[0][1]).toEqual({ query: "shoes" });
+    expect(execute.mock.calls[0][2]).toMatchObject({
+      orgId: "org",
+      projectId: "proj",
+      sessionId: "sess-test",
+      environment: "live",
+    });
+    expect(bridge.call).not.toHaveBeenCalled();
+
+    expect(result.tool_calls).toHaveLength(1);
+    expect(result.tool_calls[0]).toMatchObject({
+      tool_name: "codespar_shop",
+      server_id: "shop-provider",
+      status: "success",
+    });
+    expect(result.message).toBe("found 2 items");
+  });
+
+  it("records a meta-tool execution failure with error_code and continues the loop", async () => {
+    const session = makeSession([]);
+    const bridge = stubBridge({});
+    const hook: MetaToolHook = {
+      id: "example-shop",
+      handles: ["codespar_shop"],
+      definitions: () => [
+        {
+          name: "codespar_shop",
+          description: "Shop a catalog",
+          input_schema: { type: "object", properties: {} },
+        },
+      ],
+      execute: vi.fn(async () => {
+        throw new Error("provider unavailable");
+      }),
+    };
+
+    const { client } = stubAnthropic([
+      {
+        stop_reason: "tool_use",
+        content: [{ type: "tool_use", id: "tu1", name: "codespar_shop", input: {} }],
+      },
+      {
+        stop_reason: "end_turn",
+        content: [{ type: "text", text: "could not shop" }],
+      },
+    ]);
+
+    const result = await runChatLoop("buy shoes", session, {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      anthropicClient: client as any,
+      bridge,
+      registry: stubRegistry(hook),
+    });
+
+    expect(result.tool_calls).toHaveLength(1);
+    expect(result.tool_calls[0].status).toBe("error");
+    expect(result.tool_calls[0].error_code).toBe("provider unavailable");
+    expect(result.message).toBe("could not shop");
+  });
+
+  it("falls back to unknown_tool_name for a bare name with no registered meta-tool", async () => {
+    const session = makeSession([]);
+    const bridge = stubBridge({});
+
+    const { client } = stubAnthropic([
+      {
+        stop_reason: "tool_use",
+        content: [{ type: "tool_use", id: "tu1", name: "codespar_shop", input: {} }],
+      },
+      {
+        stop_reason: "end_turn",
+        content: [{ type: "text", text: "recovered" }],
+      },
+    ]);
+
+    const result = await runChatLoop("buy shoes", session, {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      anthropicClient: client as any,
+      bridge,
+      registry: stubRegistry(null),
+    });
+
+    expect(result.tool_calls[0].status).toBe("error");
+    expect(result.tool_calls[0].error_code).toContain("unknown_tool_name");
+    expect(bridge.call).not.toHaveBeenCalled();
   });
 });
 

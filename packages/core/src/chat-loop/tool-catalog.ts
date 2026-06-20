@@ -18,14 +18,22 @@
  * error) are skipped with a structured warning — the loop continues
  * with a partial catalog rather than failing the whole turn.
  *
- * NO commerce meta-tool / vertical-router abstraction. OSS dispatches
- * raw MCP tools. The catalog is a thin pass-through: whatever the MCP
- * server says it has, the LLM sees.
+ * Alongside the raw MCP tools, the catalog also advertises any
+ * meta-tools registered through the plugin registry's `MetaToolHook`
+ * seam (`pluginRegistry.metaToolDefinitions()`). This mirrors the
+ * `/execute` route, which dispatches registered meta-tools by name —
+ * surfacing them here lets the LLM call them in `session.send()` too.
+ * With no registrant the registry returns an empty list, so the
+ * default OSS catalog stays a thin pass-through of raw MCP tools.
+ * Meta-tool names carry no `__` separator, so they never collide with
+ * the namespaced `${serverId}__${toolName}` form below and the loop's
+ * dispatch path can tell the two apart.
  */
 
 import type { McpServerSpec } from "../mcp/index.js";
 import { mcpBridge } from "../mcp/index.js";
 import { createLogger } from "../observability/logger.js";
+import { pluginRegistry, type PluginRegistry } from "../plugins/registry.js";
 import type { Session } from "../storage/types.js";
 
 const log = createLogger("chat-loop:tool-catalog");
@@ -78,20 +86,30 @@ function normaliseInputSchema(raw: unknown): AnthropicTool["input_schema"] {
   return { type: "object" };
 }
 
+/** The slice of the plugin registry the catalog needs: the advertised
+ *  definitions of every registered meta-tool. Narrowed to the single
+ *  method so tests can inject a stub without standing up the whole
+ *  registry. */
+type MetaToolCatalogSource = Pick<PluginRegistry, "metaToolDefinitions">;
+
 /**
  * Build the Anthropic `tools[]` array for the given session by asking
- * every connected MCP server what tools it exposes.
+ * every connected MCP server what tools it exposes, then appending the
+ * definitions of any registered meta-tools so the LLM can call them in
+ * the same turn.
  *
  * `bridge` defaults to the singleton; tests pass an override so they
- * can verify catalog construction without a live child.
+ * can verify catalog construction without a live child. `registry`
+ * likewise defaults to the singleton `pluginRegistry`; tests inject a
+ * stub to control which meta-tools are advertised.
  */
 export async function buildToolCatalog(
   session: Session,
   bridge: Pick<typeof mcpBridge, "listTools"> = mcpBridge,
+  registry: MetaToolCatalogSource = pluginRegistry,
 ): Promise<AnthropicTool[]> {
   const servers = readServers(session);
   const specs = readServerSpecs(session);
-  if (servers.length === 0) return [];
 
   const tools: AnthropicTool[] = [];
   for (const serverId of servers) {
@@ -113,6 +131,19 @@ export async function buildToolCatalog(
       });
     }
   }
+
+  // Registered meta-tools are callable by their bare name (no `__`),
+  // dispatched through `pluginRegistry.getMetaTool(name)` by the loop —
+  // the same name the `/execute` route routes through Branch C. With no
+  // registrant this list is empty and the catalog is raw MCP tools only.
+  for (const def of registry.metaToolDefinitions()) {
+    tools.push({
+      name: def.name,
+      description: def.description,
+      input_schema: def.input_schema,
+    });
+  }
+
   return tools;
 }
 

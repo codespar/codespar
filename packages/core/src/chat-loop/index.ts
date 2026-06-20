@@ -32,6 +32,8 @@ import type {
 import type { McpServerSpec } from "../mcp/index.js";
 import { mcpBridge } from "../mcp/index.js";
 import { createLogger } from "../observability/logger.js";
+import type { MetaToolExecutionContext } from "../plugins/index.js";
+import { pluginRegistry, type PluginRegistry } from "../plugins/registry.js";
 import { tryMockedDispatch } from "../sessions/mock-dispatch.js";
 import type { Session, StorageProvider } from "../storage/types.js";
 import { LATAM_COMMERCE_SYSTEM_PROMPT } from "./system-prompt.js";
@@ -129,7 +131,20 @@ export interface ChatLoopOptions {
    *  (in-memory) sessions keep their counter in process state and
    *  ignore this. */
   storage?: StorageProvider | null;
+  /** Override the plugin registry the loop consults for meta-tool
+   *  catalog + dispatch. Defaults to the singleton `pluginRegistry`;
+   *  tests inject a stub to register a fake meta-tool. */
+  registry?: MetaToolDispatchSource;
 }
+
+/** The slice of the plugin registry the chat loop needs: list the
+ *  advertised meta-tool definitions (for the catalog) and resolve a
+ *  registered hook by name (for dispatch). Narrowed so tests can stub
+ *  it without the full registry. */
+type MetaToolDispatchSource = Pick<
+  PluginRegistry,
+  "metaToolDefinitions" | "getMetaTool"
+>;
 
 /** Build the default Anthropic client, honouring ANTHROPIC_BASE_URL so
  *  aimock and other test/redirect targets work without a real API key. */
@@ -193,6 +208,7 @@ interface LoopRunContext {
   toolCalls: ToolCallRecord[];
   messages: MessageParam[];
   storage: StorageProvider | null;
+  registry: MetaToolDispatchSource;
   emit?: (event: StreamEvent) => void;
 }
 
@@ -267,6 +283,65 @@ async function runInternal(ctx: LoopRunContext): Promise<SendResult> {
 
       const split = splitNamespacedToolName(tu.name);
       if (!split) {
+        // A bare name (no `__`) is not an MCP tool. It may be a
+        // registered meta-tool — dispatch it through the registry,
+        // mirroring the `/execute` route's meta-tool branch — so
+        // meta-tools surfaced in the catalog are actually callable in
+        // `session.send()`. Only when no hook is registered for the
+        // name do we report it as an unknown tool.
+        const metaHook = ctx.registry.getMetaTool(tu.name);
+        if (metaHook) {
+          const input = coerceToolInput(tu.input);
+          const metaCtx: MetaToolExecutionContext = {
+            orgId: ctx.session.orgId,
+            projectId: ctx.session.projectId,
+            sessionId: ctx.session.id,
+            environment: "live",
+          };
+          let record: ToolCallRecord;
+          try {
+            const result = await metaHook.execute(tu.name, input, metaCtx);
+            record = {
+              tool_name: tu.name,
+              server_id: result.server_id,
+              status: "success",
+              duration_ms: result.duration_ms,
+              input,
+              output: result.output,
+            };
+          } catch (err) {
+            // Registrants own redaction of sensitive fields; the loop
+            // must not leak a raw error object across the boundary.
+            const message =
+              err instanceof Error ? err.message : "meta-tool execution failed";
+            record = {
+              tool_name: tu.name,
+              server_id: metaHook.id,
+              status: "error",
+              duration_ms: 0,
+              input,
+              output: { error: message },
+              error_code: message,
+            };
+          }
+          ctx.toolCalls.push(record);
+          const serialised = serialiseToolOutput(record.output);
+          toolResults.push({
+            type: "tool_result",
+            tool_use_id: tu.id,
+            content: serialised,
+            is_error: record.status === "error",
+          });
+          ctx.emit?.({
+            type: "tool_result",
+            tool_use_id: tu.id,
+            content: record.output,
+            is_error: record.status === "error",
+            iteration: iterations,
+          });
+          continue;
+        }
+
         const errMessage = `unknown_tool_name: ${tu.name}`;
         ctx.toolCalls.push({
           tool_name: tu.name,
@@ -371,8 +446,9 @@ export async function runChatLoop(
   opts: ChatLoopOptions = {},
 ): Promise<SendResult> {
   const bridge = opts.bridge ?? mcpBridge;
+  const registry = opts.registry ?? pluginRegistry;
   const anthropic = opts.anthropicClient ?? buildDefaultAnthropicClient();
-  const tools = await buildToolCatalog(session, bridge);
+  const tools = await buildToolCatalog(session, bridge, registry);
   const ctx: LoopRunContext = {
     message,
     session,
@@ -386,6 +462,7 @@ export async function runChatLoop(
     toolCalls: [],
     messages: [{ role: "user", content: message }],
     storage: opts.storage ?? null,
+    registry,
   };
   return runInternal(ctx);
 }
@@ -425,6 +502,7 @@ export async function* runChatLoopStream(
   yield { type: "user_message", content: message };
 
   const bridge = opts.bridge ?? mcpBridge;
+  const registry = opts.registry ?? pluginRegistry;
   const anthropic = opts.anthropicClient ?? buildDefaultAnthropicClient();
 
   // Run the loop in parallel with the consumer so events flush as they
@@ -434,7 +512,7 @@ export async function* runChatLoopStream(
   let loopResult: SendResult | null = null;
   const runPromise = (async () => {
     try {
-      const tools = await buildToolCatalog(session, bridge);
+      const tools = await buildToolCatalog(session, bridge, registry);
       const ctx: LoopRunContext = {
         message,
         session,
@@ -448,6 +526,7 @@ export async function* runChatLoopStream(
         toolCalls: [],
         messages: [{ role: "user", content: message }],
         storage: opts.storage ?? null,
+        registry,
         emit: push,
       };
       loopResult = await runInternal(ctx);
