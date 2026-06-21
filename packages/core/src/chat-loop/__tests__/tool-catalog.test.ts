@@ -15,6 +15,15 @@ import {
 } from "../tool-catalog.js";
 import type { Session } from "../../storage/types.js";
 import type { ListToolsResult } from "../../mcp/index.js";
+import type { MetaToolDefinition } from "../../plugins/index.js";
+
+/** A registry stub exposing only `metaToolDefinitions`, the slice
+ *  `buildToolCatalog` consumes. */
+function stubRegistry(defs: MetaToolDefinition[]): {
+  metaToolDefinitions: () => MetaToolDefinition[];
+} {
+  return { metaToolDefinitions: () => defs };
+}
 
 function makeSession(servers: string[]): Session {
   return {
@@ -129,7 +138,7 @@ describe("buildToolCatalog", () => {
   it("returns an empty array when the session has no servers", async () => {
     const session = makeSession([]);
     const bridge = stubBridge({});
-    const tools = await buildToolCatalog(session, bridge);
+    const tools = await buildToolCatalog(session, bridge, stubRegistry([]));
     expect(tools).toEqual([]);
     expect(bridge.listTools).not.toHaveBeenCalled();
   });
@@ -145,8 +154,66 @@ describe("buildToolCatalog", () => {
         duration: 0,
       },
     });
-    const tools = await buildToolCatalog(session, bridge);
+    const tools = await buildToolCatalog(session, bridge, stubRegistry([]));
     expect(tools[0].input_schema).toEqual({ type: "object" });
+  });
+
+  it("appends registered meta-tool definitions alongside raw MCP tools", async () => {
+    const session = makeSession(["nuvem-fiscal"]);
+    const bridge = stubBridge({
+      "nuvem-fiscal": {
+        success: true,
+        tools: [{ name: "create_nfse" }],
+        error: "",
+        server: "nuvem-fiscal",
+        duration: 0,
+      },
+    });
+    const registry = stubRegistry([
+      {
+        name: "codespar_shop",
+        description: "Shop a catalog",
+        input_schema: {
+          type: "object",
+          properties: { query: { type: "string" } },
+          required: ["query"],
+        },
+      },
+    ]);
+    const tools = await buildToolCatalog(session, bridge, registry);
+    const names = tools.map((t) => t.name);
+    // Raw MCP tool stays namespaced; the meta-tool is advertised by its
+    // bare name (no `__`), exactly the name the loop dispatches through
+    // the registry.
+    expect(names).toContain("nuvem-fiscal__create_nfse");
+    expect(names).toContain("codespar_shop");
+    const shop = tools.find((t) => t.name === "codespar_shop");
+    expect(shop?.description).toBe("Shop a catalog");
+    expect(shop?.input_schema.required).toEqual(["query"]);
+  });
+
+  it("surfaces meta-tools even when the session has no MCP servers", async () => {
+    const session = makeSession([]);
+    const bridge = stubBridge({});
+    const registry = stubRegistry([
+      {
+        name: "codespar_discover",
+        description: "Discover servers",
+        input_schema: { type: "object", properties: {} },
+      },
+    ]);
+    const tools = await buildToolCatalog(session, bridge, registry);
+    expect(tools.map((t) => t.name)).toEqual(["codespar_discover"]);
+    // No servers means the bridge is never consulted.
+    expect(bridge.listTools).not.toHaveBeenCalled();
+  });
+
+  it("returns an empty catalog when there are no servers and no registered meta-tools", async () => {
+    const session = makeSession([]);
+    const bridge = stubBridge({});
+    const tools = await buildToolCatalog(session, bridge, stubRegistry([]));
+    expect(tools).toEqual([]);
+    expect(bridge.listTools).not.toHaveBeenCalled();
   });
 });
 
