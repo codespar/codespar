@@ -55,11 +55,17 @@ export interface McpServerSpec {
  * Wire shape returned to callers — intentionally aligned with the inline
  * shape used by `packages/core/src/server/routes/sessions.ts` so the
  * dispatch hook can return it directly.
+ *
+ * `error` is `null` on success and a non-empty string on failure. `null`
+ * is the canonical no-error value, matching `ExecuteToolResponse.error`
+ * (`z.string().nullable()`) in `@codespar/api-types` and the managed
+ * runtime's envelope — so the same agent code sees the same shape on
+ * either backend.
  */
 export interface ToolResult {
   success: boolean;
   data: unknown;
-  error: string;
+  error: string | null;
   duration: number;
   server: string;
   tool: string;

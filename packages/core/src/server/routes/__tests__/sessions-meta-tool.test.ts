@@ -105,7 +105,7 @@ describe("sessions meta-tool dispatch", () => {
     expect(result.success).toBe(true);
     expect(result.server).toBe("example");
     expect(result.data).toEqual({ ok: true, echoed: "example_echo" });
-    expect(result.error).toBe("");
+    expect(result.error).toBeNull();
     await app.close();
   });
 

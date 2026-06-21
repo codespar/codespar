@@ -172,7 +172,7 @@ export function mockOutcomeToToolResult(
     return {
       success: true,
       data: outcome.output,
-      error: "",
+      error: null,
       duration: 0,
       server: MOCK_SERVER_LABEL,
       tool: canonical,

@@ -36,7 +36,10 @@ interface McpLegacyResult {
 export interface TranslatedResult {
   success: boolean;
   data: unknown;
-  error: string;
+  // `null` on success (the canonical no-error value, converging with the
+  // managed runtime and `ExecuteToolResponse.error` in `@codespar/api-types`);
+  // a non-empty string on failure.
+  error: string | null;
 }
 
 function tryParseJson(text: string): unknown {
@@ -130,14 +133,19 @@ export function translateMcpResult(
     if (result.isError === true) {
       return { success: false, data: null, error: text };
     }
-    return { success: true, data: tryParseJson(text), error: "" };
+    return { success: true, data: tryParseJson(text), error: null };
   }
 
   if (isLegacyResult(result)) {
+    // A legacy server's empty-string error means "no error" — normalize
+    // it (and an absent error) to the canonical `null`, so success
+    // results carry `null` regardless of which response shape produced
+    // them. A non-empty legacy error string passes through unchanged.
+    const legacyError = result.error ? result.error : null;
     return {
       success: result.success ?? true,
       data: result.data ?? null,
-      error: result.error ?? "",
+      error: legacyError,
     };
   }
 

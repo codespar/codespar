@@ -137,7 +137,7 @@ const BUILT_IN_TOOLS = new Set(["codespar_list_tools"]);
 function executeBuiltIn(toolName: string, sessionId: string): {
   success: boolean;
   data: unknown;
-  error: string;
+  error: string | null;
   duration: number;
   server: string;
   tool: string;
@@ -165,7 +165,7 @@ function executeBuiltIn(toolName: string, sessionId: string): {
     return {
       success: true,
       data: { tools },
-      error: "",
+      error: null,
       duration: Date.now() - start,
       server: "oss-runtime",
       tool: toolName,
@@ -388,7 +388,7 @@ export function registerSessionRoutes(route: RouteFn, ctx: ServerContext | null 
         return {
           success: true,
           data: result.output,
-          error: "",
+          error: null,
           duration: result.duration_ms,
           server: result.server_id,
           tool: toolName,

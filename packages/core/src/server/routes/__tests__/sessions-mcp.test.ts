@@ -105,6 +105,10 @@ describe("sessions MCP dispatch", () => {
     expect(body.server).toBe("echo");
     expect(body.tool).toBe("ping");
     expect(body.data.echo).toEqual({ hello: "world" });
+    // A successful execute carries the canonical no-error value `null`
+    // (not ""), matching ExecuteToolResponse.error in @codespar/api-types
+    // and the managed runtime's envelope.
+    expect(body.error).toBeNull();
   });
 
   it("[T-05.B] echo/ping with servers=[] returns Tool not registered (HTTP 200)", async () => {
