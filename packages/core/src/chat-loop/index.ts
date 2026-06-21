@@ -406,7 +406,10 @@ async function runInternal(ctx: LoopRunContext): Promise<SendResult> {
         input,
         output: callResult.success ? callResult.data : { error: callResult.error },
       };
-      if (!callResult.success) record.error_code = callResult.error;
+      // On failure the bridge always carries a non-empty error string;
+      // `?? ""` only satisfies the `string | null` widening of the
+      // success-path `null` and is never hit on the error branch.
+      if (!callResult.success) record.error_code = callResult.error ?? "";
       ctx.toolCalls.push(record);
 
       const serialised = serialiseToolOutput(record.output);

@@ -274,7 +274,7 @@ describe("McpProcessManager", () => {
     try {
       const result = await manager.call("s1", "echo", "tools/echo", { y: 42 });
       expect(result.success).toBe(true);
-      expect(result.error).toBe("");
+      expect(result.error).toBeNull();
       expect((result.data as { echo: unknown }).echo).toEqual({ y: 42 });
     } finally {
       await manager.closeSession("s1");

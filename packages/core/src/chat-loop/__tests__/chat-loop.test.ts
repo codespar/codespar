@@ -100,7 +100,7 @@ function stubBridge(opts: {
       return {
         success: true,
         data: { ok: true },
-        error: "",
+        error: null,
         duration: 1,
         server: serverId,
         tool,
@@ -127,7 +127,7 @@ describe("runChatLoop", () => {
       call: (_s, _t, input) => ({
         success: true,
         data: { echoed: input },
-        error: "",
+        error: null,
         duration: 5,
         server: "echo",
         tool: "ping",
@@ -508,7 +508,7 @@ describe("runChatLoopStream", () => {
       call: (_s, _t, input) => ({
         success: true,
         data: { echoed: input },
-        error: "",
+        error: null,
         duration: 1,
         server: "echo",
         tool: "ping",

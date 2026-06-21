@@ -95,7 +95,7 @@ describe("example adapter — end-to-end through the execute route", () => {
     expect(result.success).toBe(true);
     expect(result.server).toBe("example");
     expect(result.data).toEqual({ message: "hi" });
-    expect(result.error).toBe("");
+    expect(result.error).toBeNull();
     await app.close();
   });
 

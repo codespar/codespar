@@ -29,7 +29,7 @@ describe("translateMcpResult — canonical MCP envelope", () => {
       CTX,
     );
     expect(result.success).toBe(true);
-    expect(result.error).toBe("");
+    expect(result.error).toBeNull();
     expect(result.data).toEqual({ a: 1, b: "two" });
   });
 
@@ -41,7 +41,7 @@ describe("translateMcpResult — canonical MCP envelope", () => {
       CTX,
     );
     expect(result.success).toBe(true);
-    expect(result.error).toBe("");
+    expect(result.error).toBeNull();
     expect(result.data).toBe("hello world");
   });
 
@@ -110,7 +110,7 @@ describe("translateMcpResult — canonical MCP envelope", () => {
 });
 
 describe("translateMcpResult — legacy bespoke shape", () => {
-  it("forwards success/data/error verbatim", () => {
+  it("forwards success/data and normalizes an empty error to the canonical null", () => {
     const result = translateMcpResult(
       {
         success: true,
@@ -121,7 +121,9 @@ describe("translateMcpResult — legacy bespoke shape", () => {
     );
     expect(result.success).toBe(true);
     expect(result.data).toEqual({ legacy: true });
-    expect(result.error).toBe("");
+    // A legacy server's empty-string error is "no error" — normalized to
+    // null so success results carry null on every response shape.
+    expect(result.error).toBeNull();
   });
 
   it("preserves explicit failure payload", () => {

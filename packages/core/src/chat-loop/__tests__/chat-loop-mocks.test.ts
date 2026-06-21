@@ -80,7 +80,7 @@ function stubBridge(): {
       async (_sessionId: string, serverId: string, tool: string): Promise<ToolResult> => ({
         success: true,
         data: { unmocked: true },
-        error: "",
+        error: null,
         duration: 0,
         server: serverId,
         tool,
