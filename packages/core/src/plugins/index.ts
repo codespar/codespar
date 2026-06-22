@@ -13,3 +13,10 @@ export type {
 } from "./types.js";
 
 export { PluginRegistry, pluginRegistry } from "./registry.js";
+
+export {
+  loadStartupPlugins,
+  parsePluginSpecifiers,
+  validatePluginSpecifier,
+} from "./startup-loader.js";
+export type { PluginRegisterTarget, StartupPluginModule } from "./startup-loader.js";
