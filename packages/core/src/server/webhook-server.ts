@@ -54,6 +54,7 @@ import { registerPagerDutyRoutes } from "./routes/pagerduty.js";
 import { registerLinearRoutes } from "./routes/linear.js";
 import { registerProjectRoutes } from "./routes/projects.js";
 import { registerSessionRoutes } from "./routes/sessions.js";
+import { loadStartupPlugins, pluginRegistry } from "../plugins/index.js";
 import { createEventBus } from "../queue/index.js";
 import type { EventBus, EventBusChannel } from "../queue/event-bus.js";
 import { ContainerPool } from "../execution/container-pool.js";
@@ -401,6 +402,16 @@ export class WebhookServer {
       log.warn("Docker container pool unavailable, Docker execution disabled", {
         error: err instanceof Error ? err.message : String(err),
       });
+    }
+
+    // Load operator-configured meta-tool plugins (CODESPAR_PLUGINS) onto the
+    // global registry. Runs after the bootstrap above (so plugin register()
+    // code inherits any registered hooks) and before listen() (so the catalog
+    // is final before the first request). Fails closed: a bad specifier or a
+    // colliding meta-tool name aborts startup rather than serving a partial set.
+    const loadedPlugins = await loadStartupPlugins(pluginRegistry);
+    if (loadedPlugins.length > 0) {
+      log.info("Startup plugins loaded", { count: loadedPlugins.length });
     }
 
     await this.app.listen({ port: this.port, host: this.host });
