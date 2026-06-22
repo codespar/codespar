@@ -201,3 +201,104 @@ describe("runChatLoop with session.mocks", () => {
     });
   });
 });
+
+describe("runChatLoop with meta-tool mocks", () => {
+  it("returns a meta-tool mock (keyed on the bare name) without calling the hook", async () => {
+    clearSessionStore();
+    const session = makeMockedSession({
+      codespar_invoice: { id: "nfse_demo_1", status: "autorizada" },
+    });
+    const execute = vi.fn();
+    const hook = {
+      id: "demo-plugin",
+      handles: ["codespar_invoice"],
+      definitions: () => [
+        {
+          name: "codespar_invoice",
+          description: "issue an invoice",
+          input_schema: { type: "object" as const, properties: {} },
+        },
+      ],
+      execute,
+    };
+    const registry = {
+      metaToolDefinitions: () => hook.definitions(),
+      getMetaTool: (name: string) => (name === "codespar_invoice" ? hook : null),
+    };
+    const client = stubAnthropic([
+      {
+        stop_reason: "tool_use",
+        content: [
+          {
+            type: "tool_use",
+            id: "tu_1",
+            name: "codespar_invoice",
+            input: { type: "nfse" },
+          },
+        ],
+      },
+      { stop_reason: "end_turn", content: [{ type: "text", text: "done" }] },
+    ]);
+
+    const result = await runChatLoop("emit a nota", session, {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      anthropicClient: client as any,
+      bridge: stubBridge(),
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      registry: registry as any,
+    });
+
+    // The mock answered; the registered hook was never invoked.
+    expect(execute).not.toHaveBeenCalled();
+    expect(result.tool_calls).toHaveLength(1);
+    expect(result.tool_calls[0]).toMatchObject({
+      tool_name: "codespar_invoice",
+      server_id: "mock",
+      status: "success",
+    });
+    expect(result.tool_calls[0].output).toEqual({ id: "nfse_demo_1", status: "autorizada" });
+  });
+
+  it("surfaces tool_not_mocked when a meta-tool has no mock entry but the session declares mocks", async () => {
+    clearSessionStore();
+    const session = makeMockedSession({ codespar_invoice: { id: "x", status: "ok" } });
+    const hook = {
+      id: "demo-plugin",
+      handles: ["codespar_notify"],
+      definitions: () => [
+        {
+          name: "codespar_notify",
+          description: "notify",
+          input_schema: { type: "object" as const, properties: {} },
+        },
+      ],
+      execute: vi.fn(),
+    };
+    const registry = {
+      metaToolDefinitions: () => hook.definitions(),
+      getMetaTool: (name: string) => (name === "codespar_notify" ? hook : null),
+    };
+    const client = stubAnthropic([
+      {
+        stop_reason: "tool_use",
+        content: [{ type: "tool_use", id: "tu_1", name: "codespar_notify", input: {} }],
+      },
+      { stop_reason: "end_turn", content: [{ type: "text", text: "done" }] },
+    ]);
+
+    const result = await runChatLoop("notify", session, {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      anthropicClient: client as any,
+      bridge: stubBridge(),
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      registry: registry as any,
+    });
+
+    expect(hook.execute).not.toHaveBeenCalled();
+    expect(result.tool_calls[0]).toMatchObject({
+      tool_name: "codespar_notify",
+      status: "error",
+      error_code: "tool_not_mocked",
+    });
+  });
+});
