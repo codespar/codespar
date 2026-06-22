@@ -57,10 +57,15 @@ describe("validateMocksShape", () => {
     expect(result?.field).toBe("/mocks/BAD~1Tool");
   });
 
-  it("rejects keys without the `/` separator", () => {
-    const result = validateMocksShape({ noseparator: {} });
+  it("accepts a bare meta-tool name (mocks keyed on the meta-tool, e.g. codespar_invoice)", () => {
+    expect(validateMocksShape({ codespar_invoice: { id: "x" } })).toBeNull();
+    expect(validateMocksShape({ codespar_notify: [{ sent: true }] })).toBeNull();
+  });
+
+  it("rejects a bare key containing the raw-tool separator `__`", () => {
+    const result = validateMocksShape({ foo__bar: {} });
     expect(result?.code).toBe("mocks_invalid");
-    expect(result?.field).toBe("/mocks/noseparator");
+    expect(result?.field).toBe("/mocks/foo__bar");
   });
 
   it("rejects null values", () => {

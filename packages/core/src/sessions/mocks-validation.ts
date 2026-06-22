@@ -37,10 +37,22 @@ export interface MocksSizeError {
 
 const CANONICAL_KEY_RE = /^[a-z0-9][a-z0-9-]*\/[a-z0-9][a-z0-9_-]*$/;
 
+/** A bare meta-tool name (e.g. `codespar_invoice`): no `/` (which would make it
+ *  a raw `server/tool` key) and no `__` (the raw-tool separator). Meta-tool mocks
+ *  are keyed on the bare name, matching the managed runtime's session-mock lookup. */
+const META_TOOL_KEY_RE = /^[a-z][a-z0-9_]*$/;
+
+/** A mock key is valid as either a canonical `server/tool` key or a bare
+ *  meta-tool name. */
+function isValidMockKey(key: string): boolean {
+  if (CANONICAL_KEY_RE.test(key)) return true;
+  return META_TOOL_KEY_RE.test(key) && !key.includes("__");
+}
+
 const MSG_TOP_LEVEL_TYPE =
   "mocks field must be a JSON object; see field for location";
 const MSG_KEY_CANONICAL =
-  "key fails canonical server/tool form regex; see field for location";
+  "key must be a canonical server/tool form or a bare meta-tool name; see field for location";
 const MSG_VALUE_SHAPE =
   "mock value must be a non-null JSON object or an array of non-null JSON objects; see field for location";
 const MSG_ARRAY_ENTRY =
@@ -75,7 +87,7 @@ export function validateMocksShape(value: unknown): MocksInvalidEnvelope | null 
   }
 
   for (const [key, entry] of Object.entries(value as Record<string, unknown>)) {
-    if (!CANONICAL_KEY_RE.test(key)) {
+    if (!isValidMockKey(key)) {
       return {
         code: "mocks_invalid",
         field: `/mocks/${rfc6901(key)}`,
