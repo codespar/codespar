@@ -126,6 +126,37 @@ export async function tryMockedDispatch(
 }
 
 /**
+ * Meta-tool variant of {@link tryMockedDispatch}. A meta-tool has no
+ * `serverId__toolName` split, so the mock is keyed on the bare meta-tool name
+ * (e.g. `codespar_invoice`) — matching the managed runtime's session-mock
+ * lookup, so one session `mocks` map drives the meta-tool path identically on
+ * both runtimes. Returns `null` only on the flag-off / non-HTTP short-circuits;
+ * while the flag is on, a session that declares mocks but has no entry for this
+ * meta-tool gets a `tool_not_mocked` envelope (strict mode), same as the raw path.
+ */
+export async function tryMockedMetaToolDispatch(
+  session: SessionWithMocks,
+  metaToolName: string,
+  input: unknown,
+): Promise<MockDispatchOk | null> {
+  if (!isTestModeEnabled()) return null;
+  if (session.channelType !== HTTP_CHANNEL_TYPE) return null;
+  const outcome = await evaluateSessionMock({
+    sessionMocks: session.mocks ?? null,
+    canonicalToolName: metaToolName,
+    input,
+    storage: makeInMemoryCounterStorage(),
+    sessionId: session.id,
+  });
+  const effective: MockMatchResult =
+    outcome.kind === "passthrough"
+      ? { kind: "tool_not_mocked", tool_name: metaToolName }
+      : outcome;
+  const result = mockOutcomeToToolResult(session.id, MOCK_SERVER_LABEL, metaToolName, effective);
+  return { result, outcome: effective };
+}
+
+/**
  * Translate the evaluator's outcome into the dispatch-seam return.
  * Called only after the flag-on check has already passed.
  *

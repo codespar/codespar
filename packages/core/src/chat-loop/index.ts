@@ -34,7 +34,7 @@ import { mcpBridge } from "../mcp/index.js";
 import { createLogger } from "../observability/logger.js";
 import type { MetaToolExecutionContext } from "../plugins/index.js";
 import { pluginRegistry, type PluginRegistry } from "../plugins/registry.js";
-import { tryMockedDispatch } from "../sessions/mock-dispatch.js";
+import { tryMockedDispatch, tryMockedMetaToolDispatch } from "../sessions/mock-dispatch.js";
 import type { Session, StorageProvider } from "../storage/types.js";
 import { LATAM_COMMERCE_SYSTEM_PROMPT } from "./system-prompt.js";
 import {
@@ -292,37 +292,56 @@ async function runInternal(ctx: LoopRunContext): Promise<SendResult> {
         const metaHook = ctx.registry.getMetaTool(tu.name);
         if (metaHook) {
           const input = coerceToolInput(tu.input);
-          const metaCtx: MetaToolExecutionContext = {
-            orgId: ctx.session.orgId,
-            projectId: ctx.session.projectId,
-            sessionId: ctx.session.id,
-            environment: "live",
-          };
           let record: ToolCallRecord;
-          try {
-            const result = await metaHook.execute(tu.name, input, metaCtx);
+          // Mocks-first for meta-tools, matching the managed runtime: in test
+          // mode a declared `mocks` entry (keyed on the bare meta-tool name)
+          // answers before the hook runs, so one fixture set drives the
+          // meta-tool path identically on both runtimes. `null` means the seam
+          // is off (live mode / non-HTTP) and the hook handles the call.
+          const metaMock = await tryMockedMetaToolDispatch(ctx.session, tu.name, input);
+          if (metaMock) {
+            const cr = metaMock.result;
             record = {
               tool_name: tu.name,
-              server_id: result.server_id,
-              status: "success",
-              duration_ms: result.duration_ms,
+              server_id: cr.server,
+              status: cr.success ? "success" : "error",
+              duration_ms: cr.duration,
               input,
-              output: result.output,
+              output: cr.success ? cr.data : { error: cr.error },
+              ...(cr.success ? {} : { error_code: cr.error ?? "mock_error" }),
             };
-          } catch (err) {
-            // Registrants own redaction of sensitive fields; the loop
-            // must not leak a raw error object across the boundary.
-            const message =
-              err instanceof Error ? err.message : "meta-tool execution failed";
-            record = {
-              tool_name: tu.name,
-              server_id: metaHook.id,
-              status: "error",
-              duration_ms: 0,
-              input,
-              output: { error: message },
-              error_code: message,
+          } else {
+            const metaCtx: MetaToolExecutionContext = {
+              orgId: ctx.session.orgId,
+              projectId: ctx.session.projectId,
+              sessionId: ctx.session.id,
+              environment: "live",
             };
+            try {
+              const result = await metaHook.execute(tu.name, input, metaCtx);
+              record = {
+                tool_name: tu.name,
+                server_id: result.server_id,
+                status: "success",
+                duration_ms: result.duration_ms,
+                input,
+                output: result.output,
+              };
+            } catch (err) {
+              // Registrants own redaction of sensitive fields; the loop
+              // must not leak a raw error object across the boundary.
+              const message =
+                err instanceof Error ? err.message : "meta-tool execution failed";
+              record = {
+                tool_name: tu.name,
+                server_id: metaHook.id,
+                status: "error",
+                duration_ms: 0,
+                input,
+                output: { error: message },
+                error_code: message,
+              };
+            }
           }
           ctx.toolCalls.push(record);
           const serialised = serialiseToolOutput(record.output);
