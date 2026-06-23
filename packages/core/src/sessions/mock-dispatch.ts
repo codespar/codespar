@@ -40,8 +40,8 @@
  * an HTTP session (the only path that authors mocks today), so the
  * counter wiring goes through `makeInMemoryCounterStorage` which fronts
  * the in-process counter map on `sessions/core`. The persistent column
- * + counter table that the managed runtime uses live in
- * `codespar-enterprise`, not here.
+ * + counter table that back the managed runtime live in the managed
+ * tier, not here.
  */
 
 import { randomUUID } from "node:crypto";

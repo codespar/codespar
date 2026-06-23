@@ -1,0 +1,23 @@
+name: Public-repo cleanliness
+
+# This repo is public and MIT-licensed. A PR must not introduce a private-repo
+# name, a multi-repo workspace path, or a private roadmap codename into any
+# public artifact — a reader who has only this repo has no path to those.
+on:
+  pull_request:
+    branches: [main]
+
+jobs:
+  cleanliness:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Need the base branch available locally for the added-lines diff.
+          fetch-depth: 0
+
+      - name: Self-test the checker
+        run: bash scripts/check-public-cleanliness.sh selftest
+
+      - name: Scan changed files for private leaks
+        run: bash scripts/check-public-cleanliness.sh "origin/${{ github.base_ref }}"
