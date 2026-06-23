@@ -5,7 +5,14 @@
 # This repo is public, MIT-licensed, npm-published, and browsed on GitHub by
 # people who have only this one repo. A public artifact must therefore stand on
 # its own: it must NOT name a private repo, leak a multi-repo workspace path, or
-# reference a private roadmap codename a reader has no path to.
+# leak a private roadmap MILESTONE codename a reader has no path to.
+#
+# Coverage is deliberately high-signal: private-repo names, workspace-relative
+# paths, and the F#.M# milestone-codename form. The bare single-letter roadmap
+# tags (D3, P1, S3, M2, ...) are intentionally NOT matched — they collide with
+# legitimate identifiers (the "S3" service, a "P3" priority, an "M2" label), so
+# an automated grep over them would fail-positive constantly; human review stays
+# the backstop for those.
 #
 # This check scans the ADDED lines of the changed files (vs a base ref) for those
 # patterns and fails on any match. Scanning only added lines means a PR is judged
@@ -80,6 +87,14 @@ is_excluded() {
 
 scan_changed() {
   local base="$1" found=0 f added matches scanned=0
+  # Fail CLOSED: a leak-prevention gate must error if it cannot do its job, never
+  # silently pass. An unresolvable base ref (shallow fetch, renamed branch) would
+  # otherwise make `git diff` fail inside the process substitution below — where
+  # `set -e` does not catch it — and the scan would report a false all-clear.
+  if ! git rev-parse --verify --quiet "${base}^{commit}" >/dev/null; then
+    echo "::error::public-repo cleanliness: base ref '${base}' could not be resolved (shallow fetch? wrong branch?). Failing closed."
+    return 2
+  fi
   # NUL-delimited so paths with spaces or unusual characters are handled safely.
   while IFS= read -r -d '' f; do
     is_excluded "$f" && continue
@@ -99,6 +114,16 @@ scan_changed() {
 }
 
 case "${1:-}" in
-  selftest) run_selftest ;;
-  *)        scan_changed "${1:-origin/main}" ;;
+  selftest)
+    run_selftest
+    ;;
+  *)
+    # Run from the repo root so `git diff` pathspecs cover the whole tree, not
+    # just the cwd subtree (a wrong cwd would otherwise yield a false all-clear).
+    cd "$(git rev-parse --show-toplevel)" || {
+      echo "::error::public-repo cleanliness: not inside a git work tree"
+      exit 2
+    }
+    scan_changed "${1:-origin/main}"
+    ;;
 esac
