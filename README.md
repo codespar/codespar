@@ -302,7 +302,7 @@ only in
 [`codespar-enterprise`](https://github.com/codespar/codespar-enterprise) today
 and are on the OSS roadmap:
 
-- **MCP server catalog API** (`/v1/servers`). Enterprise has 109 servers
+- **MCP server catalog API** (`/v1/servers`). Enterprise has ~112 providers
   in a Postgres-backed catalog with category × country metadata. In OSS,
   providers are registered manually via SDK config.
 - **Connections vault** (`/v1/connections`, `/v1/auth-configs`).
@@ -311,8 +311,12 @@ and are on the OSS roadmap:
   environment variables.
 - **Programmable wallet + policy engine + commerce-specific
   observability + fiscal-compliance certifications.** All managed-tier
-  capabilities; the wallet/policy engine is design-only as of 2026-04
-  (engineering not yet started).
+  capabilities, live in production: per-agent wallets with mandate-gated
+  debits and database-enforced invariants, the policy engine on every
+  tool call (rate limits, budgets, approval flows), multi-slot consumer
+  wallets (BRL + USDC under one signed mandate), and a hash-chained
+  audit ledger. The OSS runtime exposes the plugin hooks these register
+  against (PolicyHook, ObservabilityHook, SecretsHook).
 
 The five-point MIT commitment in VISION binds every shipped feature to
 land in this repo MIT-first. The dependency arrow stays enterprise → MIT.
@@ -330,10 +334,9 @@ Don't extend them.
 
 If you don't want to self-host the runtime, the managed tier hosts it
 for you, with programmable wallet + policy engine + commerce-specific
-observability + fiscal-compliance certifications on top. Sign up at
-[codespar.dev](https://codespar.dev) or read the
-[VISION](https://github.com/codespar/codespar-web/blob/main/docs/visions/VISION-codespar.md)
-for the full pitch.
+observability + fiscal-compliance certifications on top, all shipped
+and running in production today. Sign up at
+[codespar.dev](https://codespar.dev).
 
 ## Contributing
 
