@@ -24,10 +24,11 @@ private) registers commerce-governance capabilities (programmable
 wallet, policy engine, compliance certifications) against the plugin
 hooks exposed here.
 
-CodeSpar's thesis: the platform is generic, and **LATAM commerce** is
-its sharpest application. The MIT layer stays MIT forever — no rate
-limits, no feature gates, no telemetry walls. Revenue lives above it
-in managed hosting + commerce governance, not on `npm install`.
+CodeSpar's thesis: it is the agentic operating system for **money
+movement in LATAM**. Commerce is the wedge, money movement is the
+platform. The MIT layer stays MIT forever - no rate limits, no feature
+gates, no telemetry walls. Revenue lives above it in managed hosting +
+commerce governance, not on `npm install`.
 
 ## Use it for
 
@@ -302,7 +303,7 @@ only in
 [`codespar-enterprise`](https://github.com/codespar/codespar-enterprise) today
 and are on the OSS roadmap:
 
-- **MCP server catalog API** (`/v1/servers`). Enterprise has ~112 providers
+- **MCP server catalog API** (`/v1/servers`). Enterprise has 132 servers
   in a Postgres-backed catalog with category × country metadata. In OSS,
   providers are registered manually via SDK config.
 - **Connections vault** (`/v1/connections`, `/v1/auth-configs`).
