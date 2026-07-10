@@ -43,7 +43,7 @@ Layer 4 — CLI + docs:
   `CODESPAR_PROJECT_ID` env var; flag wins over env.
 - Docs updated: multi-tenant guide, README.
 - No MCP transport to update — opensource runtime doesn't ship an
-  MCP server (distinct from the enterprise tier which does).
+  MCP server (distinct from the managed tier which does).
 
 ## What's deliberately deferred
 
@@ -53,8 +53,8 @@ once there are usage signals:
 - **Collapse `/api/projects-env` into `/api/projects`** once every
   caller of the legacy code-repos CRUD has moved to a dedicated
   `/api/code-repos` path.
-- **Flip project_id NOT NULL** across the child tables (mirrors
-  enterprise migration 0015). NOT a drop-in follow-up — the writer
+- **Flip project_id NOT NULL** across the child tables (mirrors the
+  managed tier). NOT a drop-in follow-up — the writer
   audit (April 2026) surfaced four design questions that each need a
   decision before the migration can land safely:
 
@@ -78,7 +78,7 @@ once there are usage signals:
      currently one row per channel name. Adding project scope means
      deciding whether configs are shared across projects of the same
      org, or each project gets its own. The answer affects whether
-     enterprise-tier users can run dev + prod Slack workspaces
+     managed-tier users can run dev + prod Slack workspaces
      against a single CodeSpar instance.
 
   4. **Autonomy-set route has no agent context.** `POST /api/agents/
@@ -100,14 +100,13 @@ once there are usage signals:
   pass can drop AgentConfig.projectId in favour of deriving from
   the agent's host project.
 - **Dashboard / CLI project switcher UI** — nothing UI-side exists
-  in opensource yet. The dashboard lives in codespar-web and is
-  enterprise-only; opensource stays headless (CLI flag only).
+  in opensource yet. The dashboard is managed-tier-only; opensource
+  stays headless (CLI flag only).
 
 ## Reference
 
-- Enterprise reference implementation that shaped this port:
-  `codespar-enterprise` migrations 0014 + 0015, routes in
-  `packages/api/src/routes/projects.ts`.
+- Managed-tier reference implementation that shaped this port: the
+  private `/v1/projects` route and its schema migrations.
 - The port audit that framed the open design questions before
   Layer 1: conversation log April 2026 (see commit messages on
   `b02988f`, `916b440`, `ab3e624`, and Layer 4).

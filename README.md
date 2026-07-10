@@ -18,11 +18,9 @@
 The open-source, self-hostable agent runtime + channel adapters behind
 the [CodeSpar](https://codespar.dev) platform. Channel-agnostic: agents
 run just as well against WhatsApp, Slack, Discord, Telegram, the web,
-or plain HTTP as they do against a terminal. The managed tier
-([codespar-enterprise](https://github.com/codespar/codespar-enterprise),
-private) registers commerce-governance capabilities (programmable
-wallet, policy engine, compliance certifications) against the plugin
-hooks exposed here.
+or plain HTTP as they do against a terminal. A managed tier (private,
+commercial) registers commerce-governance capabilities against the
+plugin hooks exposed here.
 
 CodeSpar's thesis: it is the agentic operating system for **money
 movement in LATAM**. Commerce is the wedge, money movement is the
@@ -64,7 +62,7 @@ docker compose up          # Postgres + Redis + core
 docker compose -f docker-compose.yml -f docker-compose.whatsapp.yml up   # + WhatsApp
 ```
 
-Docs: [docs.codespar.dev](https://docs.codespar.dev) (served from [`codespar-web`](https://github.com/codespar/codespar-web), not this repo).
+Docs: [docs.codespar.dev](https://docs.codespar.dev). This repo does not ship a docs site of its own.
 
 ## MCP bridge
 
@@ -250,7 +248,7 @@ tests). A runnable end-to-end script lives at
 - **Plugin hooks**: `PolicyHook`, `ObservabilityHook`, `SecretsHook`,
   `IntegrationHook`, and `MetaToolHook` — the managed tier's governance
   layer and meta-tool implementations plug in here; public core never
-  imports enterprise packages. `MetaToolHook` is the meta-tool
+  imports managed-tier packages. `MetaToolHook` is the meta-tool
   registration seam: register a named higher-level tool with
   `pluginRegistry.registerMetaTool(...)` and the runtime dispatches it by
   name through the standard execute path. A self-hoster, a community
@@ -261,7 +259,7 @@ tests). A runnable end-to-end script lives at
   `registerSessionRoutes` in a Fastify app and dispatches the example
   through the real `POST /sessions/:id/execute` route, so copying it gives
   you a registrant proven against the actual seam, not a sketch.
-- **Tenancy**: Organization → Project, mirroring the enterprise
+- **Tenancy**: Organization → Project, mirroring the managed-tier
   contract. `x-codespar-project` header on every `/v1` route; optional
   on inbound channel messages via `channel_links` bindings. See
   [`docs/projects-roadmap.md`](docs/projects-roadmap.md) for port status.
@@ -298,29 +296,20 @@ transacts on LATAM rails — the runtime, channel adapters, SDK, plugin
 hooks (including the `MetaToolHook` registration seam), and an example
 registrant. Higher-level meta-tools are dispatched through the seam: a
 self-hoster registers their own implementation, pulls in a community
-plugin, or points at the managed runtime. The following surfaces live
-only in
-[`codespar-enterprise`](https://github.com/codespar/codespar-enterprise) today
-and are on the OSS roadmap:
+plugin, or points at the managed runtime. The following surfaces are
+not yet in OSS and are on the roadmap:
 
-- **MCP server catalog API** (`/v1/servers`). Enterprise has 132 servers
-  in a Postgres-backed catalog with category × country metadata. In OSS,
-  providers are registered manually via SDK config.
-- **Connections vault** (`/v1/connections`, `/v1/auth-configs`).
-  Enterprise has an AES-256-GCM vault with per-tenant scrypt-derived
-  keys for storing provider credentials. In OSS, credentials live in
-  environment variables.
-- **Programmable wallet + policy engine + commerce-specific
-  observability + fiscal-compliance certifications.** All managed-tier
-  capabilities, live in production: per-agent wallets with mandate-gated
-  debits and database-enforced invariants, the policy engine on every
-  tool call (rate limits, budgets, approval flows), multi-slot consumer
-  wallets (BRL + USDC under one signed mandate), and a hash-chained
-  audit ledger. The OSS runtime exposes the plugin hooks these register
-  against (PolicyHook, ObservabilityHook, SecretsHook).
+- **MCP server catalog API** (`/v1/servers`). In OSS today, providers
+  are registered manually via SDK config.
+- **Connections vault** (`/v1/connections`, `/v1/auth-configs`). In OSS
+  today, credentials live in environment variables.
+- **Programmable wallet + policy engine.**
+- **Commerce-specific observability + fiscal-compliance
+  certifications.** The OSS runtime exposes the plugin hooks these
+  register against (`PolicyHook`, `ObservabilityHook`, `SecretsHook`).
 
-The five-point MIT commitment in VISION binds every shipped feature to
-land in this repo MIT-first. The dependency arrow stays enterprise → MIT.
+The five-point MIT commitment binds every shipped feature to land in
+this repo MIT-first. The dependency arrow stays managed → MIT.
 
 ## Legacy Surfaces
 
@@ -348,6 +337,6 @@ internals.
 
 ## License
 
-MIT — see [LICENSE](./LICENSE). The five-point MIT commitment in VISION
-is non-negotiable: no phone-home, no feature gates on the MIT layer, no
+MIT — see [LICENSE](./LICENSE). The five-point MIT commitment is
+non-negotiable: no phone-home, no feature gates on the MIT layer, no
 telemetry that restricts functionality.
