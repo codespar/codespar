@@ -37,7 +37,13 @@ commerce governance, not on `npm install`.
 - **Any commerce/ops agent on any channel** — pair the runtime with
   one of the MCP catalogs and you ship in an afternoon.
 - **Self-hosting** — no phone-home, fully operable without codespar
-  infrastructure. Docker Compose included.
+  infrastructure. Docker Compose included. Set `WEBHOOK_BASE_URL` to your
+  runtime's public URL (and `DASHBOARD_URL` if you run your own dashboard):
+  the runtime writes GitHub webhooks and OAuth callbacks only to what you
+  configure there, and returns `412` instead of guessing a host. Both are in
+  `.env.example` and in the compose `environment:` block. `.env` is read by
+  Docker Compose, not by the runtime process, so pass the variables through
+  compose or your process manager.
 
 ## Quick start
 

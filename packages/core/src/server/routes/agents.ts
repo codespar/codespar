@@ -13,7 +13,13 @@ import { createAgentBody, agentActionBody, linkProjectBody, createProjectBody, p
 import type { ProjectConfig } from "../../storage/types.js";
 import { GitHubClient } from "../../github/github-client.js";
 import { broadcastEvent } from "../webhook-server.js";
-import { resolveBaseUrl } from "../base-url.js";
+import {
+  BASE_URL_NOT_CONFIGURED,
+  BASE_URL_NOT_CONFIGURED_MESSAGE,
+  displayBaseUrl,
+  isHttpUrl,
+  writableBaseUrl,
+} from "../base-url.js";
 
 const log = createLogger("routes/agents");
 
@@ -365,22 +371,36 @@ export function registerAgentRoutes(route: RouteFn, ctx: ServerContext): void {
           return reply.status(409).send({ error: `Project '${projectId}' already exists` });
         }
 
+        // Auto-configuring the GitHub webhook WRITES a delivery target into
+        // the operator's own repo using the operator's GITHUB_TOKEN. The
+        // target therefore has to come from the operator's explicit
+        // WEBHOOK_BASE_URL, never from the request: /api/* is unauthenticated
+        // when ENGINE_API_TOKEN is unset, so any caller could otherwise forge
+        // a host header and have their own URL registered as the webhook.
+        const github = new GitHubClient();
+        const canWriteWebhook = github.isConfigured() && !!owner && !!repoName;
+        const baseUrl = writableBaseUrl();
+        if (canWriteWebhook && !baseUrl) {
+          // 412: the request is fine, the install is not configured for it.
+          // Refuse before creating anything so the retry is a clean re-POST.
+          return reply.status(412).send({
+            error: BASE_URL_NOT_CONFIGURED_MESSAGE,
+            code: BASE_URL_NOT_CONFIGURED,
+          });
+        }
+        const webhookUrl = baseUrl ? `${baseUrl}/webhooks/github` : null;
+
         try {
           await ctx.agentFactory.createAgent(projectId, agentId, repo, orgId);
           await storage.addProject({ id: projectId, agentId, repo });
 
-          // Auto-configure GitHub webhook. Derive the target from the
-          // operator's WEBHOOK_BASE_URL or the incoming request host — never a
-          // CodeSpar default, which would write a webhook into the
-          // self-hoster's own repo delivering their events to CodeSpar. When
-          // no base URL can be resolved, skip auto-configuration and leave the
-          // operator to set the webhook manually.
-          const baseUrl = resolveBaseUrl(request);
-          const webhookUrl = baseUrl ? `${baseUrl}/webhooks/github` : null;
-
-          const github = new GitHubClient();
+          // Auto-configure the GitHub webhook against the operator's own
+          // WEBHOOK_BASE_URL (resolved above) — never a CodeSpar default,
+          // which would deliver the self-hoster's repo events to us, and
+          // never a request-derived host, which a caller can forge. Re-check
+          // the URL parses as http(s) right before handing it to GitHub.
           let webhookConfigured = false;
-          if (webhookUrl && github.isConfigured() && owner && repoName) {
+          if (webhookUrl && isHttpUrl(webhookUrl) && github.isConfigured() && owner && repoName) {
             const webhook = await github.createWebhook(
               owner,
               repoName,
@@ -555,7 +575,9 @@ export function registerAgentRoutes(route: RouteFn, ctx: ServerContext): void {
     // List all agent metadata in A2A Agent Card format
     route("get", "/api/agent-cards", async (request: any, _reply: any) => {
       const allMetadata = getAllAgentMetadata();
-      const baseUrl = resolveBaseUrl(request) ?? "";
+      // Display-only: the card advertises this runtime's own address back to
+      // the caller that requested it.
+      const baseUrl = displayBaseUrl(request) ?? "";
 
       return {
         agents: allMetadata.map((meta) => ({
@@ -589,7 +611,9 @@ export function registerAgentRoutes(route: RouteFn, ctx: ServerContext): void {
         return reply.status(404).send({ error: `No agent card found for type '${type}'` });
       }
 
-      const baseUrl = resolveBaseUrl(request) ?? "";
+      // Display-only: the card advertises this runtime's own address back to
+      // the caller that requested it.
+      const baseUrl = displayBaseUrl(request) ?? "";
       return {
         name: meta.displayName,
         description: meta.description,

@@ -43,6 +43,16 @@ services:
       REDIS_URL: redis://redis:6379
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
       PORT: 3000
+      # Public URL of THIS runtime, as GitHub and your browser reach it. The
+      # container only sees "core:3000" from the inside, so it cannot infer it.
+      # Required to auto-configure webhooks and the OAuth callback; see
+      # .env.example. Compose interpolates these from a .env file next to this
+      # compose file (the runtime itself does not read .env).
+      WEBHOOK_BASE_URL: ${WEBHOOK_BASE_URL:-}
+      DASHBOARD_URL: ${DASHBOARD_URL:-}
+      # Set to "true" (or a proxy IP/CIDR list) only when a reverse proxy you
+      # control terminates TLS in front of this service.
+      TRUST_PROXY: ${TRUST_PROXY:-}
     depends_on:
       postgres:
         condition: service_healthy

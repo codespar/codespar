@@ -9,7 +9,7 @@ import { GitHubClient } from "../../github/github-client.js";
 import { broadcastEvent } from "../webhook-server.js";
 import { verifyWebhookSignature, enforceWebhookSecret } from "../webhook-auth.js";
 import type { RouteFn, ServerContext } from "./types.js";
-import { resolveBaseUrl } from "../base-url.js";
+import { displayBaseUrl } from "../base-url.js";
 
 const log = createLogger("routes/webhooks");
 
@@ -730,7 +730,10 @@ export function registerWebhookRoutes(route: RouteFn, ctx: ServerContext): void 
 
     route("get", "/api/webhooks/url", async (request: any, reply: any) => {
       const orgId = (request.headers["x-org-id"] as string) || "default";
-      const baseUrl = resolveBaseUrl(request) ?? "";
+      // Display-only: these URLs are shown back to the caller who asked, so a
+      // caller-supplied host can only mislead that same caller. Nothing here
+      // is written into GitHub / Vercel / Sentry by the runtime.
+      const baseUrl = displayBaseUrl(request) ?? "";
 
       reply.send({
         vercel: `${baseUrl}/webhooks/vercel?orgId=${orgId}`,

@@ -16,7 +16,11 @@ const newsletterLog = createLogger("newsletter");
 
 async function sendWelcomeEmail(email: string): Promise<void> {
   const apiKey = process.env.RESEND_API_KEY;
-  if (!apiKey) return;
+  // The sender identity and the copy belong to whoever runs this install.
+  // No CodeSpar default: a self-hoster must not end up mailing their own
+  // subscribers from a codespar.dev address about the CodeSpar blog.
+  const from = process.env.RESEND_FROM_EMAIL?.trim();
+  if (!apiKey || !from) return;
   try {
     await fetch("https://api.resend.com/emails", {
       method: "POST",
@@ -25,10 +29,10 @@ async function sendWelcomeEmail(email: string): Promise<void> {
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        from: process.env.RESEND_FROM_EMAIL || "CodeSpar <dispatch@codespar.dev>",
+        from,
         to: email,
-        subject: "Welcome to Dispatch",
-        html: `<p>You're subscribed to Dispatch, the CodeSpar engineering blog.</p><p>Architecture decisions, agent design patterns, and engineering lessons. One post per week.</p><p>Read the latest: <a href="https://codespar.dev/blog">codespar.dev/blog</a></p><p>— Fabiano</p>`,
+        subject: process.env.NEWSLETTER_SUBJECT?.trim() || "You are subscribed",
+        html: `<p>You are subscribed. Reply to this email to unsubscribe.</p>`,
       }),
     });
     newsletterLog.info("Welcome email sent", { email });
@@ -43,7 +47,8 @@ async function sendWelcomeEmail(email: string): Promise<void> {
 async function notifyLead(email: string, source: string, metadata: Record<string, unknown> | undefined): Promise<void> {
   const apiKey = process.env.RESEND_API_KEY;
   const to = process.env.LEAD_NOTIFY_TO;
-  if (!apiKey || !to) return;
+  const from = process.env.RESEND_FROM_EMAIL?.trim();
+  if (!apiKey || !to || !from) return;
   const m = metadata ?? {};
   const name = String(m.name ?? "").trim();
   const company = String(m.company ?? "").trim();
@@ -63,7 +68,7 @@ async function notifyLead(email: string, source: string, metadata: Record<string
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        from: process.env.RESEND_FROM_EMAIL || "CodeSpar <dispatch@codespar.dev>",
+        from,
         to: to.split(",").map((s) => s.trim()).filter(Boolean),
         reply_to: email,
         subject: `New lead (${source}) — ${name || email}${company ? ` · ${company}` : ""}`,
