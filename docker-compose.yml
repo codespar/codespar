@@ -50,9 +50,15 @@ services:
       # compose file (the runtime itself does not read .env).
       WEBHOOK_BASE_URL: ${WEBHOOK_BASE_URL:-}
       DASHBOARD_URL: ${DASHBOARD_URL:-}
-      # Set to "true" (or a proxy IP/CIDR list) only when a reverse proxy you
-      # control terminates TLS in front of this service.
+      # Boolean, default false. Leave it blank unless a reverse proxy you
+      # control is the only way to reach this service and it overwrites
+      # x-forwarded-* on every request; enabled, those headers are honoured
+      # from any peer that can open a socket here. Boolean spellings only, a
+      # hop count or an IP/CIDR list is rejected at startup. See .env.example.
       TRUST_PROXY: ${TRUST_PROXY:-}
+      # Name this install announces at /.well-known/agent.json. Blank means a
+      # generic default.
+      AGENT_CARD_NAME: ${AGENT_CARD_NAME:-}
     depends_on:
       postgres:
         condition: service_healthy

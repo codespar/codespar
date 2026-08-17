@@ -24,9 +24,15 @@
  *                              tell the operator", never "guess a host".
  *
  * x-forwarded-proto / x-forwarded-host are honoured only when the operator
- * opts in via TRUST_PROXY. The same env value is fed to Fastify's own
- * `trustProxy` option (webhook-server.ts), so request.protocol / request.ip
- * and this module always agree about whether the proxy chain is trusted.
+ * opts in via TRUST_PROXY, which is deliberately BOOLEAN-ONLY (see
+ * fastifyTrustProxy). This module honours a forwarded header from whichever
+ * peer sent it; Fastify, given a hop count or a CIDR list, would instead
+ * evaluate the peer address. Accepting those richer forms here would mean
+ * TRUST_PROXY=10.0.0.0/8 makes Fastify distrust a request from 127.0.0.1
+ * while this module still trusts its x-forwarded-host, which is exactly the
+ * disagreement that turns a display URL into an attacker's URL. Restricted to
+ * true/false, the same value means the same thing on both sides. An operator
+ * who needs per-peer proxy policy enforces it in the proxy, not here.
  *
  * Scheme is never guessed from the hostname. The runtime itself serves plain
  * HTTP (Dockerfile / docker-compose publish 3000:3000), so the default is
@@ -65,27 +71,49 @@ export function isHttpUrl(value: string | null | undefined): boolean {
   return (parsed.protocol === "http:" || parsed.protocol === "https:") && !!parsed.hostname;
 }
 
+const TRUE_VALUES = ["true", "1", "on", "yes"];
+const FALSE_VALUES = ["false", "0", "off", "no"];
+
+/** Operator-facing text for a TRUST_PROXY that is neither true nor false. */
+export const TRUST_PROXY_INVALID_MESSAGE =
+  "TRUST_PROXY must be a boolean. Accepted values are " +
+  `${TRUE_VALUES.join(" / ")} (trust the proxy chain) and ` +
+  `${FALSE_VALUES.join(" / ")} (the default, trust nothing); leaving it unset ` +
+  "means false. Hop counts and IP/CIDR lists are not accepted: this runtime " +
+  "either honours x-forwarded-host and x-forwarded-proto or it does not, and a " +
+  "per-peer policy that Fastify understood but this module did not would let a " +
+  "peer outside the trusted range still steer the URLs derived from headers. " +
+  "Restrict which peers may reach this port in the proxy or the firewall.";
+
 /**
- * TRUST_PROXY as Fastify's `trustProxy` option.
+ * TRUST_PROXY as Fastify's `trustProxy` option. Boolean only, on purpose.
  *
- * Unset / "false" / "0" / "off" / "no"  -> false (default: trust nothing).
- * "true" / "1" / "on" / "yes"           -> true.
- * A bare integer                        -> hop count.
- * Anything else                         -> passed through as the IP/CIDR list.
+ * Unset / false / 0 / off / no  -> false (default: trust nothing).
+ * true / 1 / on / yes           -> true.
+ * Anything else                 -> throws, naming the variable.
+ *
+ * The previous version passed an unrecognised value straight through to
+ * Fastify, which compiles it as an IP/CIDR list: TRUST_PROXY=banana killed the
+ * process inside the Fastify constructor with "invalid IP address: banana",
+ * naming neither the variable nor the file.
  */
-export function fastifyTrustProxy(env: NodeJS.ProcessEnv = process.env): boolean | number | string {
+export function fastifyTrustProxy(env: NodeJS.ProcessEnv = process.env): boolean {
   const raw = env.TRUST_PROXY?.trim();
   if (!raw) return false;
   const lower = raw.toLowerCase();
-  if (lower === "false" || lower === "0" || lower === "off" || lower === "no") return false;
-  if (lower === "true" || lower === "1" || lower === "on" || lower === "yes") return true;
-  if (/^\d+$/.test(raw)) return Number(raw);
-  return raw;
+  if (FALSE_VALUES.includes(lower)) return false;
+  if (TRUE_VALUES.includes(lower)) return true;
+  // The value is not echoed: it is operator input that may have been pasted
+  // from the wrong line of an .env file.
+  throw new Error(TRUST_PROXY_INVALID_MESSAGE);
 }
 
-/** Whether x-forwarded-* may be honoured at all. */
+/**
+ * Whether x-forwarded-* may be honoured at all. Same value, same meaning as
+ * the `trustProxy` Fastify was constructed with — see fastifyTrustProxy.
+ */
 export function trustProxyEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
-  return fastifyTrustProxy(env) !== false;
+  return fastifyTrustProxy(env);
 }
 
 function headerValue(headers: Record<string, unknown>, name: string): string | undefined {

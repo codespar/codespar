@@ -40,10 +40,14 @@ commerce governance, not on `npm install`.
   infrastructure. Docker Compose included. Set `WEBHOOK_BASE_URL` to your
   runtime's public URL (and `DASHBOARD_URL` if you run your own dashboard):
   the runtime writes GitHub webhooks and OAuth callbacks only to what you
-  configure there, and returns `412` instead of guessing a host. Both are in
-  `.env.example` and in the compose `environment:` block. `.env` is read by
-  Docker Compose, not by the runtime process, so pass the variables through
-  compose or your process manager.
+  configure there, never to a host guessed from a request header. Without
+  `WEBHOOK_BASE_URL`, creating a project still works and the webhook is
+  skipped (`webhookSkipped: "base_url_not_configured"` in the response);
+  `/api/github/install`, which has nothing to redirect to, answers `412`.
+  Both variables are in `.env.example` and in the compose `environment:`
+  block. `.env` is read by Docker Compose, not by the runtime process, so
+  pass the variables through compose or your process manager. The A2A card at
+  `/.well-known/agent.json` announces `AGENT_CARD_NAME`, not our name.
 
 ## Quick start
 

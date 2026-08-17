@@ -535,7 +535,15 @@ export class WebhookServer {
       // Skip rate limiting for health endpoint
       if (url === "/health" || url === "/v1/health") return;
 
-      const ip = request.ip;
+      // Key on the socket peer, never on request.ip. With trustProxy on,
+      // request.ip is the leftmost x-forwarded-for hop, which is a header:
+      // /api/* is unauthenticated when ENGINE_API_TOKEN is unset, so a caller
+      // could rotate that header per request and never reach any ceiling. The
+      // socket peer is the one address the caller cannot choose. Behind a real
+      // reverse proxy this collapses every client onto the proxy's address,
+      // which limits harder than intended rather than not at all; per-client
+      // limits belong in the proxy, which can tell clients apart safely.
+      const peer = request.socket?.remoteAddress ?? "unknown";
       let limit: number;
       let keyPrefix: string;
 
@@ -550,7 +558,7 @@ export class WebhookServer {
         return;
       }
 
-      const key = `${keyPrefix}:${ip}`;
+      const key = `${keyPrefix}:${peer}`;
       const { allowed, retryAfterMs } = checkRateLimit(key, limit, WINDOW_MS);
 
       if (!allowed) {
@@ -606,7 +614,12 @@ export class WebhookServer {
       const allMetadata = getAllAgentMetadata();
 
       return {
-        name: "CodeSpar",
+        // This is how the install introduces itself to every A2A peer that
+        // fetches the card. Hard-coding "CodeSpar" made each self-hoster
+        // announce our name on their network; the static no-phone-home scan
+        // cannot catch it because it is an identity, not a URL. Default is
+        // deliberately generic, AGENT_CARD_NAME overrides it.
+        name: process.env.AGENT_CARD_NAME?.trim() || "Agent Runtime",
         description:
           "Autonomous multi-agent platform for code projects. " +
           "Monitors repos, executes tasks, reviews PRs, orchestrates deploys, and investigates incidents.",

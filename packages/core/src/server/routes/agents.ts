@@ -377,17 +377,15 @@ export function registerAgentRoutes(route: RouteFn, ctx: ServerContext): void {
         // WEBHOOK_BASE_URL, never from the request: /api/* is unauthenticated
         // when ENGINE_API_TOKEN is unset, so any caller could otherwise forge
         // a host header and have their own URL registered as the webhook.
+        //
+        // Missing WEBHOOK_BASE_URL is NOT an error here. The shipped
+        // .env.example has GITHUB_TOKEN filled in and WEBHOOK_BASE_URL blank,
+        // so failing the request would break the default install. Creating the
+        // project is local and safe; only the GitHub write is skipped, and the
+        // response says so. The security property is unchanged: with no
+        // configured base URL nothing is written to GitHub.
         const github = new GitHubClient();
-        const canWriteWebhook = github.isConfigured() && !!owner && !!repoName;
         const baseUrl = writableBaseUrl();
-        if (canWriteWebhook && !baseUrl) {
-          // 412: the request is fine, the install is not configured for it.
-          // Refuse before creating anything so the retry is a clean re-POST.
-          return reply.status(412).send({
-            error: BASE_URL_NOT_CONFIGURED_MESSAGE,
-            code: BASE_URL_NOT_CONFIGURED,
-          });
-        }
         const webhookUrl = baseUrl ? `${baseUrl}/webhooks/github` : null;
 
         try {
@@ -400,6 +398,8 @@ export function registerAgentRoutes(route: RouteFn, ctx: ServerContext): void {
           // never a request-derived host, which a caller can forge. Re-check
           // the URL parses as http(s) right before handing it to GitHub.
           let webhookConfigured = false;
+          let webhookSkipped: string | undefined;
+          let webhookMessage: string | undefined;
           if (webhookUrl && isHttpUrl(webhookUrl) && github.isConfigured() && owner && repoName) {
             const webhook = await github.createWebhook(
               owner,
@@ -407,6 +407,16 @@ export function registerAgentRoutes(route: RouteFn, ctx: ServerContext): void {
               webhookUrl,
             );
             webhookConfigured = !!webhook;
+          } else if (!baseUrl && github.isConfigured() && owner && repoName) {
+            // The only thing missing is the operator's public URL. Say which
+            // variable to set instead of silently returning a half-configured
+            // project; the project itself is usable meanwhile.
+            webhookSkipped = BASE_URL_NOT_CONFIGURED;
+            webhookMessage = BASE_URL_NOT_CONFIGURED_MESSAGE;
+            log.warn(
+              "Project created without a GitHub webhook: WEBHOOK_BASE_URL is not configured",
+              { projectId },
+            );
           }
 
           return {
@@ -416,6 +426,7 @@ export function registerAgentRoutes(route: RouteFn, ctx: ServerContext): void {
             orgId,
             webhookUrl,
             webhookConfigured,
+            ...(webhookSkipped ? { webhookSkipped, webhookMessage } : {}),
           };
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
