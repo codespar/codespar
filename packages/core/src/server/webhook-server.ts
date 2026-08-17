@@ -22,6 +22,7 @@ import Fastify, { type FastifyInstance, type FastifyReply } from "fastify";
 import cors from "@fastify/cors";
 import { parseGitHubWebhook, type CIEvent } from "../webhooks/github-handler.js";
 import { getRegisteredTypes, getAgentFactory, isRegisteredType, getAllAgentMetadata } from "../agents/agent-registry.js";
+import { displayBaseUrl, fastifyTrustProxy } from "./base-url.js";
 import { createLogger } from "../observability/logger.js";
 import { metrics } from "../observability/metrics.js";
 import { scheduler } from "../scheduler/scheduler.js";
@@ -134,7 +135,11 @@ if (typeof rateLimitCleanupInterval === "object" && "unref" in rateLimitCleanupI
 // ── Resend welcome email ──────────────────────────────────────────
 async function sendWelcomeEmail(email: string): Promise<void> {
   const apiKey = process.env.RESEND_API_KEY;
-  if (!apiKey) return; // Skip if not configured
+  // The sender identity and the copy belong to whoever runs this install.
+  // No CodeSpar default: a self-hoster must not end up mailing their own
+  // subscribers from a codespar.dev address about the CodeSpar blog.
+  const from = process.env.RESEND_FROM_EMAIL?.trim();
+  if (!apiKey || !from) return; // Skip if not configured
 
   try {
     await fetch("https://api.resend.com/emails", {
@@ -144,10 +149,10 @@ async function sendWelcomeEmail(email: string): Promise<void> {
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        from: process.env.RESEND_FROM_EMAIL || "CodeSpar <dispatch@codespar.dev>",
+        from,
         to: email,
-        subject: "Welcome to Dispatch",
-        html: `<p>You're subscribed to Dispatch, the CodeSpar engineering blog.</p><p>Architecture decisions, agent design patterns, and engineering lessons. One post per week.</p><p>Read the latest: <a href="https://codespar.dev/blog">codespar.dev/blog</a></p><p>— Fabiano</p>`,
+        subject: process.env.NEWSLETTER_SUBJECT?.trim() || "You are subscribed",
+        html: `<p>You are subscribed. Reply to this email to unsubscribe.</p>`,
       }),
     });
     newsletterLog.info("Welcome email sent", { email });
@@ -204,7 +209,11 @@ export class WebhookServer {
     this.host = config?.host ?? "0.0.0.0";
     this.startedAt = new Date();
 
-    this.app = Fastify({ logger: false });
+    // trustProxy is opt-in via TRUST_PROXY. Left off, Fastify ignores
+    // x-forwarded-* when computing request.ip / request.protocol / hostname,
+    // which is what base-url.ts relies on: a runtime exposed directly must not
+    // let a caller rewrite its own address by sending a header.
+    this.app = Fastify({ logger: false, trustProxy: fastifyTrustProxy() });
 
     // CORS: restrict to CORS_ORIGIN when set, allow all when unset
     const corsOrigin = process.env.CORS_ORIGIN;
@@ -526,7 +535,15 @@ export class WebhookServer {
       // Skip rate limiting for health endpoint
       if (url === "/health" || url === "/v1/health") return;
 
-      const ip = request.ip;
+      // Key on the socket peer, never on request.ip. With trustProxy on,
+      // request.ip is the leftmost x-forwarded-for hop, which is a header:
+      // /api/* is unauthenticated when ENGINE_API_TOKEN is unset, so a caller
+      // could rotate that header per request and never reach any ceiling. The
+      // socket peer is the one address the caller cannot choose. Behind a real
+      // reverse proxy this collapses every client onto the proxy's address,
+      // which limits harder than intended rather than not at all; per-client
+      // limits belong in the proxy, which can tell clients apart safely.
+      const peer = request.socket?.remoteAddress ?? "unknown";
       let limit: number;
       let keyPrefix: string;
 
@@ -541,7 +558,7 @@ export class WebhookServer {
         return;
       }
 
-      const key = `${keyPrefix}:${ip}`;
+      const key = `${keyPrefix}:${peer}`;
       const { allowed, retryAfterMs } = checkRateLimit(key, limit, WINDOW_MS);
 
       if (!allowed) {
@@ -590,12 +607,19 @@ export class WebhookServer {
     });
 
     // ── A2A Well-Known Agent Card Discovery ─────────────────────────
-    this.app.get("/.well-known/agent.json", async (_request, _reply) => {
-      const baseUrl = process.env.WEBHOOK_BASE_URL || "https://codespar-production.up.railway.app";
+    this.app.get("/.well-known/agent.json", async (request, _reply) => {
+      // Display-only surface: advertises this runtime's own address back to
+      // the caller. Never used to write a target into a third-party system.
+      const baseUrl = displayBaseUrl(request) ?? "";
       const allMetadata = getAllAgentMetadata();
 
       return {
-        name: "CodeSpar",
+        // This is how the install introduces itself to every A2A peer that
+        // fetches the card. Hard-coding "CodeSpar" made each self-hoster
+        // announce our name on their network; the static no-phone-home scan
+        // cannot catch it because it is an identity, not a URL. Default is
+        // deliberately generic, AGENT_CARD_NAME overrides it.
+        name: process.env.AGENT_CARD_NAME?.trim() || "Agent Runtime",
         description:
           "Autonomous multi-agent platform for code projects. " +
           "Monitors repos, executes tasks, reviews PRs, orchestrates deploys, and investigates incidents.",

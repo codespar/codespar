@@ -166,6 +166,22 @@ export class GitHubClient {
     webhookUrl: string,
     events: string[] = ["workflow_run", "pull_request", "push"],
   ): Promise<{ id: number; url: string } | null> {
+    // Last line of defence before writing a delivery target into someone
+    // else's repo: the URL must parse as absolute http(s). Kept local (rather
+    // than importing the server's base-url helper) so it also covers callers
+    // outside this package, e.g. the project agent's chat "link" command.
+    let parsedWebhookUrl: URL;
+    try {
+      parsedWebhookUrl = new URL(webhookUrl);
+    } catch {
+      log.error("Refusing to create webhook: target is not a valid URL", { owner, repo });
+      return null;
+    }
+    if (parsedWebhookUrl.protocol !== "http:" && parsedWebhookUrl.protocol !== "https:") {
+      log.error("Refusing to create webhook: target is not http(s)", { owner, repo });
+      return null;
+    }
+
     // Check if webhook already exists
     const listRes = await fetch(
       `${this.baseUrl}/repos/${owner}/${repo}/hooks`,

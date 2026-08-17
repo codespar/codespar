@@ -13,6 +13,13 @@ import { createAgentBody, agentActionBody, linkProjectBody, createProjectBody, p
 import type { ProjectConfig } from "../../storage/types.js";
 import { GitHubClient } from "../../github/github-client.js";
 import { broadcastEvent } from "../webhook-server.js";
+import {
+  BASE_URL_NOT_CONFIGURED,
+  BASE_URL_NOT_CONFIGURED_MESSAGE,
+  displayBaseUrl,
+  isHttpUrl,
+  writableBaseUrl,
+} from "../base-url.js";
 
 const log = createLogger("routes/agents");
 
@@ -364,25 +371,52 @@ export function registerAgentRoutes(route: RouteFn, ctx: ServerContext): void {
           return reply.status(409).send({ error: `Project '${projectId}' already exists` });
         }
 
+        // Auto-configuring the GitHub webhook WRITES a delivery target into
+        // the operator's own repo using the operator's GITHUB_TOKEN. The
+        // target therefore has to come from the operator's explicit
+        // WEBHOOK_BASE_URL, never from the request: /api/* is unauthenticated
+        // when ENGINE_API_TOKEN is unset, so any caller could otherwise forge
+        // a host header and have their own URL registered as the webhook.
+        //
+        // Missing WEBHOOK_BASE_URL is NOT an error here. The shipped
+        // .env.example has GITHUB_TOKEN filled in and WEBHOOK_BASE_URL blank,
+        // so failing the request would break the default install. Creating the
+        // project is local and safe; only the GitHub write is skipped, and the
+        // response says so. The security property is unchanged: with no
+        // configured base URL nothing is written to GitHub.
+        const github = new GitHubClient();
+        const baseUrl = writableBaseUrl();
+        const webhookUrl = baseUrl ? `${baseUrl}/webhooks/github` : null;
+
         try {
           await ctx.agentFactory.createAgent(projectId, agentId, repo, orgId);
           await storage.addProject({ id: projectId, agentId, repo });
 
-          // Auto-configure GitHub webhook
-          const WEBHOOK_BASE_URL =
-            process.env.WEBHOOK_BASE_URL ||
-            "https://codespar-production.up.railway.app";
-          const webhookUrl = `${WEBHOOK_BASE_URL}/webhooks/github`;
-
-          const github = new GitHubClient();
+          // Auto-configure the GitHub webhook against the operator's own
+          // WEBHOOK_BASE_URL (resolved above) — never a CodeSpar default,
+          // which would deliver the self-hoster's repo events to us, and
+          // never a request-derived host, which a caller can forge. Re-check
+          // the URL parses as http(s) right before handing it to GitHub.
           let webhookConfigured = false;
-          if (github.isConfigured() && owner && repoName) {
+          let webhookSkipped: string | undefined;
+          let webhookMessage: string | undefined;
+          if (webhookUrl && isHttpUrl(webhookUrl) && github.isConfigured() && owner && repoName) {
             const webhook = await github.createWebhook(
               owner,
               repoName,
               webhookUrl,
             );
             webhookConfigured = !!webhook;
+          } else if (!baseUrl && github.isConfigured() && owner && repoName) {
+            // The only thing missing is the operator's public URL. Say which
+            // variable to set instead of silently returning a half-configured
+            // project; the project itself is usable meanwhile.
+            webhookSkipped = BASE_URL_NOT_CONFIGURED;
+            webhookMessage = BASE_URL_NOT_CONFIGURED_MESSAGE;
+            log.warn(
+              "Project created without a GitHub webhook: WEBHOOK_BASE_URL is not configured",
+              { projectId },
+            );
           }
 
           return {
@@ -392,6 +426,7 @@ export function registerAgentRoutes(route: RouteFn, ctx: ServerContext): void {
             orgId,
             webhookUrl,
             webhookConfigured,
+            ...(webhookSkipped ? { webhookSkipped, webhookMessage } : {}),
           };
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
@@ -549,9 +584,11 @@ export function registerAgentRoutes(route: RouteFn, ctx: ServerContext): void {
     // ── A2A Agent Cards ──────────────────────────────────────────────
 
     // List all agent metadata in A2A Agent Card format
-    route("get", "/api/agent-cards", async (_request: any, _reply: any) => {
+    route("get", "/api/agent-cards", async (request: any, _reply: any) => {
       const allMetadata = getAllAgentMetadata();
-      const baseUrl = process.env.WEBHOOK_BASE_URL || "https://codespar-production.up.railway.app";
+      // Display-only: the card advertises this runtime's own address back to
+      // the caller that requested it.
+      const baseUrl = displayBaseUrl(request) ?? "";
 
       return {
         agents: allMetadata.map((meta) => ({
@@ -585,7 +622,9 @@ export function registerAgentRoutes(route: RouteFn, ctx: ServerContext): void {
         return reply.status(404).send({ error: `No agent card found for type '${type}'` });
       }
 
-      const baseUrl = process.env.WEBHOOK_BASE_URL || "https://codespar-production.up.railway.app";
+      // Display-only: the card advertises this runtime's own address back to
+      // the caller that requested it.
+      const baseUrl = displayBaseUrl(request) ?? "";
       return {
         name: meta.displayName,
         description: meta.description,

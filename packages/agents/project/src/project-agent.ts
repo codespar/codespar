@@ -2049,16 +2049,18 @@ Focus on: ${perfTarget}`;
 
     await this.storage.setProjectConfig(this.config.id, config);
 
-    // Auto-configure GitHub webhook
-    const WEBHOOK_BASE_URL =
-      process.env.WEBHOOK_BASE_URL ||
-      "https://codespar-production.up.railway.app";
-    const webhookUrl = `${WEBHOOK_BASE_URL}/webhooks/github`;
+    // Auto-configure GitHub webhook. Only when the operator set an explicit
+    // WEBHOOK_BASE_URL \u2014 there is no request host in this chat-link path, and
+    // the MIT runtime must never default to a CodeSpar host (no phone-home).
+    const baseUrl = process.env.WEBHOOK_BASE_URL?.trim() || null;
+    const webhookUrl = baseUrl ? `${baseUrl}/webhooks/github` : null;
 
     let webhookStatus: string;
     const { GitHubClient } = await import("@codespar/core");
     const github = new GitHubClient();
-    if (github.isConfigured()) {
+    if (!webhookUrl) {
+      webhookStatus = `\n  \u26a0 Set WEBHOOK_BASE_URL to auto-configure the GitHub webhook, or add it manually pointing at <your-host>/webhooks/github`;
+    } else if (github.isConfigured()) {
       const webhook = await github.createWebhook(
         parsed.owner,
         parsed.name,

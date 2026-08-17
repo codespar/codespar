@@ -6,8 +6,70 @@ import { createLogger } from "../../observability/logger.js";
 import { GitHubClient } from "../../github/github-client.js";
 import type { RouteFn, ServerContext } from "./types.js";
 import type { SlackInstallation } from "../../storage/types.js";
+import {
+  BASE_URL_NOT_CONFIGURED,
+  BASE_URL_NOT_CONFIGURED_MESSAGE,
+  configuredDashboardUrl,
+  isHttpUrl,
+  writableBaseUrl,
+} from "../base-url.js";
 
 const log = createLogger("routes/oauth-github");
+
+/** Fixed, non-reflected outcome labels — never interpolate request input here. */
+type OAuthProvider = "slack" | "github";
+type OAuthOutcome = "connected" | "error" | "denied" | "token_exchange";
+
+const OUTCOME_TEXT: Record<OAuthOutcome, string> = {
+  connected: "Connected. You can close this tab and go back to your terminal.",
+  error: "Something went wrong while saving the connection. Check the runtime logs.",
+  denied: "The authorization was denied. Nothing was saved.",
+  token_exchange: "The provider rejected the token exchange. Check the runtime logs.",
+};
+
+/**
+ * End an OAuth flow.
+ *
+ * DASHBOARD_URL is where the operator's own dashboard lives. It has no
+ * default: this runtime is MIT and self-hosted, so there is no dashboard we
+ * could send the operator's browser to. When it is unset the runtime renders
+ * the outcome itself instead of 302-ing anywhere — in particular it never
+ * redirects to a CodeSpar host, which would hand the operator a page that
+ * knows nothing about their install.
+ *
+ * The request host is deliberately NOT used as a fallback: it is
+ * caller-controlled (open-redirect surface) and this runtime serves no
+ * /dashboard/setup route, so it would only produce a 404 on the way out.
+ */
+function endOAuthFlow(
+  reply: any,
+  provider: OAuthProvider,
+  outcome: OAuthOutcome,
+): unknown {
+  const dashboardUrl = configuredDashboardUrl();
+  if (dashboardUrl) {
+    // Keep the historical query contract: <provider>=connected|error, with the
+    // detail in &reason, so an existing dashboard keeps parsing it.
+    const query =
+      outcome === "connected"
+        ? `${provider}=connected`
+        : `${provider}=error&reason=${outcome}`;
+    return reply.redirect(`${dashboardUrl}/dashboard/setup?${query}`);
+  }
+  const title = outcome === "connected" ? `${provider} connected` : `${provider} not connected`;
+  return reply
+    .status(outcome === "connected" ? 200 : 400)
+    .type("text/html; charset=utf-8")
+    .send(
+      `<!doctype html><html lang="en"><head><meta charset="utf-8">` +
+        `<meta name="viewport" content="width=device-width,initial-scale=1">` +
+        `<title>${title}</title></head><body style="font:16px/1.5 system-ui,sans-serif;margin:3rem auto;max-width:34rem;padding:0 1rem">` +
+        `<h1 style="font-size:1.25rem">${title}</h1>` +
+        `<p>${OUTCOME_TEXT[outcome]}</p>` +
+        `<p style="color:#666;font-size:0.875rem">Set DASHBOARD_URL to send this redirect to your own dashboard instead.</p>` +
+        `</body></html>`,
+    );
+}
 
 export function registerOAuthGitHubRoutes(route: RouteFn, ctx: ServerContext): void {
     // ── Slack OAuth 2.0 ─────────────────────────────────────────────
@@ -42,7 +104,7 @@ export function registerOAuthGitHubRoutes(route: RouteFn, ctx: ServerContext): v
 
       if (oauthError) {
         log.warn("Slack OAuth denied", { error: oauthError });
-        return reply.redirect("/?slack=error&reason=denied");
+        return endOAuthFlow(reply, "slack", "denied");
       }
 
       if (!code) {
@@ -80,7 +142,7 @@ export function registerOAuthGitHubRoutes(route: RouteFn, ctx: ServerContext): v
 
         if (!tokenData.ok) {
           log.error("Slack token exchange failed", { error: tokenData.error });
-          return reply.redirect("/?slack=error&reason=token_exchange");
+          return endOAuthFlow(reply, "slack", "token_exchange");
         }
 
         const installation: SlackInstallation = {
@@ -108,12 +170,10 @@ export function registerOAuthGitHubRoutes(route: RouteFn, ctx: ServerContext): v
         }
 
         log.info("Slack installation saved", { teamId: installation.teamId, teamName: installation.teamName, orgId });
-        const dashboardUrl = process.env.DASHBOARD_URL || "https://codespar.dev";
-        return reply.redirect(`${dashboardUrl}/dashboard/setup?slack=connected`);
+        return endOAuthFlow(reply, "slack", "connected");
       } catch (err) {
         log.error("Slack OAuth callback error", { error: err instanceof Error ? err.message : String(err) });
-        const dashboardUrl = process.env.DASHBOARD_URL || "https://codespar.dev";
-        return reply.redirect(`${dashboardUrl}/dashboard/setup?slack=error`);
+        return endOAuthFlow(reply, "slack", "error");
       }
     });
 
@@ -146,15 +206,30 @@ export function registerOAuthGitHubRoutes(route: RouteFn, ctx: ServerContext): v
     // ── GitHub OAuth (per-workspace) ──────────────────────────────────
 
     // Initiate GitHub OAuth flow by redirecting to the authorization page
-    route("get", "/api/github/install", async (_request: any, reply: any) => {
+    route("get", "/api/github/install", async (request: any, reply: any) => {
       const clientId = process.env.GITHUB_CLIENT_ID;
       if (!clientId) {
         return reply.status(503).send({ error: "GitHub OAuth not configured. Set GITHUB_CLIENT_ID." });
       }
 
+      // The redirect_uri is where GitHub will deliver the authorization code,
+      // so it is a WRITE target, not a display string: it must come from the
+      // operator's config, never from a caller-supplied host header. This
+      // route is in the API-auth exclusion list (webhook-server.ts
+      // registerApiAuth EXCLUDED_PATHS), so an unauthenticated caller reaches
+      // it by design.
+      const base = writableBaseUrl();
       const redirectUri =
-        process.env.GITHUB_OAUTH_REDIRECT_URI ||
-        `${process.env.WEBHOOK_BASE_URL || "https://codespar-production.up.railway.app"}/api/github/callback`;
+        process.env.GITHUB_OAUTH_REDIRECT_URI?.trim() ||
+        (base ? `${base}/api/github/callback` : null);
+      if (!redirectUri || !isHttpUrl(redirectUri)) {
+        return reply.status(412).send({
+          error:
+            "GitHub OAuth callback not configured. Set GITHUB_OAUTH_REDIRECT_URI to this " +
+            `runtime's public /api/github/callback URL, or set WEBHOOK_BASE_URL. ${BASE_URL_NOT_CONFIGURED_MESSAGE}`,
+          code: BASE_URL_NOT_CONFIGURED,
+        });
+      }
       const scope = "repo,read:user";
       const state = Math.random().toString(36).slice(2, 10);
       const url = `https://github.com/login/oauth/authorize?client_id=${clientId}&redirect_uri=${encodeURIComponent(redirectUri)}&scope=${scope}&state=${state}`;
@@ -234,12 +309,10 @@ export function registerOAuthGitHubRoutes(route: RouteFn, ctx: ServerContext): v
 
         log.info("GitHub OAuth connected", { orgId, user: userData.login });
 
-        const dashboardUrl = process.env.DASHBOARD_URL || "https://codespar.dev";
-        return reply.redirect(`${dashboardUrl}/dashboard/setup?github=connected`);
+        return endOAuthFlow(reply, "github", "connected");
       } catch (err) {
         log.error("GitHub OAuth callback error", { error: err instanceof Error ? err.message : String(err) });
-        const dashboardUrl = process.env.DASHBOARD_URL || "https://codespar.dev";
-        return reply.redirect(`${dashboardUrl}/dashboard/setup?github=error`);
+        return endOAuthFlow(reply, "github", "error");
       }
     });
 
