@@ -6,6 +6,7 @@ import { createLogger } from "../../observability/logger.js";
 import { GitHubClient } from "../../github/github-client.js";
 import type { RouteFn, ServerContext } from "./types.js";
 import type { SlackInstallation } from "../../storage/types.js";
+import { resolveBaseUrl } from "../base-url.js";
 
 const log = createLogger("routes/oauth-github");
 
@@ -146,15 +147,22 @@ export function registerOAuthGitHubRoutes(route: RouteFn, ctx: ServerContext): v
     // ── GitHub OAuth (per-workspace) ──────────────────────────────────
 
     // Initiate GitHub OAuth flow by redirecting to the authorization page
-    route("get", "/api/github/install", async (_request: any, reply: any) => {
+    route("get", "/api/github/install", async (request: any, reply: any) => {
       const clientId = process.env.GITHUB_CLIENT_ID;
       if (!clientId) {
         return reply.status(503).send({ error: "GitHub OAuth not configured. Set GITHUB_CLIENT_ID." });
       }
 
+      const base = resolveBaseUrl(request);
       const redirectUri =
         process.env.GITHUB_OAUTH_REDIRECT_URI ||
-        `${process.env.WEBHOOK_BASE_URL || "https://codespar-production.up.railway.app"}/api/github/callback`;
+        (base ? `${base}/api/github/callback` : null);
+      if (!redirectUri) {
+        return reply.status(503).send({
+          error:
+            "GitHub OAuth callback not configured. Set GITHUB_OAUTH_REDIRECT_URI or WEBHOOK_BASE_URL.",
+        });
+      }
       const scope = "repo,read:user";
       const state = Math.random().toString(36).slice(2, 10);
       const url = `https://github.com/login/oauth/authorize?client_id=${clientId}&redirect_uri=${encodeURIComponent(redirectUri)}&scope=${scope}&state=${state}`;

@@ -22,6 +22,7 @@ import Fastify, { type FastifyInstance, type FastifyReply } from "fastify";
 import cors from "@fastify/cors";
 import { parseGitHubWebhook, type CIEvent } from "../webhooks/github-handler.js";
 import { getRegisteredTypes, getAgentFactory, isRegisteredType, getAllAgentMetadata } from "../agents/agent-registry.js";
+import { resolveBaseUrl } from "./base-url.js";
 import { createLogger } from "../observability/logger.js";
 import { metrics } from "../observability/metrics.js";
 import { scheduler } from "../scheduler/scheduler.js";
@@ -590,8 +591,8 @@ export class WebhookServer {
     });
 
     // ── A2A Well-Known Agent Card Discovery ─────────────────────────
-    this.app.get("/.well-known/agent.json", async (_request, _reply) => {
-      const baseUrl = process.env.WEBHOOK_BASE_URL || "https://codespar-production.up.railway.app";
+    this.app.get("/.well-known/agent.json", async (request, _reply) => {
+      const baseUrl = resolveBaseUrl(request) ?? "";
       const allMetadata = getAllAgentMetadata();
 
       return {

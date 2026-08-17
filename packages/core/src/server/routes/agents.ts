@@ -13,6 +13,7 @@ import { createAgentBody, agentActionBody, linkProjectBody, createProjectBody, p
 import type { ProjectConfig } from "../../storage/types.js";
 import { GitHubClient } from "../../github/github-client.js";
 import { broadcastEvent } from "../webhook-server.js";
+import { resolveBaseUrl } from "../base-url.js";
 
 const log = createLogger("routes/agents");
 
@@ -368,15 +369,18 @@ export function registerAgentRoutes(route: RouteFn, ctx: ServerContext): void {
           await ctx.agentFactory.createAgent(projectId, agentId, repo, orgId);
           await storage.addProject({ id: projectId, agentId, repo });
 
-          // Auto-configure GitHub webhook
-          const WEBHOOK_BASE_URL =
-            process.env.WEBHOOK_BASE_URL ||
-            "https://codespar-production.up.railway.app";
-          const webhookUrl = `${WEBHOOK_BASE_URL}/webhooks/github`;
+          // Auto-configure GitHub webhook. Derive the target from the
+          // operator's WEBHOOK_BASE_URL or the incoming request host — never a
+          // CodeSpar default, which would write a webhook into the
+          // self-hoster's own repo delivering their events to CodeSpar. When
+          // no base URL can be resolved, skip auto-configuration and leave the
+          // operator to set the webhook manually.
+          const baseUrl = resolveBaseUrl(request);
+          const webhookUrl = baseUrl ? `${baseUrl}/webhooks/github` : null;
 
           const github = new GitHubClient();
           let webhookConfigured = false;
-          if (github.isConfigured() && owner && repoName) {
+          if (webhookUrl && github.isConfigured() && owner && repoName) {
             const webhook = await github.createWebhook(
               owner,
               repoName,
@@ -549,9 +553,9 @@ export function registerAgentRoutes(route: RouteFn, ctx: ServerContext): void {
     // ── A2A Agent Cards ──────────────────────────────────────────────
 
     // List all agent metadata in A2A Agent Card format
-    route("get", "/api/agent-cards", async (_request: any, _reply: any) => {
+    route("get", "/api/agent-cards", async (request: any, _reply: any) => {
       const allMetadata = getAllAgentMetadata();
-      const baseUrl = process.env.WEBHOOK_BASE_URL || "https://codespar-production.up.railway.app";
+      const baseUrl = resolveBaseUrl(request) ?? "";
 
       return {
         agents: allMetadata.map((meta) => ({
@@ -585,7 +589,7 @@ export function registerAgentRoutes(route: RouteFn, ctx: ServerContext): void {
         return reply.status(404).send({ error: `No agent card found for type '${type}'` });
       }
 
-      const baseUrl = process.env.WEBHOOK_BASE_URL || "https://codespar-production.up.railway.app";
+      const baseUrl = resolveBaseUrl(request) ?? "";
       return {
         name: meta.displayName,
         description: meta.description,
