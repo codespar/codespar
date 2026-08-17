@@ -134,9 +134,20 @@ function hostOf(url: string): string | null {
  *   1. \uXXXX / \u{...} / \xXX escapes -> the character they denote.
  *   2. `${"lit"}` / `${'lit'}` -> lit.
  *   3. "a" + "b" -> "ab" (any quote style, across newlines), to a fixed point.
- * Indirection through a variable ("const h = ...; `https://${h}/x`") is out of
- * reach of any regex over one file; for the historical host, which needs no
- * scheme to be recognised, hostAlphabet below catches that too.
+ * Known reach, stated honestly so nobody trusts this further than it goes:
+ *   - Indirection through a variable ("const h = ...; `https://${h}/x`") is out
+ *     of reach of any regex over one file.
+ *   - hostAlphabet below extends that reach only when the fragments sit
+ *     ADJACENT in the source. Split across separate declarations
+ *     ("const a = 'codespar-produc'; const b = 'tion.up.railway.app'") it does
+ *     NOT catch them.
+ *   - URL_RE requires an http(s) scheme, so a bare host with no scheme
+ *     ("const DEFAULT_HOST = 'api.codespar.dev'", used later as
+ *     `https://${DEFAULT_HOST}`) is invisible to both checks.
+ * This guard raises the cost of reintroducing the defect by accident. It does
+ * not stop someone determined to route around it, and it is not a substitute
+ * for the behavioural tests further down this file, which assert what the
+ * runtime actually writes rather than what the source looks like.
  */
 function collapseAssembly(src: string): string {
   let out = src
