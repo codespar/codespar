@@ -73,6 +73,14 @@ services:
       # Name this install announces at /.well-known/agent.json. Blank means a
       # generic default.
       AGENT_CARD_NAME: ${AGENT_CARD_NAME:-}
+      # Credential for /api/*, /sessions/* and /a2a/*. Leave it blank and the
+      # runtime generates one on first boot and stores it in the state volume
+      # below, so an unattended install keeps working without anyone setting
+      # anything. Read it back with:
+      #   docker compose exec core cat /app/.codespar/api-token
+      # Set it to manage the credential yourself; nothing is written to disk
+      # then.
+      ENGINE_API_TOKEN: ${ENGINE_API_TOKEN:-}
       ENABLE_WHATSAPP: "true"
       EVOLUTION_API_URL: http://evolution-api:8084
       EVOLUTION_API_KEY: ${EVOLUTION_API_KEY:-codespar_dev_key}
@@ -87,6 +95,11 @@ services:
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
       ENABLE_DISCORD: ${ENABLE_DISCORD:-false}
       DISCORD_BOT_TOKEN: ${DISCORD_BOT_TOKEN}
+    volumes:
+      # Keeps the generated API credential across `docker compose down && up`.
+      # Without it every recreate mints a new token and every client that
+      # already read the old one starts getting 401.
+      - codespar_state:/app/.codespar
     depends_on:
       postgres:
         condition: service_healthy
@@ -98,4 +111,5 @@ services:
 volumes:
   postgres_data:
   redis_data:
+  codespar_state:
   evolution_data:

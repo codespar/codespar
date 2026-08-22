@@ -374,9 +374,11 @@ export function registerAgentRoutes(route: RouteFn, ctx: ServerContext): void {
         // Auto-configuring the GitHub webhook WRITES a delivery target into
         // the operator's own repo using the operator's GITHUB_TOKEN. The
         // target therefore has to come from the operator's explicit
-        // WEBHOOK_BASE_URL, never from the request: /api/* is unauthenticated
-        // when ENGINE_API_TOKEN is unset, so any caller could otherwise forge
-        // a host header and have their own URL registered as the webhook.
+        // WEBHOOK_BASE_URL, never from the request, because a host header is
+        // chosen by the caller. This once read "/api/* is unauthenticated
+        // when ENGINE_API_TOKEN is unset" (BLOCKER oss-sdk#5, since fixed);
+        // the rule stands on its own now, since being authenticated is not
+        // the same as being entitled to pick what lands in the repo.
         //
         // Missing WEBHOOK_BASE_URL is NOT an error here. The shipped
         // .env.example has GITHUB_TOKEN filled in and WEBHOOK_BASE_URL blank,

@@ -33,6 +33,14 @@ import {
 } from "vitest";
 import { clearMcpBridge } from "../../../mcp/index.js";
 import { clearSessionStore, registerSessionRoutes } from "../sessions.js";
+import { TEST_API_TOKEN } from "../../__tests__/test-credential.js";
+
+// The session routes verify the bearer token against the runtime's
+// credential (BLOCKER oss-sdk#5). Until that fix these suites passed because
+// an unset ENGINE_API_TOKEN made any non-empty `Bearer` value acceptable.
+// Declaring the token they already send keeps them honest: the same
+// comparison a production credential goes through now runs here too.
+process.env.ENGINE_API_TOKEN = TEST_API_TOKEN;
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = join(__dirname, "..", "..", "..", "..", "..", "..");

@@ -21,10 +21,11 @@ As the project is in early development, all `0.x` releases receive security patc
 
 ## Security Model
 
-CodeSpar implements **10 defense layers** to protect your projects, credentials, and infrastructure:
+CodeSpar implements **11 defense layers** to protect your projects, credentials, and infrastructure:
 
 | Layer | Defense | Description |
 |-------|---------|-------------|
+| 0 | **API Authentication** | `/api/*`, `/sessions/*` and `/a2a/*` require a bearer token. There is no unauthenticated mode: the runtime generates and persists a credential on first boot when the operator supplies none, so requiring it costs an unattended install nothing. `/health` and the OAuth install/callback routes are the only exceptions. |
 | 1 | **Message Filter** | Only processes `@mention` commands and direct messages. All other messages are ignored. |
 | 2 | **Channel Config** | Agents ignore messages from unconfigured channels. No implicit trust. |
 | 3 | **Identity Resolution** | Maps channel-specific user IDs to a unified identity. Prevents impersonation across platforms. |

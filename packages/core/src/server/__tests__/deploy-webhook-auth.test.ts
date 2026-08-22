@@ -9,6 +9,7 @@
 import { describe, it, expect, beforeAll, afterAll, vi } from "vitest";
 import { createHmac } from "node:crypto";
 import { WebhookServer } from "../webhook-server.js";
+import { TEST_API_TOKEN, authHeaders } from "./test-credential.js";
 
 const TEST_SECRET = "deploy-test-secret-abc123";
 const DEPLOY_BODY = JSON.stringify({
@@ -135,7 +136,9 @@ describe("deploy webhook auth (real WebhookServer)", () => {
     let server: WebhookServer;
 
     beforeAll(() => {
-      delete process.env.ENGINE_API_TOKEN;
+      // /api/webhooks/url is a protected route. Deleting the token used to
+      // make it anonymous (BLOCKER oss-sdk#5); now the suite authenticates.
+      process.env.ENGINE_API_TOKEN = TEST_API_TOKEN;
       server = new WebhookServer({ port: 0 });
     });
 
@@ -143,6 +146,7 @@ describe("deploy webhook auth (real WebhookServer)", () => {
       const res = await server.inject({
         method: "GET",
         url: "/api/webhooks/url",
+        headers: authHeaders(),
       });
       expect(res.statusCode).toBe(200);
       const body = JSON.parse(res.body);

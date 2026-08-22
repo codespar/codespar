@@ -135,6 +135,48 @@ describe("BLOCKER oss-sdk#5: anonymous access to the control surfaces", () => {
     }
   });
 
+  it("is not bypassable by percent-encoding the path", async () => {
+    // Found by probing the first version of this fix, which matched on
+    // `request.url` alone: `GET /%61pi/agents` returned 200 and a real
+    // `{"agents":[]}` body. Fastify routes on the DECODED path, so the
+    // handler saw /api/agents while the guard saw a string starting with
+    // `/%61` and waved it through. Encoding any part of the prefix worked,
+    // including the `/v1` mirror.
+    const encoded = [
+      "/%61pi/agents", // /api/agents
+      "/%61%32%61/tasks", // /a2a/tasks
+      "/v%31/api/agents", // /v1/api/agents
+      "/a2a/%74asks", // /a2a/tasks, encoded past the prefix
+      "/%73essions", // /sessions
+    ];
+    for (const url of encoded) {
+      const res = await server.inject({ method: "GET", url });
+      // 401 (guard held) or 404 (no such route for this method) are both
+      // fine. What must never happen is the handler answering.
+      expect([401, 404], `${url} reached a handler`).toContain(res.statusCode);
+    }
+
+    // POST, because /sessions has no GET handler and would 404 either way.
+    const res = await server.inject({
+      method: "POST",
+      url: "/%73essions",
+      payload: { servers: [] },
+      headers: { "content-type": "application/json", authorization: "Bearer test" },
+    });
+    expect(res.statusCode).toBe(401);
+  });
+
+  it("refuses a request whose path cannot be decoded", async () => {
+    // Fastify rejects a malformed escape at the router with 400 before the
+    // hook is reached, so in practice this is 400 rather than 401. The guard
+    // still treats an undecodable path as protected, because "the framework
+    // happens to reject it first" is a weaker guarantee than the hook not
+    // having to guess what a path will route to. Either answer is fine; a
+    // handler answering is not.
+    const res = await server.inject({ method: "GET", url: "/%zz/api/agents" });
+    expect([400, 401]).toContain(res.statusCode);
+  });
+
   // ── 2. The remote-code-execution chain itself ─────────────────────
 
   it("does not let an anonymous caller reach child_process.spawn", async () => {

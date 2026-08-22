@@ -13,7 +13,31 @@
 set -euo pipefail
 
 BASE_URL="${CODESPAR_BASE_URL:-http://localhost:3000}"
-TOKEN="${ENGINE_API_TOKEN:-test}"
+# Resolve the runtime's API credential the way any local client should:
+# ENGINE_API_TOKEN if the operator set one, otherwise the token the runtime
+# generated for itself on first boot. There is no default value to fall back
+# to -- an empty token means this script cannot authenticate, and saying so
+# here beats a confusing 401 later.
+resolve_token() {
+    if [ -n "${ENGINE_API_TOKEN:-}" ]; then
+        printf '%s' "$ENGINE_API_TOKEN"
+        return 0
+    fi
+    for candidate in "${CODESPAR_STATE_DIR:-}" "${PWD}/.codespar" "${HOME}/.codespar"; do
+        [ -n "$candidate" ] || continue
+        if [ -r "$candidate/api-token" ]; then
+            tr -d '[:space:]' < "$candidate/api-token"
+            return 0
+        fi
+    done
+    echo "could not find an API token." >&2
+    echo "Set ENGINE_API_TOKEN, or point CODESPAR_STATE_DIR at the runtime's" >&2
+    echo "state directory. Inside Docker:" >&2
+    echo "  export ENGINE_API_TOKEN=\$(docker compose exec -T core cat /app/.codespar/api-token)" >&2
+    return 1
+}
+
+TOKEN="$(resolve_token)"
 SERVER_ID="${MCP_BRIDGE_SERVER_ID:-asaas}"
 TOOL_NAME="${MCP_BRIDGE_TOOL_NAME:-${SERVER_ID}/health}"
 

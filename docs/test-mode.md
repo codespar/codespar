@@ -213,7 +213,18 @@ behaves the same way.
 ## Writing tests against the OSS runtime
 
 A minimal pattern, in shell (assumes the server was started with
-`CODESPAR_TEST_MODE_ENABLED=true`):
+`CODESPAR_TEST_MODE_ENABLED=true`).
+
+`$TOKEN` is the runtime's API credential. Set `ENGINE_API_TOKEN` yourself, or
+read the one the runtime generated on first boot:
+
+```bash
+export TOKEN=$(cat .codespar/api-token)                                  # local
+export TOKEN=$(docker compose exec -T core cat /app/.codespar/api-token) # compose
+```
+
+There is no unauthenticated mode for these routes, and no default value: a
+session accepts a command that the runtime spawns.
 
 ```bash
 # 1. Create a session with mocks declared.

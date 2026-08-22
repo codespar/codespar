@@ -46,6 +46,7 @@ import { join } from "node:path";
 vi.mock("@anthropic-ai/sdk", () => ({ default: class Anthropic {} }));
 
 import { WebhookServer } from "../webhook-server.js";
+import { TEST_API_TOKEN, authHeaders } from "./test-credential.js";
 import { fastifyTrustProxy, trustProxyEnabled } from "../base-url.js";
 import { GitHubClient } from "../../github/github-client.js";
 import type { StorageProvider } from "../../storage/types.js";
@@ -363,6 +364,10 @@ describe("MIT runtime: webhook target is not steerable by headers (BLOCKER oss-s
       saved[k] = process.env[k];
       delete process.env[k];
     }
+    // ENGINE_API_TOKEN is one of the keys just cleared. /api/* is protected
+    // whether or not it is set (BLOCKER oss-sdk#5), so declare a known
+    // credential and let these cases authenticate with it.
+    process.env.ENGINE_API_TOKEN = TEST_API_TOKEN;
     createWebhook = vi
       .spyOn(GitHubClient.prototype, "createWebhook")
       .mockResolvedValue({ id: 1, url: "stub" });
@@ -385,11 +390,11 @@ describe("MIT runtime: webhook target is not steerable by headers (BLOCKER oss-s
       method: "POST",
       url: "/api/projects",
       payload: { repo: "acme/widgets" },
-      headers: {
+      headers: authHeaders({
         host: "runtime.internal:3000",
         "x-forwarded-host": "attacker.example.net",
         "x-forwarded-proto": "https",
-      },
+      }),
     });
 
     expect(res.statusCode).toBe(200);
@@ -410,7 +415,7 @@ describe("MIT runtime: webhook target is not steerable by headers (BLOCKER oss-s
       method: "POST",
       url: "/api/projects",
       payload: { repo: "acme/widgets" },
-      headers: { host: "runtime.internal:3000", "x-forwarded-host": "attacker.example.net" },
+      headers: authHeaders({ host: "runtime.internal:3000", "x-forwarded-host": "attacker.example.net" }),
     });
 
     const args = createWebhook.mock.calls[0] as unknown[];
@@ -429,7 +434,7 @@ describe("MIT runtime: webhook target is not steerable by headers (BLOCKER oss-s
       method: "POST",
       url: "/api/projects",
       payload: { repo: "acme/widgets" },
-      headers: { host: "runtime.internal:3000", "x-forwarded-host": "attacker.example.net" },
+      headers: authHeaders({ host: "runtime.internal:3000", "x-forwarded-host": "attacker.example.net" }),
     });
 
     expect(res.statusCode).toBe(200);
@@ -489,6 +494,10 @@ describe("MIT runtime: display URLs follow the request, not a CodeSpar host", ()
       saved[k] = process.env[k];
       delete process.env[k];
     }
+    // ENGINE_API_TOKEN is one of the keys just cleared. /api/* is protected
+    // whether or not it is set (BLOCKER oss-sdk#5), so declare a known
+    // credential and let these cases authenticate with it.
+    process.env.ENGINE_API_TOKEN = TEST_API_TOKEN;
   });
 
   afterEach(() => {
@@ -503,11 +512,11 @@ describe("MIT runtime: display URLs follow the request, not a CodeSpar host", ()
     const res = await server.inject({
       method: "GET",
       url: "/api/webhooks/url",
-      headers: {
+      headers: authHeaders({
         host: "runtime.internal:3000",
         "x-forwarded-host": "attacker.example.net",
         "x-forwarded-proto": "https",
-      },
+      }),
     });
 
     const body = JSON.parse(res.body) as { github: string };
@@ -525,11 +534,11 @@ describe("MIT runtime: display URLs follow the request, not a CodeSpar host", ()
     const res = await server.inject({
       method: "GET",
       url: "/api/webhooks/url",
-      headers: {
+      headers: authHeaders({
         host: "runtime.internal:3000",
         "x-forwarded-host": "agents.example.com",
         "x-forwarded-proto": "https",
-      },
+      }),
     });
 
     const body = JSON.parse(res.body) as { github: string };
@@ -644,6 +653,10 @@ describe("MIT runtime: the rate limit ceiling is not header-steerable", () => {
       saved[k] = process.env[k];
       delete process.env[k];
     }
+    // ENGINE_API_TOKEN is one of the keys just cleared. /api/* is protected
+    // whether or not it is set (BLOCKER oss-sdk#5), so declare a known
+    // credential and let these cases authenticate with it.
+    process.env.ENGINE_API_TOKEN = TEST_API_TOKEN;
   });
 
   afterEach(() => {
@@ -655,9 +668,13 @@ describe("MIT runtime: the rate limit ceiling is not header-steerable", () => {
 
   it("keys on the socket peer, so rotating x-forwarded-for does not lift it", async () => {
     // TRUST_PROXY on is the dangerous combination: Fastify then derives
-    // request.ip from x-forwarded-for, and /api/* is unauthenticated with no
-    // ENGINE_API_TOKEN, so keying the limiter on request.ip gave an anonymous
-    // caller an unlimited budget for the price of one header.
+    // request.ip from x-forwarded-for, so keying the limiter on request.ip
+    // would let one authenticated caller rotate a header and never reach any
+    // ceiling. The socket peer is the one address the caller cannot choose.
+    // (This used to read "/api/* is unauthenticated with no
+    // ENGINE_API_TOKEN", which was true and is what oss-sdk#5 fixed. The
+    // limiter still must not key on a header: auth bounds who may call, not
+    // how often.)
     process.env.TRUST_PROXY = "true";
     const server = new WebhookServer({ port: 0 });
     // A peer of its own, so the other tests in this file share no bucket.
@@ -670,11 +687,11 @@ describe("MIT runtime: the rate limit ceiling is not header-steerable", () => {
         method: "GET",
         url: "/api/webhooks/url",
         remoteAddress: peer,
-        headers: {
+        headers: authHeaders({
           host: "runtime.internal:3000",
           // A different claimed client on every single request.
           "x-forwarded-for": `198.51.100.${i % 250}`,
-        },
+        }),
       });
       sent++;
       statusCode = res.statusCode;

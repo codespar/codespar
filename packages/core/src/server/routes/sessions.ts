@@ -9,9 +9,12 @@
  *   DELETE /sessions/:id                 — close session
  *
  * Auth:
- *   Requires a syntactically valid Bearer token on every request.
- *   When ENGINE_API_TOKEN is set the token is verified; otherwise any
- *   non-empty Bearer string is accepted (local / CI mode).
+ *   Every request must carry a Bearer token matching the runtime's
+ *   credential. There is no local / CI mode that waives the check: these
+ *   routes accept an argv and spawn it, so an unverified caller here is a
+ *   remote shell. When the operator sets no ENGINE_API_TOKEN the runtime
+ *   mints and persists one itself (see server/api-token.ts) rather than
+ *   falling open.
  *
  * Tenancy (F10.M2): the route resolves `(orgId, projectId)` from the
  * `x-org-id` and `x-codespar-project` headers via the shared
@@ -115,19 +118,37 @@ export function clearSessionStore(): void {
   clearCoreStore();
 }
 
-function checkBearerAuth(request: { headers: Record<string, string | string[] | undefined> }): string | null {
+/**
+ * Verify the bearer token on a session request.
+ *
+ * This check used to accept ANY non-empty string behind `Bearer ` whenever
+ * ENGINE_API_TOKEN was unset, which is the default install. That is not
+ * authentication: `examples/session-mocks.sh` shipped "test" as the value,
+ * so the credential was a published constant. Combined with `server_specs`
+ * on POST /sessions, which is an argv handed to child_process.spawn, it made
+ * remote code execution reachable by anyone who could open a socket.
+ *
+ * The token now comes from the server context, which resolves it through
+ * api-token.ts. When these routes are registered standalone on a caller's
+ * own Fastify app (no context), ENGINE_API_TOKEN is the only source. If
+ * neither yields a token there is nothing to verify against and every
+ * request is refused: failing closed is the whole point.
+ */
+function checkBearerAuth(
+  request: { headers: Record<string, string | string[] | undefined> },
+  ctx: ServerContext | null,
+): string | null {
+  const expected = ctx?.apiToken ?? process.env.ENGINE_API_TOKEN?.trim();
+  if (!expected) return null;
+
   const auth = request.headers["authorization"] as string | undefined;
   if (!auth?.startsWith("Bearer ")) return null;
   const provided = auth.slice(7).trim();
   if (!provided) return null;
 
-  const engineToken = process.env.ENGINE_API_TOKEN;
-  if (engineToken) {
-    const providedHash = createHash("sha256").update(provided).digest();
-    const expectedHash = createHash("sha256").update(engineToken).digest();
-    if (!timingSafeEqual(providedHash, expectedHash)) return null;
-  }
-  // Without ENGINE_API_TOKEN, any non-empty bearer string is accepted.
+  const providedHash = createHash("sha256").update(provided).digest();
+  const expectedHash = createHash("sha256").update(expected).digest();
+  if (!timingSafeEqual(providedHash, expectedHash)) return null;
   return provided;
 }
 
@@ -218,7 +239,7 @@ async function resolveOrgAndProject(
 export function registerSessionRoutes(route: RouteFn, ctx: ServerContext | null = null): void {
   // POST /sessions — create session
   route("post", "/sessions", async (request: any, reply: any) => {
-    if (!checkBearerAuth(request)) {
+    if (!checkBearerAuth(request, ctx)) {
       return reply.status(401).send({ error: "Missing or invalid Bearer token" });
     }
 
@@ -284,7 +305,7 @@ export function registerSessionRoutes(route: RouteFn, ctx: ServerContext | null 
 
   // POST /sessions/:id/execute — execute a registered tool
   route("post", "/sessions/:id/execute", async (request: any, reply: any) => {
-    if (!checkBearerAuth(request)) {
+    if (!checkBearerAuth(request, ctx)) {
       return reply.status(401).send({ error: "Missing or invalid Bearer token" });
     }
 
@@ -437,7 +458,7 @@ export function registerSessionRoutes(route: RouteFn, ctx: ServerContext | null 
   //     user_message → (assistant_text | tool_use | tool_result)* → done
   //   On failure the terminal event is `error` instead of `done`.
   route("post", "/sessions/:id/send", async (request: any, reply: any) => {
-    if (!checkBearerAuth(request)) {
+    if (!checkBearerAuth(request, ctx)) {
       return reply.status(401).send({ error: "Missing or invalid Bearer token" });
     }
 
@@ -493,7 +514,7 @@ export function registerSessionRoutes(route: RouteFn, ctx: ServerContext | null 
 
   // GET /sessions/:id/connections — list connections associated with this session
   route("get", "/sessions/:id/connections", async (request: any, reply: any) => {
-    if (!checkBearerAuth(request)) {
+    if (!checkBearerAuth(request, ctx)) {
       return reply.status(401).send({ error: "Missing or invalid Bearer token" });
     }
 
@@ -516,7 +537,7 @@ export function registerSessionRoutes(route: RouteFn, ctx: ServerContext | null 
   // so callers can rely on lifecycle being tied to the session: when
   // the 204 lands, every child for this session is gone.
   route("delete", "/sessions/:id", async (request: any, reply: any) => {
-    if (!checkBearerAuth(request)) {
+    if (!checkBearerAuth(request, ctx)) {
       return reply.status(401).send({ error: "Missing or invalid Bearer token" });
     }
 

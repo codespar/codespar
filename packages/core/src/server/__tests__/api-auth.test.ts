@@ -8,6 +8,9 @@
 
 import { describe, it, expect, afterAll, beforeAll } from "vitest";
 import { createHash, timingSafeEqual } from "node:crypto";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { WebhookServer } from "../webhook-server.js";
 
 const TEST_TOKEN = "test-secret-token-abc123";
@@ -92,17 +95,48 @@ describe("API auth hook (real WebhookServer)", () => {
   });
 
   describe("without ENGINE_API_TOKEN", () => {
+    // This block used to hold a case named "allows requests without auth",
+    // asserting that /api/agents answered an anonymous caller because the
+    // hook was not registered when the token was unset. It passed for as
+    // long as it existed, and what it was pinning was BLOCKER oss-sdk#5:
+    // the documented install served its control surfaces to the internet.
+    //
+    // It is inverted rather than deleted, in place, so the reversal is
+    // visible in the diff and the next reader cannot mistake the old
+    // behaviour for something that was merely untested.
     let server: WebhookServer;
+    let stateDir: string;
 
     beforeAll(() => {
       delete process.env.ENGINE_API_TOKEN;
+      // Keep the credential this server mints inside a temp directory
+      // instead of the repo checkout.
+      stateDir = mkdtempSync(join(tmpdir(), "codespar-api-auth-"));
+      process.env.CODESPAR_STATE_DIR = stateDir;
       server = new WebhookServer({ port: 0 });
     });
 
-    it("allows requests without auth", async () => {
+    afterAll(() => {
+      delete process.env.CODESPAR_STATE_DIR;
+      rmSync(stateDir, { recursive: true, force: true });
+    });
+
+    it("still refuses requests without auth", async () => {
       const res = await server.inject({ method: "GET", url: "/api/agents" });
-      // Should not be 401 — auth hook is not registered when token is unset
-      expect(res.statusCode).not.toBe(401);
+      expect(res.statusCode).toBe(401);
+    });
+
+    it("accepts the credential the runtime materialized for itself", async () => {
+      // The other half of the same invariant: refusing anonymous callers is
+      // only acceptable because the install did not need a human to give it
+      // a token. See anonymous-access.test.ts for the autonomy cases.
+      const token = readFileSync(join(stateDir, "api-token"), "utf8").trim();
+      const res = await server.inject({
+        method: "GET",
+        url: "/api/agents",
+        headers: { authorization: `Bearer ${token}` },
+      });
+      expect(res.statusCode).toBe(200);
     });
   });
 

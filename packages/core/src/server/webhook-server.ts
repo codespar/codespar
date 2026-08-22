@@ -23,6 +23,7 @@ import cors from "@fastify/cors";
 import { parseGitHubWebhook, type CIEvent } from "../webhooks/github-handler.js";
 import { getRegisteredTypes, getAgentFactory, isRegisteredType, getAllAgentMetadata } from "../agents/agent-registry.js";
 import { displayBaseUrl, fastifyTrustProxy } from "./base-url.js";
+import { resolveApiToken } from "./api-token.js";
 import { createLogger } from "../observability/logger.js";
 import { metrics } from "../observability/metrics.js";
 import { scheduler } from "../scheduler/scheduler.js";
@@ -203,11 +204,18 @@ export class WebhookServer {
   private _vercelDedup: Map<string, number> = new Map();
   private _sentryDedup: Map<string, number> = new Map();
   private _containerPool: ContainerPool | null = null;
+  /**
+   * Bearer token every protected route requires. Resolved once here rather
+   * than read per request, so the value cannot change under a live server,
+   * and materialized by api-token.ts when the operator supplied none.
+   */
+  readonly apiToken: string;
 
   constructor(config?: WebhookServerConfig) {
     this.port = config?.port ?? parseInt(process.env["PORT"] ?? "3000", 10);
     this.host = config?.host ?? "0.0.0.0";
     this.startedAt = new Date();
+    this.apiToken = resolveApiToken().token;
 
     // trustProxy is opt-in via TRUST_PROXY. Left off, Fastify ignores
     // x-forwarded-* when computing request.ip / request.protocol / hostname,
@@ -485,16 +493,39 @@ export class WebhookServer {
     });
   }
 
-  /** Require bearer token on /api/* routes when ENGINE_API_TOKEN is set */
+  /**
+   * Require a bearer token on every control surface. Always registered.
+   *
+   * This hook used to return early when ENGINE_API_TOKEN was unset, which
+   * meant the documented install — `docker compose up`, with an .env.example
+   * that never mentioned the variable — served `/api/*` to anyone who could
+   * reach the port. There is no longer an unauthenticated mode: the
+   * credential comes from api-token.ts, which mints and persists one when
+   * the operator supplied none, so requiring it costs the install nothing.
+   *
+   * Three prefixes are protected, not one:
+   *   /api      — agents, projects, channels, approvals, metrics, SSE.
+   *   /sessions — creates sessions and executes tools. `server_specs` on
+   *               POST /sessions is an argv that reaches child_process.spawn
+   *               with this process's environment, so this is the surface
+   *               where a missing check is remote code execution rather than
+   *               information disclosure. It was never under the old hook,
+   *               which matched `/api/` only.
+   *   /a2a      — inbound agent-to-agent tasks. Had no check of any kind.
+   *
+   * Webhook routes are deliberately absent: they authenticate per provider
+   * signature (webhook-auth.ts), which is the only scheme GitHub, Vercel and
+   * Sentry can speak. `/health` and the OAuth install/callback pair stay
+   * open because the container healthcheck and a browser mid-OAuth-redirect
+   * have no way to present a bearer token.
+   */
   private registerApiAuth(): void {
-    const token = process.env.ENGINE_API_TOKEN;
-    if (!token) {
-      log.warn("ENGINE_API_TOKEN not set — API routes are unauthenticated");
-      return;
-    }
+    const tokenHash = createHash("sha256").update(this.apiToken).digest();
 
-    log.info("API auth enabled — all /api/* routes require bearer token");
-    const tokenHash = createHash("sha256").update(token).digest();
+    // Matched after stripping a leading `/v1`, because registerRoutes()
+    // publishes every path twice. Guarding only the unprefixed form would
+    // have left a complete second copy of the API open.
+    const PROTECTED_PREFIXES = ["/api", "/sessions", "/a2a"];
 
     const EXCLUDED_PATHS = new Set([
       "/health", "/v1/health",
@@ -506,18 +537,47 @@ export class WebhookServer {
       "/api/github/callback", "/v1/api/github/callback",
     ]);
 
-    this.app.addHook("onRequest", async (request, reply) => {
-      const url = request.url.split("?")[0];
+    const matchesProtected = (path: string): boolean => {
+      const unversioned = path === "/v1" ? "/" : path.startsWith("/v1/") ? path.slice(3) : path;
+      return PROTECTED_PREFIXES.some(
+        (prefix) => unversioned === prefix || unversioned.startsWith(`${prefix}/`),
+      );
+    };
 
-      // Only protect /api/* routes (webhooks have their own signature auth)
-      if (!url.startsWith("/api/") && !url.startsWith("/v1/api/")) return;
-      if (EXCLUDED_PATHS.has(url)) return;
+    this.app.addHook("onRequest", async (request, reply) => {
+      const rawPath = request.url.split("?")[0];
+
+      // Fastify routes on the DECODED path, so `/%61pi/agents` reaches the
+      // /api/agents handler while the raw string starts with `/%61`. Matching
+      // the raw form alone let percent-encoding walk straight past this hook
+      // and read the API unauthenticated. Both forms are checked, and a path
+      // whose encoding does not decode is treated as protected rather than
+      // guessed at. Only the protection decision looks at the decoded form;
+      // unprotected routes are left exactly as they were.
+      let decodedPath: string | null;
+      try {
+        decodedPath = decodeURIComponent(rawPath);
+      } catch {
+        decodedPath = null;
+      }
+
+      // Every entry in EXCLUDED_PATHS is a literal with no percent sign, so a
+      // path that decodes to one of them is byte-identical to it, and testing
+      // the decoded form is the same as testing both.
+      if (decodedPath !== null && EXCLUDED_PATHS.has(decodedPath)) return;
+
+      const isProtected =
+        decodedPath === null || matchesProtected(rawPath) || matchesProtected(decodedPath);
+      if (!isProtected) return;
 
       const auth = request.headers.authorization;
       if (!auth || !auth.startsWith("Bearer ")) {
         return reply.status(401).send({ error: "Unauthorized" });
       }
 
+      // Hashed before comparison so timingSafeEqual gets two buffers of the
+      // same length whatever the caller sent; it throws on a length mismatch,
+      // and the length itself would otherwise be an oracle.
       const providedHash = createHash("sha256").update(auth.slice(7)).digest();
       if (!timingSafeEqual(providedHash, tokenHash)) {
         return reply.status(401).send({ error: "Unauthorized" });
@@ -536,9 +596,8 @@ export class WebhookServer {
       if (url === "/health" || url === "/v1/health") return;
 
       // Key on the socket peer, never on request.ip. With trustProxy on,
-      // request.ip is the leftmost x-forwarded-for hop, which is a header:
-      // /api/* is unauthenticated when ENGINE_API_TOKEN is unset, so a caller
-      // could rotate that header per request and never reach any ceiling. The
+      // request.ip is the leftmost x-forwarded-for hop, which is a header, so
+      // a caller could rotate it per request and never reach any ceiling. The
       // socket peer is the one address the caller cannot choose. Behind a real
       // reverse proxy this collapses every client onto the proxy's address,
       // which limits harder than intended rather than not at all; per-client

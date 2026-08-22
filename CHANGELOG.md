@@ -6,6 +6,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-08-21
+
+### Security
+
+- **The runtime no longer serves its control surfaces to unauthenticated callers.** `/api/*`, `/sessions/*` and `/a2a/*` now require a bearer token, always. Previously the auth hook was registered only when `ENGINE_API_TOKEN` was set, and `.env.example` never mentioned that variable, so the documented install (`docker compose up`) answered anyone who could reach port 3000. `/sessions` was worse than open data: `server_specs.<id>.command` is an argv that the MCP bridge hands to `child_process.spawn` with the runtime's own environment, so an anonymous caller could run a command of their choosing in a process holding `ANTHROPIC_API_KEY`, `GITHUB_TOKEN` and `DATABASE_URL`. `/a2a/tasks` had no credential check of any kind, and the session routes accepted any non-empty string behind `Bearer ` (`examples/session-mocks.sh` shipped `test` as the value), which is not a credential. The `/v1` mirror of every route is covered too. ([#134](https://github.com/codespar/codespar/issues/134))
+- **Closing this does not cost an install its autonomy.** No operator has to invent or paste a token for the service to come back up. When `ENGINE_API_TOKEN` is unset the runtime generates a credential on first boot, writes it to `<state dir>/api-token` with mode `0600`, and reuses it on every restart; a client on the same host reads it from there. `docker-compose.yml` mounts a `codespar_state` volume so the credential survives `docker compose down && up`. Set `ENGINE_API_TOKEN` to manage the credential yourself, in which case nothing is generated or written.
+- **The container no longer runs as root.** The Dockerfile adds `USER node`. An unwritable state directory falls back to `~/.codespar` and then to the temp directory rather than failing to start, so dropping root cannot turn into a crash loop.
+- `/health` and the OAuth install/callback routes remain open, because container healthchecks and a browser mid-redirect cannot present a bearer token.
+
+**Upgrading:** a self-hosted runtime keeps starting and running with no changes. Callers, however, must now send `Authorization: Bearer <token>`; read the token as shown in the README. Requests that previously succeeded without a credential now get `401`.
+
+Images published to `ghcr.io` before this release carry the vulnerability. Repull `:main`, or `:latest` once `v0.5.0` is tagged.
+
 ### Added
 - Session mocks API: optional `mocks` field on `POST /sessions` that intercepts tool dispatch before the MCP bridge, returning scripted outputs instead of calling a real upstream provider. Supports single-shot (object) and stateful (array) entries keyed by canonical `server/tool` form. `CODESPAR_TEST_MODE_ENABLED` (truthy on `true` or `1`, case-insensitive) is a deployment-level mode switch — with it off (the default) the runtime rejects `mocks` with HTTP 501 `mocks_not_permitted` and runs every dispatch through the bridge; with it on, the runtime is in test mode and every external tool dispatch requires a matching mock — a session without a matching entry (or without any `mocks` field at all) returns 422 `tool_not_mocked` rather than leaking to a live provider. Built-in tools (current allow-list: `codespar_list_tools`) bypass the gate; any future built-in that reaches external state must be declared in `mocks` instead. Five error envelopes: `mocks_not_permitted` (501), `mocks_invalid` (400, with RFC 6901 field pointer), `mocks_payload_too_large` (413, 64 KiB cap), `tool_not_mocked` (422), `mocks_exhausted` (422). Applies equally to direct `/execute` calls and chat-loop tool dispatch via `/send`. Counters persist for channel-bridge sessions and live in-memory for HTTP sessions. See [`docs/test-mode.md`](docs/test-mode.md) and [`examples/session-mocks.sh`](examples/session-mocks.sh). ([#113](https://github.com/codespar/codespar/pull/113))
 

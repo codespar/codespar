@@ -9,13 +9,17 @@
  *    fallback constant in this file.
  *
  * 2. Request headers are attacker-controlled. `host` and `x-forwarded-host`
- *    are set by whoever opened the socket, and /api/* is unauthenticated when
- *    ENGINE_API_TOKEN is unset (see webhook-server.ts registerApiAuth, which
- *    only logs a warning). So a value derived from a request may be used to
- *    DISPLAY a URL back to that same caller, and must never be used to WRITE a
- *    target into a third-party system: a GitHub webhook created in the
- *    operator's repo with the operator's GITHUB_TOKEN, or an OAuth
- *    redirect_uri that will receive an authorization code.
+ *    are set by whoever opened the socket. So a value derived from a request
+ *    may be used to DISPLAY a URL back to that same caller, and must never be
+ *    used to WRITE a target into a third-party system: a GitHub webhook
+ *    created in the operator's repo with the operator's GITHUB_TOKEN, or an
+ *    OAuth redirect_uri that will receive an authorization code.
+ *
+ *    This rule does NOT rest on who may call /api/*. It used to: the note
+ *    here read "/api/* is unauthenticated when ENGINE_API_TOKEN is unset",
+ *    which was true (BLOCKER oss-sdk#5) and is now fixed. The split below
+ *    survives that fix unchanged, because an authenticated caller still does
+ *    not get to choose what target gets written into somebody else's repo.
  *
  * Hence the split:
  *   displayBaseUrl(request) -> WEBHOOK_BASE_URL, else the request host.

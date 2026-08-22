@@ -12,6 +12,7 @@ import { WebhookServer } from "../../webhook-server.js";
 import { MessageRouter } from "../../../router/message-router.js";
 import { PromptGuard } from "../../../security/prompt-guard.js";
 import type { Agent } from "../../../types/agent.js";
+import { TEST_API_TOKEN, authHeaders } from "../../__tests__/test-credential.js";
 
 // ── Helpers ──────────────────────────────────────────────────────────
 
@@ -41,8 +42,10 @@ describe("chat routes with real prompt guard", () => {
   let server: WebhookServer;
 
   beforeAll(() => {
-    // Remove API auth token so it doesn't interfere with chat route tests
-    delete process.env.ENGINE_API_TOKEN;
+    // /api/chat is a protected route, so this suite authenticates like any
+    // other caller. It used to delete ENGINE_API_TOKEN instead, which worked
+    // only because an unset token disabled auth entirely (BLOCKER oss-sdk#5).
+    process.env.ENGINE_API_TOKEN = TEST_API_TOKEN;
 
     server = new WebhookServer({ port: 0 });
 
@@ -63,6 +66,7 @@ describe("chat routes with real prompt guard", () => {
         method: "POST",
         url: "/api/chat",
         payload: { text: SAFE_TEXT },
+        headers: authHeaders(),
       });
 
       const body = JSON.parse(res.body);
@@ -75,6 +79,7 @@ describe("chat routes with real prompt guard", () => {
         method: "POST",
         url: "/api/chat",
         payload: { text: INJECTION_TEXT },
+        headers: authHeaders(),
       });
 
       const body = JSON.parse(res.body);
