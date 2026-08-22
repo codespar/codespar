@@ -67,7 +67,8 @@ function preflightStateDir() {
     const lines = [
       "",
       `[server] Cannot write to the state directory: ${dir}`,
-      `[server] ${err.code ?? "error"}: ${err.message}`,
+      // err.message already starts with the code, so it is not repeated here.
+      `[server] ${err.message}`,
       "",
       "[server] This usually means the directory was created by a different",
       "[server] user than the one this process runs as. In Docker the process",

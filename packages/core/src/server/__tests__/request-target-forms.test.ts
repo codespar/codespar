@@ -178,6 +178,58 @@ describe("request-target forms cannot walk past the auth guard", () => {
     }
   });
 
+  it("holds for EVERY registered protected route, not a chosen few", async () => {
+    // The previous round of this file tested absolute-form on a handful of
+    // paths and passed 17/17 while `http://host?/path` was wide open. A
+    // hand-picked list only ever covers the forms someone thought of, on the
+    // routes someone thought of.
+    //
+    // So this drives the dangerous form across every route the server
+    // actually registered, mechanically. A route added later is covered the
+    // day it is added, without anyone remembering to extend a list.
+    const publicRoutes = new Set([
+      "/health",
+      "/v1/health",
+      "/.well-known/agent.json",
+      "/api/slack/install",
+      "/v1/api/slack/install",
+      "/api/slack/callback",
+      "/v1/api/slack/callback",
+      "/api/discord/install",
+      "/v1/api/discord/install",
+      "/api/github/install",
+      "/v1/api/github/install",
+      "/api/github/callback",
+      "/v1/api/github/callback",
+    ]);
+
+    const routes = server.registeredRoutes.filter(
+      (r) =>
+        !["HEAD", "OPTIONS"].includes(r.method) &&
+        !publicRoutes.has(r.url) &&
+        !r.url.startsWith("/webhooks/") &&
+        !r.url.startsWith("/v1/webhooks/"),
+    );
+    expect(routes.length, "no routes to sweep means this test proves nothing").toBeGreaterThan(50);
+
+    const leaked: string[] = [];
+    for (const route of routes) {
+      const path = route.url.replace(/:[A-Za-z0-9_]+/g, "probe");
+      const status = await rawRequest(
+        port,
+        `${route.method} http://evil.example?${path} HTTP/1.1`,
+      );
+      // 401 means the guard claimed it. 400/404 mean it never routed. A 2xx or
+      // 3xx means a handler answered an anonymous caller.
+      if (status < 400) leaked.push(`${route.method} ${route.url} -> ${status}`);
+    }
+
+    expect(
+      leaked,
+      `these routes answered an anonymous caller in query-before-slash form:\n${leaked.join("\n")}`,
+    ).toEqual([]);
+  });
+
   it("still answers the origin form the same way", async () => {
     // Sanity: the fix must not have made everything 401 by accident, which
     // would pass every assertion above for the wrong reason.

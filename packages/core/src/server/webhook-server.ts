@@ -605,19 +605,45 @@ export class WebhookServer {
     };
 
     this.app.addHook("onRequest", async (request, reply) => {
-      // The guard has to decide about the SAME path the router will dispatch
-      // on. Deriving that is not `request.url.split("?")[0]`: see
-      // candidatePaths() in api-auth.ts for the three spellings that have each
-      // been a live bypass here. `null` means the target could not be parsed,
-      // which is treated as protected rather than guessed at.
-      const candidates = candidatePaths(request.url);
+      // Ask the router which route it matched. Do not re-derive it.
+      //
+      // Fastify routes BEFORE onRequest runs, so by this point it already
+      // knows the registered route this request resolved to, and exposes it as
+      // `routeOptions.url` — `/api/agents/:id`, not the concrete target. That
+      // is the authority on what is about to execute, and using it removes an
+      // entire class of bug rather than one more instance of it.
+      //
+      // The class: every bypass in this file came from the guard deriving the
+      // path with its own logic while find-my-way used different logic, and
+      // the two diverging on some spelling nobody had thought of. Percent
+      // encoding split them once. Absolute-form split them again. Then
+      // `http://host?/path` split them a third time, because find-my-way cuts
+      // at the first slash (`/^https?:\/\/.*?\//`) while WHATWG `new URL()`
+      // treats `?` as starting the query, so the guard saw `/` while the
+      // router dispatched `/api/metrics` and emptied the audit log for an
+      // anonymous caller. Each fix was correct and each left a next form,
+      // because a second implementation of routing can always disagree with
+      // the first. Asking the router ends that.
+      //
+      // `routeOptions.url` is undefined when nothing matched. That is not a
+      // hole: no route means no handler, and Fastify answers 404 on its own.
+      // A malformed target never reaches this hook at all — find-my-way
+      // rejects it with 400 first.
+      const matchedRoute = request.routeOptions?.url;
 
       // Whether a route is deliberately public is a question about the handler
-      // that will actually run, so it is asked of the routed path only.
-      const routed = routedPath(request.url);
-      if (routed !== null && EXCLUDED_PATHS.has(routed)) return;
+      // that will actually run, so it is asked of the matched route only.
+      if (matchedRoute !== undefined && EXCLUDED_PATHS.has(matchedRoute)) return;
 
-      const isProtected = candidates === null || candidates.some(matchesProtected);
+      // Belt and braces. The matched route is the real answer; the raw-target
+      // derivations stay as a second, independent condition so that if a
+      // future Fastify stops populating routeOptions, or a plugin clears it,
+      // the guard closes rather than opens. Protected if EITHER says so.
+      const candidates = candidatePaths(request.url);
+      const isProtected =
+        (matchedRoute !== undefined && matchesProtected(matchedRoute)) ||
+        candidates === null ||
+        candidates.some(matchesProtected);
       if (!isProtected) return;
 
       const auth = request.headers.authorization;
