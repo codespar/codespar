@@ -165,7 +165,8 @@ export class GitHubClient {
     repo: string,
     webhookUrl: string,
     events: string[] = ["workflow_run", "pull_request", "push"],
-  ): Promise<{ id: number; url: string } | null> {
+    secret?: string,
+  ): Promise<{ id: number; url: string; secretConfigured: boolean } | null> {
     // Last line of defence before writing a delivery target into someone
     // else's repo: the URL must parse as absolute http(s). Kept local (rather
     // than importing the server's base-url helper) so it also covers callers
@@ -191,8 +192,40 @@ export class GitHubClient {
       const hooks = (await listRes.json()) as any[];
       const existing = hooks.find((h: any) => h.config?.url === webhookUrl);
       if (existing) {
-        log.info("Webhook already exists", { owner, repo });
-        return { id: existing.id as number, url: existing.config.url as string };
+        // Reconcile rather than just report. A hook created by an earlier
+        // release carries no secret, so GitHub sends it unsigned forever and
+        // the operator has no way to fix that from here. Setting the secret on
+        // the existing hook is what migrates those installs without anyone
+        // re-registering anything by hand.
+        //
+        // GitHub masks `config.secret` in list responses, so it cannot be
+        // compared to what we hold. The secret is therefore written whenever
+        // we have one, which is idempotent from GitHub's side and converges on
+        // the value this runtime can actually verify against.
+        let secretConfigured = false;
+        if (secret) {
+          secretConfigured = await this.setWebhookSecret(
+            owner,
+            repo,
+            existing.id as number,
+            webhookUrl,
+            secret,
+          );
+          if (!secretConfigured) {
+            log.warn(
+              "Webhook exists but its signing secret could not be set, so its " +
+                "deliveries stay unverifiable",
+              { owner, repo },
+            );
+          }
+        }
+        // `secretConfigured` is reported rather than folded into a null return:
+        // the hook does exist, and a caller that only wanted it to exist is
+        // right to treat that as success. The caller that cares whether
+        // deliveries can be verified must not record success on this path, or
+        // it would mark the repair done and never retry it.
+        log.info("Webhook already exists", { owner, repo, secretConfigured });
+        return { id: existing.id as number, url: existing.config.url as string, secretConfigured };
       }
     }
 
@@ -210,6 +243,11 @@ export class GitHubClient {
             url: webhookUrl,
             content_type: "json",
             insecure_ssl: "0",
+            // Without this, GitHub signs nothing and every delivery arrives
+            // unverifiable. That was the state of every hook this runtime
+            // created, and the reason WEBHOOK_STRICT_MODE could not be turned
+            // on: it would have rejected the runtime's own integration.
+            ...(secret ? { secret } : {}),
           },
         }),
       },
@@ -222,8 +260,65 @@ export class GitHubClient {
     }
 
     const data = (await res.json()) as any;
-    log.info("Webhook created", { owner, repo });
-    return { id: data.id as number, url: data.config.url as string };
+    log.info("Webhook created", { owner, repo, secretConfigured: Boolean(secret) });
+    return {
+      id: data.id as number,
+      url: data.config.url as string,
+      secretConfigured: Boolean(secret),
+    };
+  }
+
+  /**
+   * Set (or replace) the signing secret on an existing webhook.
+   *
+   * Separate from createWebhook so the reconciliation path is testable on its
+   * own and so a caller that already knows the hook id does not have to list.
+   * Returns false rather than throwing: a runtime that cannot reach GitHub
+   * must still start.
+   */
+  async setWebhookSecret(
+    owner: string,
+    repo: string,
+    hookId: number,
+    webhookUrl: string,
+    secret: string,
+  ): Promise<boolean> {
+    try {
+      const res = await fetch(`${this.baseUrl}/repos/${owner}/${repo}/hooks/${hookId}`, {
+        method: "PATCH",
+        headers: this.headers,
+        // GitHub REPLACES the whole `config` object on PATCH rather than
+        // merging it, so `url` and `content_type` are resent alongside the
+        // secret. Sending `config: { secret }` alone would blank the delivery
+        // URL and silently detach the hook, which is a worse outcome than the
+        // unsigned deliveries this is fixing.
+        body: JSON.stringify({
+          config: {
+            url: webhookUrl,
+            content_type: "json",
+            insecure_ssl: "0",
+            secret,
+          },
+        }),
+      });
+      if (!res.ok) {
+        const body = await res.text().catch(() => "");
+        log.warn("Could not set the webhook signing secret", {
+          owner,
+          repo,
+          status: res.status,
+          response: body.slice(0, 200),
+        });
+      }
+      return res.ok;
+    } catch (err) {
+      log.warn("Failed to set the webhook signing secret", {
+        owner,
+        repo,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return false;
+    }
   }
 
   /** Get PR details. */

@@ -8,6 +8,7 @@ import { metrics } from "../../observability/metrics.js";
 import { GitHubClient } from "../../github/github-client.js";
 import { broadcastEvent } from "../webhook-server.js";
 import { verifyWebhookSignature, enforceWebhookSecret } from "../webhook-auth.js";
+import { resolveWebhookSecret } from "../webhook-secret.js";
 import type { RouteFn, ServerContext } from "./types.js";
 import { displayBaseUrl } from "../base-url.js";
 
@@ -25,26 +26,18 @@ export function registerWebhookRoutes(route: RouteFn, ctx: ServerContext): void 
         }
       }
 
-      // Verify GitHub webhook signature when secret is configured.
-      // Priority: org storage secret > env GITHUB_WEBHOOK_SECRET_<ORGID> > env GITHUB_WEBHOOK_SECRET.
-      let webhookSecret: string | undefined;
-      if (ctx.storageProvider && orgId !== "default") {
-        try {
-          const orgStorage = ctx.getOrgStorage(orgId);
-          const ghConfig = await orgStorage.getChannelConfig("github");
-          if (ghConfig?.webhookSecret) {
-            webhookSecret = ghConfig.webhookSecret;
-          }
-        } catch (err) {
-          log.warn("Failed to load org GitHub webhook secret, using env fallback", { orgId, error: String(err) });
-        }
-      }
-      if (!webhookSecret) {
-        const orgSpecificSecret = orgId !== "default"
-          ? process.env[`GITHUB_WEBHOOK_SECRET_${orgId.toUpperCase().replace(/-/g, "_")}`]
-          : undefined;
-        webhookSecret = orgSpecificSecret || process.env["GITHUB_WEBHOOK_SECRET"];
-      }
+      // Resolve the signing secret. Read-only on purpose: this route is
+      // reachable without a credential, so handling a request must never
+      // generate or persist anything. Provisioning happens on the paths that
+      // register the hook with GitHub (see server/webhook-secret.ts).
+      //
+      // The lookup used to skip storage whenever orgId was "default", which is
+      // what a single-tenant `docker compose up` install always is, so a
+      // stored secret could never be seen there at all.
+      const { secret: webhookSecret } = await resolveWebhookSecret(
+        ctx.storageProvider ? ctx.getOrgStorage(orgId) : null,
+        orgId,
+      );
       if (enforceWebhookSecret(webhookSecret, "GitHub", reply, log)) {
         const signature = headers["x-hub-signature-256"];
         if (!signature) {

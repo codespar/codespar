@@ -2056,15 +2056,24 @@ Focus on: ${perfTarget}`;
     const webhookUrl = baseUrl ? `${baseUrl}/webhooks/github` : null;
 
     let webhookStatus: string;
-    const { GitHubClient } = await import("@codespar/core");
+    const { GitHubClient, provisionWebhookSecret } = await import("@codespar/core");
     const github = new GitHubClient();
     if (!webhookUrl) {
       webhookStatus = `\n  \u26a0 Set WEBHOOK_BASE_URL to auto-configure the GitHub webhook, or add it manually pointing at <your-host>/webhooks/github`;
     } else if (github.isConfigured()) {
+      // Register the hook WITH a signing secret, provisioning one if this
+      // install has none. A hook created without it is delivered unsigned
+      // forever, and the operator cannot fix that from their side (#138).
+      const { secret: webhookSecret } = await provisionWebhookSecret(
+        this.storage ?? null,
+        this.config.orgId ?? "default",
+      );
       const webhook = await github.createWebhook(
         parsed.owner,
         parsed.name,
         webhookUrl,
+        undefined,
+        webhookSecret,
       );
       if (webhook) {
         config.webhookConfigured = true;
