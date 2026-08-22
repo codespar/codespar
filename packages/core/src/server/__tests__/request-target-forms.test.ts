@@ -119,6 +119,65 @@ describe("request-target forms cannot walk past the auth guard", () => {
     ).toBe(401);
   });
 
+  it("refuses an absolute-form target whose query starts before any path slash", async () => {
+    // The fourth form, and the one that got past the fix for the third.
+    //
+    // `http://evil.example?/api/metrics` has no slash between the authority
+    // and the `?`. That single detail split the two derivations the guard was
+    // using, both away from what the router does:
+    //
+    //   raw.split("?")[0]        -> "http://evil.example"   (no /api)
+    //   new URL(raw).pathname    -> "/"                     (no /api)
+    //   find-my-way              -> "/api/metrics"          (dispatches!)
+    //
+    // find-my-way strips with /^https?:\/\/.*?\// — up to the FIRST slash —
+    // and with no path slash present the first slash is the one after the
+    // `?`. So the guard saw `/` and the router served /api/metrics.
+    //
+    // The lesson is in the shape, not the character: deriving the path with
+    // `new URL()` was a SECOND implementation of routing, so a fifth form was
+    // always going to exist. The guard now asks Fastify which route it
+    // matched instead of re-deriving it.
+    expect(await rawRequest(port, "GET http://evil.example?/api/metrics HTTP/1.1")).toBe(401);
+  });
+
+  it("refuses the query-before-slash form on the destructive route", async () => {
+    // Reproduced end to end by review: this returned 200 and emptied the
+    // tamper-evident audit log for an anonymous caller.
+    expect(await rawRequest(port, "DELETE http://evil.example?/api/audit HTTP/1.1")).toBe(401);
+  });
+
+  it("refuses the query-before-slash form across the whole control surface", async () => {
+    for (const line of [
+      "POST http://evil.example?/a2a/tasks HTTP/1.1",
+      "POST http://evil.example?/api/chat HTTP/1.1",
+      "DELETE http://evil.example?/api/agents/probe HTTP/1.1",
+      "GET http://evil.example?/v1/api/agents HTTP/1.1",
+      "POST http://evil.example?/sessions HTTP/1.1",
+    ]) {
+      expect(await rawRequest(port, line), line).toBe(401);
+    }
+  });
+
+  it("refuses the neighbouring authority shapes too", async () => {
+    // Swept rather than assumed: userinfo, explicit port and IPv6 all change
+    // where the first slash falls, which is precisely what the old derivation
+    // was sensitive to.
+    for (const line of [
+      "GET http://user@evil.example?/api/metrics HTTP/1.1",
+      "GET http://user:pw@evil.example?/api/metrics HTTP/1.1",
+      "GET http://evil.example:80?/api/metrics HTTP/1.1",
+      "GET http://[::1]?/api/metrics HTTP/1.1",
+      "GET http://[::1]:3000?/api/metrics HTTP/1.1",
+      "GET http://evil.example?//api/metrics HTTP/1.1",
+      "GET https://evil.example?/api/metrics HTTP/1.1",
+    ]) {
+      const status = await rawRequest(port, line);
+      // 401 (guard held) or 400/404 (never routed) are both safe. A 200 is not.
+      expect([400, 401, 404], `${line} -> ${status}`).toContain(status);
+    }
+  });
+
   it("still answers the origin form the same way", async () => {
     // Sanity: the fix must not have made everything 401 by accident, which
     // would pass every assertion above for the wrong reason.
