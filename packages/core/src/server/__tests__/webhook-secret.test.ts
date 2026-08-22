@@ -224,10 +224,14 @@ describe("webhook secret: what actually reaches GitHub", () => {
     expect(patch!.body.config.secret).toBe("the-signing-secret");
   });
 
-  it("resends url and content_type on patch, because GitHub replaces config", async () => {
-    // GitHub does not merge `config` on PATCH, it replaces it. Sending only
-    // the secret would blank the delivery URL and silently detach the hook,
-    // which is worse than the unsigned deliveries being fixed.
+  it("always sends a complete config on patch, whatever PATCH semantics are", async () => {
+    // Deliberately does not depend on whether PATCH merges or replaces the
+    // config object. GitHub's docs read as a merge with a caveat, an earlier
+    // comment here asserted a wholesale replace, and that disagreement was
+    // never resolved by measurement. Sending the complete config is correct
+    // under both readings: if it replaces, nothing was dropped; if it merges,
+    // these are the values already there. What the docs DO state is that a
+    // secret must be resent or it is removed, which this does.
     const calls = stubGitHub([
       {
         status: 200,
@@ -248,6 +252,80 @@ describe("webhook secret: what actually reaches GitHub", () => {
     const patch = calls.find((c) => c.method === "PATCH")!;
     expect(patch.body.config.url).toBe("https://ops.example/webhooks/github");
     expect(patch.body.config.content_type).toBe("json");
+  });
+
+  it("preserves a config the operator customised, changing only the secret", async () => {
+    // The repair must not become the outage. A hook adjusted by hand carries
+    // settings this code never chose: a private-CA host needs
+    // insecure_ssl "1", and some receivers are on content_type "form".
+    // Sending fixed values preserved the fields the author remembered and
+    // silently reset the rest, during a startup repair that is deliberately
+    // quiet — so the operator would learn about it from deliveries stopping.
+    //
+    // The delivery URL is NOT at risk on this path, and the test says so by
+    // using the same one: createWebhook finds the hook BY its url, so a hook
+    // pointing somewhere else is never matched and never patched. Worth
+    // stating, because "it also overwrites a custom url" is the natural third
+    // item to assume and it is not reachable here.
+    const calls = stubGitHub([
+      {
+        status: 200,
+        body: [
+          {
+            id: 42,
+            config: {
+              // Same delivery URL: that is how the hook is found at all.
+              url: "https://ops.example/webhooks/github",
+              // These two are the operator's, and nothing here chose them.
+              content_type: "form",
+              insecure_ssl: "1",
+            },
+          },
+        ],
+      },
+      { status: 200, body: {} },
+    ]);
+
+    const client = new GitHubClient("token");
+    await client.createWebhook(
+      "acme",
+      "widgets",
+      "https://ops.example/webhooks/github",
+      undefined,
+      "the-signing-secret",
+    );
+
+    const patch = calls.find((c) => c.method === "PATCH");
+    expect(patch).toBeDefined();
+    expect(patch!.body.config.secret).toBe("the-signing-secret");
+    // Everything else is exactly what the hook already had.
+    expect(patch!.body.config.insecure_ssl, "reset a private-CA setting").toBe("1");
+    expect(patch!.body.config.content_type, "reset the payload encoding").toBe("form");
+    expect(patch!.body.config.url).toBe("https://ops.example/webhooks/github");
+  });
+
+  it("still sends a usable target when the hook reports no config", async () => {
+    // Belt and braces for a shape we have not seen: if the listing came back
+    // without a config, the spread contributes nothing and the defaults have
+    // to stand in, or the PATCH could leave the hook without a delivery URL.
+    const calls = stubGitHub([
+      { status: 200, body: [{ id: 42, config: { url: "https://ops.example/webhooks/github" } }] },
+      { status: 200, body: {} },
+    ]);
+
+    const client = new GitHubClient("token");
+    await client.createWebhook(
+      "acme",
+      "widgets",
+      "https://ops.example/webhooks/github",
+      undefined,
+      "s",
+    );
+
+    const patch = calls.find((c) => c.method === "PATCH")!;
+    expect(patch.body.config.url).toBe("https://ops.example/webhooks/github");
+    expect(patch.body.config.content_type).toBe("json");
+    expect(patch.body.config.secret).toBe("s");
   });
 
   it("leaves an existing hook alone when there is no secret to set", async () => {

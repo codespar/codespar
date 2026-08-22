@@ -208,6 +208,7 @@ export class GitHubClient {
             owner,
             repo,
             existing.id as number,
+            existing.config as Record<string, unknown> | undefined,
             webhookUrl,
             secret,
           );
@@ -280,6 +281,7 @@ export class GitHubClient {
     owner: string,
     repo: string,
     hookId: number,
+    existingConfig: Record<string, unknown> | undefined,
     webhookUrl: string,
     secret: string,
   ): Promise<boolean> {
@@ -287,16 +289,38 @@ export class GitHubClient {
       const res = await fetch(`${this.baseUrl}/repos/${owner}/${repo}/hooks/${hookId}`, {
         method: "PATCH",
         headers: this.headers,
-        // GitHub REPLACES the whole `config` object on PATCH rather than
-        // merging it, so `url` and `content_type` are resent alongside the
-        // secret. Sending `config: { secret }` alone would blank the delivery
-        // URL and silently detach the hook, which is a worse outcome than the
-        // unsigned deliveries this is fixing.
+        // Send back the hook's OWN config with only the secret changed.
+        //
+        // The earlier version sent fixed values — url, content_type "json",
+        // insecure_ssl "0" — which preserved the fields it remembered and
+        // silently reset the ones it did not. On a hook an operator had
+        // adjusted by hand that is a self-inflicted outage: insecure_ssl "0"
+        // breaks delivery to an internal host with a private certificate,
+        // content_type "json" breaks anyone on "form", and a fixed url
+        // overwrites a customised delivery target. All of it during a startup
+        // repair that is deliberately quiet, so the symptom is deliveries
+        // stopping rather than an error.
+        //
+        // The wrong question was "which fields must I resend?". The right one
+        // is "how do I avoid destroying what I do not know about?", and the
+        // answer was already in hand: the listing that found this hook returns
+        // its config.
+        //
+        // Correct under either PATCH semantics, which is why it does not
+        // depend on resolving them: if PATCH replaces the config wholesale,
+        // everything has been resent; if it merges, these are the values
+        // already there and only `secret` changes. GitHub's docs say a secret
+        // must be resent or it is dropped, which this does.
+        //
+        // Defaults sit BEFORE the spread so a hook whose config came back
+        // empty still gets a usable delivery target, while anything the hook
+        // actually has wins over them. `secret` is last so it always wins.
         body: JSON.stringify({
           config: {
             url: webhookUrl,
             content_type: "json",
             insecure_ssl: "0",
+            ...(existingConfig ?? {}),
             secret,
           },
         }),
