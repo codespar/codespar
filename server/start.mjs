@@ -17,7 +17,7 @@
 
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { MessageRouter, WebhookServer, FileStorage, createStorage, ApprovalManager, VectorStore, IdentityStore, analyzeDeployFailure, formatSmartAlert, parseIntent, broadcastEvent, DeployHealthMonitor, ChannelRouter, SentryClient, PagerDutyClient, LinearClient, findOrCreateSession, sendInboundMessage } from "@codespar/core";
+import { MessageRouter, WebhookServer, FileStorage, createStorage, ApprovalManager, VectorStore, IdentityStore, analyzeDeployFailure, formatSmartAlert, parseIntent, broadcastEvent, DeployHealthMonitor, ChannelRouter, SentryClient, PagerDutyClient, LinearClient, findOrCreateSession, sendInboundMessage, reconcileWebhookSecrets } from "@codespar/core";
 import { AgentSupervisor } from "@codespar/agent-supervisor";
 import { ProjectAgent } from "@codespar/agent-project";
 import { CoordinatorAgent } from "@codespar/agent-coordinator";
@@ -816,6 +816,19 @@ await webhookServer.start();
 
 console.log(`[server] Webhook server on port ${port}`);
 console.log("[server] Ready.\n");
+
+// Repair webhooks registered by an earlier release, which carry no signing
+// secret and are therefore delivered unsigned forever. Provisioning on create
+// only helps hooks created from here on; this is what covers installs that
+// linked their repos before (#138).
+//
+// Deliberately NOT awaited. It talks to GitHub once per project, and a slow or
+// unreachable API must not hold up a runtime that is already serving. Failures
+// are logged by the function and never rejected here, so nothing can take the
+// process down after it has reported Ready.
+reconcileWebhookSecrets(storage).catch((err) => {
+  console.error("[server] Webhook secret reconciliation failed:", err?.message ?? err);
+});
 
 // 8. Graceful shutdown
 const shutdown = async () => {

@@ -211,6 +211,10 @@ export type { ChannelRoute } from "./routing/index.js";
 export { PromptGuard, promptGuard, sanitizeForPrompt } from "./security/prompt-guard.js";
 export type { PromptAnalysis, SanitizeResult, ContentSource } from "./security/prompt-guard.js";
 export { verifyWebhookSignature, enforceWebhookSecret } from "./server/webhook-auth.js";
+export { resolveWebhookSecret, provisionWebhookSecret } from "./server/webhook-secret.js";
+export { reconcileWebhookSecrets, RECONCILED_MARKER } from "./server/webhook-reconcile.js";
+export type { ReconcileResult } from "./server/webhook-reconcile.js";
+export type { ResolvedWebhookSecret, WebhookSecretSource } from "./server/webhook-secret.js";
 export type { WebhookAlgorithm } from "./server/webhook-auth.js";
 
 // Integrations (third-party API clients)

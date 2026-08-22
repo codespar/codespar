@@ -56,13 +56,24 @@ inject fabricated CI and deploy events into a runtime that acts on them.
 with `401`. It is **off** by default, and note that `WHATSAPP_WEBHOOK_STRICT_MODE`
 is a different variable governing a different route.
 
-There is a second half that is easy to miss: the webhook this runtime creates
-for you (`POST /api/projects`) is registered at GitHub **without a secret**, so
-GitHub sends it unsigned. Turning on strict mode today therefore rejects the
-integration the runtime set up for itself. Provisioning that secret is tracked
-in [#138](https://github.com/codespar/codespar/issues/138); until it lands,
-treat these four routes as unauthenticated input and restrict who can reach
-them at the network layer.
+The runtime now provisions that secret itself. A webhook it registers is
+created **with** a signing secret it generates and stores, and webhooks
+registered by earlier releases are repaired at startup, so GitHub deliveries
+arrive signed and verifiable without anyone configuring anything. That is what
+makes strict mode usable at all: before it, turning strict mode on rejected the
+integration the runtime had set up for itself, and setting
+`GITHUB_WEBHOOK_SECRET` by hand made things worse rather than better, because
+GitHub had never been told the value.
+
+What has **not** changed is the default: unsigned deliveries are still accepted
+unless `WEBHOOK_STRICT_MODE=true`. Flipping that default is a separate,
+deliberate decision, tracked in
+[#138](https://github.com/codespar/codespar/issues/138). Until it is flipped,
+these four routes still accept unverified input on a default install, so
+restrict who can reach them at the network layer.
+
+Vercel and Sentry webhooks are created by you in those providers' dashboards,
+not by this runtime, so their secrets stay yours to configure.
 
 ## Safety Guardrails
 

@@ -12,6 +12,7 @@ import type { AgentConfig, AgentState, AutonomyLevel } from "../../types/agent.j
 import { createAgentBody, agentActionBody, linkProjectBody, createProjectBody, parseBody } from "./schemas.js";
 import type { ProjectConfig } from "../../storage/types.js";
 import { GitHubClient } from "../../github/github-client.js";
+import { provisionWebhookSecret } from "../webhook-secret.js";
 import { broadcastEvent } from "../webhook-server.js";
 import {
   BASE_URL_NOT_CONFIGURED,
@@ -403,10 +404,17 @@ export function registerAgentRoutes(route: RouteFn, ctx: ServerContext): void {
           let webhookSkipped: string | undefined;
           let webhookMessage: string | undefined;
           if (webhookUrl && isHttpUrl(webhookUrl) && github.isConfigured() && owner && repoName) {
+            // Register the hook WITH a signing secret, provisioning one if this
+            // install has none. Without it GitHub signs nothing, every delivery
+            // arrives unverifiable, and WEBHOOK_STRICT_MODE cannot be turned on
+            // without rejecting the runtime's own integration (#138).
+            const { secret: webhookSecret } = await provisionWebhookSecret(storage, orgId);
             const webhook = await github.createWebhook(
               owner,
               repoName,
               webhookUrl,
+              undefined,
+              webhookSecret,
             );
             webhookConfigured = !!webhook;
           } else if (!baseUrl && github.isConfigured() && owner && repoName) {

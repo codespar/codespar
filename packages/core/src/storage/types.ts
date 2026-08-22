@@ -37,6 +37,13 @@ export interface ProjectConfig {
   linkedAt: string;
   linkedBy: string;
   webhookConfigured: boolean;
+  /**
+   * True once this project's GitHub webhook carries the signing secret this
+   * runtime can verify against. Absent on every project linked before that
+   * was provisioned, which is exactly the set the startup reconciliation
+   * repairs (see server/webhook-reconcile.ts).
+   */
+  webhookSecretProvisioned?: boolean;
 }
 
 /**

@@ -99,10 +99,12 @@ nothing is generated and nothing is written to disk.
 the OAuth install and callback routes, which a browser reaches mid-redirect
 with no way to present a token. Provider webhooks (`/webhooks/*`) are exempt because the
 providers cannot send a bearer token; they sign instead. That signature is only
-verified once you configure a secret for the provider, and a fresh install has
-none, so those four routes accept unverified payloads by default. See
-[`SECURITY.md`](SECURITY.md) and [#138](https://github.com/codespar/codespar/issues/138)
-before exposing them.
+verified once a secret is configured for the provider. For GitHub the runtime
+now provisions that secret itself, including repairing hooks created by earlier
+releases, so its deliveries arrive signed without you configuring anything. The
+default still *accepts* unsigned deliveries unless you set
+`WEBHOOK_STRICT_MODE=true`; see [`SECURITY.md`](SECURITY.md) and
+[#138](https://github.com/codespar/codespar/issues/138) before exposing them.
 
 A `401` says which mistake was made and how to fix it, so a client can recover
 without a human reading the server log:
