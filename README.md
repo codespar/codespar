@@ -97,7 +97,31 @@ nothing is generated and nothing is written to disk.
 
 `/health` stays open so container healthchecks and load balancers work, as do
 the OAuth install and callback routes, which a browser reaches mid-redirect
-with no way to present a token.
+with no way to present a token. Provider webhooks (`/webhooks/*`) authenticate
+by signature instead, which is the only scheme GitHub, Vercel and Sentry speak.
+
+A `401` says which mistake was made and how to fix it, so a client can recover
+without a human reading the server log:
+
+```json
+{
+  "error": "Unauthorized",
+  "code": "api_token_required",
+  "remediation": "Send an Authorization header of the form 'Bearer <token>'. ..."
+}
+```
+
+`api_token_required` means no usable header was sent; `api_token_invalid`
+means the token does not match, and is the one to watch for after the state
+directory has been reset, since the credential is regenerated then.
+
+Two consequences worth knowing before you upgrade. `GET /api/events` is
+Server-Sent Events, and a browser `EventSource` cannot send headers, so a
+browser client needs a `fetch`-based reader or a proxy that adds the header —
+passing the token in the query string is not supported on purpose, because
+URLs end up in logs. And `POST /api/newsletter/subscribe` is behind the
+credential like everything else under `/api`, so a public signup form has to
+post to your own backend rather than straight at the runtime.
 
 Docs: [docs.codespar.dev](https://docs.codespar.dev). This repo does not ship a docs site of its own.
 

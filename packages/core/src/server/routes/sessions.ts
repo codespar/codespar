@@ -30,6 +30,12 @@
 
 import { randomUUID, createHash, timingSafeEqual } from "node:crypto";
 import type { RouteFn, ServerContext } from "./types.js";
+import {
+  API_TOKEN_INVALID,
+  API_TOKEN_REQUIRED,
+  apiAuthError,
+  type ApiAuthErrorCode,
+} from "../api-auth.js";
 import { getAllAgentMetadata } from "../../agents/agent-registry.js";
 import {
   runChatLoop,
@@ -137,19 +143,23 @@ export function clearSessionStore(): void {
 function checkBearerAuth(
   request: { headers: Record<string, string | string[] | undefined> },
   ctx: ServerContext | null,
-): string | null {
-  const expected = ctx?.apiToken ?? process.env.ENGINE_API_TOKEN?.trim();
-  if (!expected) return null;
-
+): ApiAuthErrorCode | null {
   const auth = request.headers["authorization"] as string | undefined;
-  if (!auth?.startsWith("Bearer ")) return null;
+  if (!auth?.startsWith("Bearer ")) return API_TOKEN_REQUIRED;
   const provided = auth.slice(7).trim();
-  if (!provided) return null;
+  if (!provided) return API_TOKEN_REQUIRED;
+
+  // No token to compare against means nothing can ever be verified here, so
+  // everything is refused. Reported as "invalid" rather than "required",
+  // because the caller did send a token and telling them to send one would
+  // send them round a loop they cannot exit.
+  const expected = ctx?.apiToken ?? process.env.ENGINE_API_TOKEN?.trim();
+  if (!expected) return API_TOKEN_INVALID;
 
   const providedHash = createHash("sha256").update(provided).digest();
   const expectedHash = createHash("sha256").update(expected).digest();
-  if (!timingSafeEqual(providedHash, expectedHash)) return null;
-  return provided;
+  if (!timingSafeEqual(providedHash, expectedHash)) return API_TOKEN_INVALID;
+  return null;
 }
 
 // Built-in tools available in every OSS session.
@@ -239,8 +249,9 @@ async function resolveOrgAndProject(
 export function registerSessionRoutes(route: RouteFn, ctx: ServerContext | null = null): void {
   // POST /sessions — create session
   route("post", "/sessions", async (request: any, reply: any) => {
-    if (!checkBearerAuth(request, ctx)) {
-      return reply.status(401).send({ error: "Missing or invalid Bearer token" });
+    const authError = checkBearerAuth(request, ctx);
+    if (authError) {
+      return reply.status(401).send(apiAuthError(authError));
     }
 
     const body = request.body as {
@@ -305,8 +316,9 @@ export function registerSessionRoutes(route: RouteFn, ctx: ServerContext | null 
 
   // POST /sessions/:id/execute — execute a registered tool
   route("post", "/sessions/:id/execute", async (request: any, reply: any) => {
-    if (!checkBearerAuth(request, ctx)) {
-      return reply.status(401).send({ error: "Missing or invalid Bearer token" });
+    const authError = checkBearerAuth(request, ctx);
+    if (authError) {
+      return reply.status(401).send(apiAuthError(authError));
     }
 
     const { id } = request.params as { id: string };
@@ -458,8 +470,9 @@ export function registerSessionRoutes(route: RouteFn, ctx: ServerContext | null 
   //     user_message → (assistant_text | tool_use | tool_result)* → done
   //   On failure the terminal event is `error` instead of `done`.
   route("post", "/sessions/:id/send", async (request: any, reply: any) => {
-    if (!checkBearerAuth(request, ctx)) {
-      return reply.status(401).send({ error: "Missing or invalid Bearer token" });
+    const authError = checkBearerAuth(request, ctx);
+    if (authError) {
+      return reply.status(401).send(apiAuthError(authError));
     }
 
     const { id } = request.params as { id: string };
@@ -514,8 +527,9 @@ export function registerSessionRoutes(route: RouteFn, ctx: ServerContext | null 
 
   // GET /sessions/:id/connections — list connections associated with this session
   route("get", "/sessions/:id/connections", async (request: any, reply: any) => {
-    if (!checkBearerAuth(request, ctx)) {
-      return reply.status(401).send({ error: "Missing or invalid Bearer token" });
+    const authError = checkBearerAuth(request, ctx);
+    if (authError) {
+      return reply.status(401).send(apiAuthError(authError));
     }
 
     const { id } = request.params as { id: string };
@@ -537,8 +551,9 @@ export function registerSessionRoutes(route: RouteFn, ctx: ServerContext | null 
   // so callers can rely on lifecycle being tied to the session: when
   // the 204 lands, every child for this session is gone.
   route("delete", "/sessions/:id", async (request: any, reply: any) => {
-    if (!checkBearerAuth(request, ctx)) {
-      return reply.status(401).send({ error: "Missing or invalid Bearer token" });
+    const authError = checkBearerAuth(request, ctx);
+    if (authError) {
+      return reply.status(401).send(apiAuthError(authError));
     }
 
     const { id } = request.params as { id: string };

@@ -1,0 +1,227 @@
+/**
+ * The guard and the router must agree on which path a request is for.
+ *
+ * Every bypass found in this fix has been the same bug wearing a different
+ * hat: the guard matched one spelling of the request-target while Fastify
+ * routed on another, so the hook returned early and the handler ran anyway.
+ * Twice now, on code that had passing tests and green CI.
+ *
+ * These go over a REAL SOCKET, not through inject(). That is the whole point
+ * of the file. inject() rewrites an absolute-form request-target into
+ * origin-form before any hook runs, so the absolute-form bypass cannot even
+ * be expressed through it: a test written with inject() would pass with the
+ * defence removed. Nothing here can be satisfied by a mock, because the thing
+ * under test is what arrives on the wire.
+ */
+
+import { describe, it, expect, beforeAll, afterAll } from "vitest";
+import { connect } from "node:net";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { WebhookServer } from "../webhook-server.js";
+import { candidatePaths, routedPath } from "../api-auth.js";
+
+/**
+ * Send a request line verbatim and return the status code.
+ *
+ * Written by hand rather than with a client library because every HTTP
+ * client normalises the request-target, which is exactly the normalisation
+ * whose absence is the vulnerability.
+ */
+function rawRequest(port: number, requestLine: string): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const socket = connect(port, "127.0.0.1", () => {
+      socket.write(`${requestLine}\r\nHost: anything.example\r\nConnection: close\r\n\r\n`);
+    });
+    let buf = "";
+    socket.setEncoding("utf8");
+    socket.on("data", (chunk) => {
+      buf += chunk;
+    });
+    socket.on("end", () => {
+      const match = /^HTTP\/1\.[01] (\d{3})/.exec(buf);
+      if (!match) return reject(new Error(`no status line in: ${buf.slice(0, 200)}`));
+      resolve(Number(match[1]));
+    });
+    socket.on("error", reject);
+    socket.setTimeout(5000, () => {
+      socket.destroy();
+      reject(new Error("timed out"));
+    });
+  });
+}
+
+describe("request-target forms cannot walk past the auth guard", () => {
+  let server: WebhookServer;
+  let port: number;
+  let stateDir: string;
+  const saved: Record<string, string | undefined> = {};
+
+  beforeAll(async () => {
+    for (const key of ["ENGINE_API_TOKEN", "CODESPAR_STATE_DIR"]) {
+      saved[key] = process.env[key];
+    }
+    delete process.env.ENGINE_API_TOKEN;
+    stateDir = mkdtempSync(join(tmpdir(), "codespar-request-target-"));
+    process.env.CODESPAR_STATE_DIR = stateDir;
+
+    server = new WebhookServer({ port: 0, host: "127.0.0.1" });
+    // Listening through the Fastify instance rather than WebhookServer.start(),
+    // which also boots the event bus and probes Docker to warm a container
+    // pool. None of that is under test here, and warming real containers in a
+    // unit test would be slow and machine-dependent.
+    await server.fastifyInstance.listen({ port: 0, host: "127.0.0.1" });
+    const address = server.fastifyInstance.server.address();
+    if (!address || typeof address === "string") throw new Error("no bound port");
+    port = address.port;
+  });
+
+  afterAll(async () => {
+    await server.fastifyInstance.close();
+    for (const [key, value] of Object.entries(saved)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+    rmSync(stateDir, { recursive: true, force: true });
+  });
+
+  it("refuses an absolute-form request-target (the proxy form)", async () => {
+    // RFC 7230 5.3.2. Any HTTP proxy sends this, so it needs no special
+    // client: `curl -x http://runtime http://anything/api/agents` produces it.
+    // Fastify sets request.url to the whole URI, so `startsWith("/api")` was
+    // false and the guard let it through while the router dispatched on the
+    // path component.
+    expect(await rawRequest(port, "GET http://anything.example/api/agents HTTP/1.1")).toBe(401);
+  });
+
+  it("refuses absolute-form on the destructive route that proved it", async () => {
+    // This one returned 200 {"success":true,"message":"Audit log cleared"} to
+    // an anonymous caller. The audit log is the tamper-evident record, so
+    // this was not read-only exposure: anyone on the network could erase it.
+    expect(await rawRequest(port, "DELETE http://anything.example/api/audit HTTP/1.1")).toBe(401);
+  });
+
+  it("refuses absolute-form for /sessions and /a2a, and for the /v1 mirrors", async () => {
+    for (const line of [
+      "POST http://anything.example/sessions HTTP/1.1",
+      "POST http://anything.example/a2a/tasks HTTP/1.1",
+      "GET http://anything.example/v1/api/agents HTTP/1.1",
+      "GET http://anything.example/a2a/tasks HTTP/1.1",
+    ]) {
+      expect(await rawRequest(port, line), line).toBe(401);
+    }
+  });
+
+  it("refuses absolute-form with an https scheme and a port", async () => {
+    expect(
+      await rawRequest(port, "GET https://anything.example:8443/api/agents HTTP/1.1"),
+    ).toBe(401);
+  });
+
+  it("still answers the origin form the same way", async () => {
+    // Sanity: the fix must not have made everything 401 by accident, which
+    // would pass every assertion above for the wrong reason.
+    expect(await rawRequest(port, "GET /api/agents HTTP/1.1")).toBe(401);
+    expect(await rawRequest(port, "GET /health HTTP/1.1")).toBe(200);
+  });
+
+  it("still serves a public route sent in absolute form", async () => {
+    // Deliberately public routes stay public whatever form they arrive in.
+    expect(await rawRequest(port, "GET http://anything.example/health HTTP/1.1")).toBe(200);
+  });
+});
+
+/**
+ * Regression cases for forms that are NOT currently a bypass.
+ *
+ * These deserve tests precisely because they pass for a reason outside our
+ * code: `find-my-way` does not resolve `..`, does not collapse `//`, does not
+ * decode twice, and matches case-sensitively. That is a property of a
+ * dependency, not a guarantee this repository makes. An upgrade that starts
+ * normalising any of these would reopen the bypass with nothing failing, so
+ * the router's behaviour is pinned here rather than assumed.
+ */
+describe("path forms that route nowhere today, pinned against router upgrades", () => {
+  let server: WebhookServer;
+  let port: number;
+  let stateDir: string;
+  const saved: Record<string, string | undefined> = {};
+
+  beforeAll(async () => {
+    for (const key of ["ENGINE_API_TOKEN", "CODESPAR_STATE_DIR"]) {
+      saved[key] = process.env[key];
+    }
+    delete process.env.ENGINE_API_TOKEN;
+    stateDir = mkdtempSync(join(tmpdir(), "codespar-path-forms-"));
+    process.env.CODESPAR_STATE_DIR = stateDir;
+    server = new WebhookServer({ port: 0, host: "127.0.0.1" });
+    await server.fastifyInstance.listen({ port: 0, host: "127.0.0.1" });
+    const address = server.fastifyInstance.server.address();
+    if (!address || typeof address === "string") throw new Error("no bound port");
+    port = address.port;
+  });
+
+  afterAll(async () => {
+    await server.fastifyInstance.close();
+    for (const [key, value] of Object.entries(saved)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+    rmSync(stateDir, { recursive: true, force: true });
+  });
+
+  it("never lets any of them reach a handler", async () => {
+    const forms = [
+      "GET /xyz/../api/agents HTTP/1.1", // dot-segments, unresolved today
+      "GET /xyz/%2e%2e/api/agents HTTP/1.1", // encoded dot-segments
+      "GET //api/agents HTTP/1.1", // doubled slash
+      "GET /./api/agents HTTP/1.1", // current-directory segment
+      "GET /API/agents HTTP/1.1", // case
+      "GET /%2561pi/agents HTTP/1.1", // double-encoded
+      "GET /api%2Fagents HTTP/1.1", // encoded separator
+    ];
+    for (const line of forms) {
+      const status = await rawRequest(port, line);
+      // 401 means the guard claimed it; 404 means the router found nothing.
+      // Either is safe. 200 would mean a handler answered anonymously.
+      expect([401, 404], `${line} -> ${status}`).toContain(status);
+    }
+  });
+});
+
+/**
+ * Unit-level pinning of the derivation itself, so a failure points at the
+ * function rather than at an HTTP status three layers away.
+ */
+describe("candidatePaths / routedPath", () => {
+  it("recovers the routed path from an absolute-form target", () => {
+    expect(routedPath("http://anything.example/api/agents")).toBe("/api/agents");
+    expect(candidatePaths("http://anything.example/api/agents")).toContain("/api/agents");
+  });
+
+  it("recovers the decoded path from a percent-encoded target", () => {
+    expect(routedPath("/%61pi/agents")).toBe("/api/agents");
+    expect(candidatePaths("/%61pi/agents")).toContain("/api/agents");
+  });
+
+  it("handles both at once", () => {
+    expect(routedPath("http://anything.example/%61pi/agents")).toBe("/api/agents");
+  });
+
+  it("drops the query string", () => {
+    expect(routedPath("/api/agents?orgId=x")).toBe("/api/agents");
+    expect(candidatePaths("/api/agents?orgId=x")).toContain("/api/agents");
+  });
+
+  it("keeps the raw form as a candidate as well", () => {
+    // Fail-closed: a spelling nobody anticipated has to defeat every
+    // derivation at once, not just the one that happens to be checked.
+    expect(candidatePaths("/api/agents")).toContain("/api/agents");
+  });
+
+  it("returns null when the target cannot be decoded", () => {
+    expect(routedPath("/%zz/api/agents")).toBeNull();
+    expect(candidatePaths("/%zz/api/agents")).toBeNull();
+  });
+});

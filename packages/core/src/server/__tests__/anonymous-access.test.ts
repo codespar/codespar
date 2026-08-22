@@ -8,11 +8,20 @@
  * leaving the default open keeps the install running and hands `/sessions`
  * to the internet. The invariant this file pins is the conjunction:
  *
- *   1. An anonymous request reaches nothing. Not `/api/*`, not
- *      `/sessions/*`, not `/a2a/*`, and above all not `child_process.spawn`.
+ *   1. An anonymous request reaches no handler under `/api`, `/sessions` or
+ *      `/a2a`, and above all does not reach `child_process.spawn`.
  *   2. A runtime started with no operator input at all still ends up with a
  *      working credential that a local client on the same machine can read,
  *      and that credential survives a restart.
+ *
+ * Property 1 is about the whole surface, and this file cannot establish it on
+ * its own: everything here goes through `inject()`, which normalises the
+ * request-target before any hook runs. An absolute-form target — the form any
+ * HTTP proxy sends — reached handlers anonymously while every test in this
+ * file passed. So the wire-level forms live in request-target-forms.test.ts,
+ * over a real socket, and whether each registered route is covered at all
+ * lives in route-coverage.test.ts. Read the three together before believing
+ * the property holds.
  *
  * The spawn case runs a real child process. It is deliberately the most
  * boring command that still proves execution: it writes a marker file into
@@ -274,6 +283,101 @@ describe("BLOCKER oss-sdk#5: anonymous access to the control surfaces", () => {
     if (process.platform === "win32") return;
     const mode = fs.statSync(tokenPath(stateDir)).mode & 0o777;
     expect(mode).toBe(0o600);
+  });
+
+  // ── 4. The refusal has to be recoverable without a human ──────────
+
+  it("names a stable code and how to recover, on both refusal reasons", async () => {
+    // A runtime for autonomous agents that answers `{"error":"Unauthorized"}`
+    // has told the caller it failed and nothing about what to do. The agent
+    // cannot act on that, so a human has to. These fields are what let it fix
+    // itself: the code says which mistake it made, the remediation says where
+    // the credential lives.
+    const missing = await server.inject({ method: "GET", url: "/api/agents" });
+    const missingBody = JSON.parse(missing.body);
+    expect(missing.statusCode).toBe(401);
+    expect(missingBody.code).toBe("api_token_required");
+    expect(missingBody.remediation).toMatch(/api-token/);
+
+    const wrong = await server.inject({
+      method: "GET",
+      url: "/api/agents",
+      headers: { authorization: "Bearer not-the-right-token" },
+    });
+    const wrongBody = JSON.parse(wrong.body);
+    expect(wrong.statusCode).toBe(401);
+    expect(wrongBody.code).toBe("api_token_invalid");
+
+    // The two remediations differ because the two situations need different
+    // actions: one caller has to send a header, the other is holding a stale
+    // credential and has to re-read it. Only the second case tells it to.
+    expect(wrongBody.remediation).not.toBe(missingBody.remediation);
+    expect(wrongBody.remediation).toMatch(/[Rr]e-read/);
+
+    // `error` is unchanged from what the hook has always sent, so anything
+    // already parsing that field keeps working.
+    expect(missingBody.error).toBe("Unauthorized");
+    expect(wrongBody.error).toBe("Unauthorized");
+  });
+
+  it("uses the same refusal envelope on /sessions as on /api", async () => {
+    // These two answered the same condition with different JSON, purely
+    // because the checks grew separately. One condition, one envelope.
+    const res = await server.inject({
+      method: "POST",
+      url: "/sessions",
+      payload: { servers: [] },
+      headers: { "content-type": "application/json", authorization: "Bearer test" },
+    });
+    const body = JSON.parse(res.body);
+    expect(res.statusCode).toBe(401);
+    expect(body.error).toBe("Unauthorized");
+    expect(body.code).toBe("api_token_invalid");
+    expect(body.remediation).toMatch(/api-token/);
+  });
+
+  it("never puts the credential, or a piece of it, in a refusal", async () => {
+    // Swept against the REAL token this server is holding, not against a
+    // literal. Comparing to a hard-coded string would pass even if the code
+    // leaked, because the value that matters would never enter the comparison.
+    const token = readMaterializedToken(stateDir);
+    expect(token.length).toBeGreaterThanOrEqual(32);
+
+    const responses = [
+      await server.inject({ method: "GET", url: "/api/agents" }),
+      await server.inject({
+        method: "GET",
+        url: "/api/agents",
+        headers: { authorization: `Bearer ${token.slice(0, 10)}` },
+      }),
+      await server.inject({
+        method: "POST",
+        url: "/sessions",
+        payload: { servers: [] },
+        headers: { "content-type": "application/json", authorization: "Bearer wrong" },
+      }),
+    ];
+
+    for (const res of responses) {
+      const wire = res.body + JSON.stringify(res.headers);
+      expect(wire).not.toContain(token);
+      // Also no fragment long enough to be worth brute-forcing the rest of.
+      for (let i = 0; i + 8 <= token.length; i += 4) {
+        expect(wire, `leaked fragment at offset ${i}`).not.toContain(token.slice(i, i + 8));
+      }
+      // And no length hint, which would narrow a search.
+      expect(wire).not.toContain(String(token.length));
+    }
+  });
+
+  it("does not name the resolved state directory in a refusal", async () => {
+    // The real path can be ~/.codespar, which expands to a home directory and
+    // would hand an anonymous caller a username and the filesystem layout.
+    // The remediation stays generic; the startup log names the real path for
+    // whoever operates the install.
+    const res = await server.inject({ method: "GET", url: "/api/agents" });
+    expect(res.body).not.toContain(stateDir);
+    expect(res.body).not.toContain(os.homedir());
   });
 
   it("still serves /health unauthenticated so the container healthcheck passes", async () => {

@@ -24,6 +24,13 @@ import { parseGitHubWebhook, type CIEvent } from "../webhooks/github-handler.js"
 import { getRegisteredTypes, getAgentFactory, isRegisteredType, getAllAgentMetadata } from "../agents/agent-registry.js";
 import { displayBaseUrl, fastifyTrustProxy } from "./base-url.js";
 import { resolveApiToken } from "./api-token.js";
+import {
+  API_TOKEN_INVALID,
+  API_TOKEN_REQUIRED,
+  apiAuthError,
+  candidatePaths,
+  routedPath,
+} from "./api-auth.js";
 import { createLogger } from "../observability/logger.js";
 import { metrics } from "../observability/metrics.js";
 import { scheduler } from "../scheduler/scheduler.js";
@@ -210,6 +217,7 @@ export class WebhookServer {
    * and materialized by api-token.ts when the operator supplied none.
    */
   readonly apiToken: string;
+  private readonly _registeredRoutes: Array<{ method: string; url: string }> = [];
 
   constructor(config?: WebhookServerConfig) {
     this.port = config?.port ?? parseInt(process.env["PORT"] ?? "3000", 10);
@@ -232,6 +240,14 @@ export class WebhookServer {
       log.warn("CORS_ORIGIN not set — allowing all origins");
       this.app.register(cors, { origin: true });
     }
+
+    // Record what gets registered, for the route-coverage completeness test.
+    this.app.addHook("onRoute", (route) => {
+      const methods = Array.isArray(route.method) ? route.method : [route.method];
+      for (const method of methods) {
+        this._registeredRoutes.push({ method, url: route.url });
+      }
+    });
 
     registerAllAgentMetadata();
     this.registerRequestTracking();
@@ -289,6 +305,34 @@ export class WebhookServer {
   /** Delegate to Fastify's inject() for integration testing */
   inject(opts: import("fastify").InjectOptions) {
     return this.app.inject(opts);
+  }
+
+  /**
+   * The underlying Fastify instance.
+   *
+   * For embedders who want to listen themselves, and for tests that must go
+   * over a real socket rather than through inject(). That difference matters
+   * here: inject() rewrites an absolute-form request-target into origin-form
+   * before any hook sees it, so the absolute-form bypass this guard now
+   * defends against is not expressible through inject() at all, and a test
+   * written with it would pass whether or not the defence exists.
+   */
+  get fastifyInstance(): FastifyInstance {
+    return this.app;
+  }
+
+  /**
+   * Every route this server registered, as `{ method, url }`.
+   *
+   * Collected from Fastify's own onRoute hook rather than from a hand-kept
+   * list, so it cannot drift from what is actually served. Exists so
+   * route-coverage.test.ts can assert that each route is either deliberately
+   * public or refuses anonymous callers: auth here is prefix matching over a
+   * flat table, so nothing stops a new route from being registered outside a
+   * guarded prefix, and this is what turns that into a failing build.
+   */
+  get registeredRoutes(): ReadonlyArray<{ method: string; url: string }> {
+    return this._registeredRoutes;
   }
 
   /** Set the base directory used for org-scoped file storage */
@@ -518,6 +562,16 @@ export class WebhookServer {
    * Sentry can speak. `/health` and the OAuth install/callback pair stay
    * open because the container healthcheck and a browser mid-OAuth-redirect
    * have no way to present a bearer token.
+   *
+   * KNOWN SHAPE PROBLEM, tracked separately: this is prefix matching over a
+   * flat route table, so a route added under `/api` is protected only because
+   * its path happens to start with a guarded prefix. Nothing makes a new route
+   * declare its access level, which means the default for a route registered
+   * somewhere else in the tree is open. The completeness test in
+   * route-coverage.test.ts turns that into a failing build rather than a quiet
+   * hole, and the structural fix (per-subtree encapsulated hooks, so a route
+   * cannot be registered outside a guard) is the redesign this cannot safely
+   * do inside an emergency patch.
    */
   private registerApiAuth(): void {
     const tokenHash = createHash("sha256").update(this.apiToken).digest();
@@ -545,34 +599,24 @@ export class WebhookServer {
     };
 
     this.app.addHook("onRequest", async (request, reply) => {
-      const rawPath = request.url.split("?")[0];
+      // The guard has to decide about the SAME path the router will dispatch
+      // on. Deriving that is not `request.url.split("?")[0]`: see
+      // candidatePaths() in api-auth.ts for the three spellings that have each
+      // been a live bypass here. `null` means the target could not be parsed,
+      // which is treated as protected rather than guessed at.
+      const candidates = candidatePaths(request.url);
 
-      // Fastify routes on the DECODED path, so `/%61pi/agents` reaches the
-      // /api/agents handler while the raw string starts with `/%61`. Matching
-      // the raw form alone let percent-encoding walk straight past this hook
-      // and read the API unauthenticated. Both forms are checked, and a path
-      // whose encoding does not decode is treated as protected rather than
-      // guessed at. Only the protection decision looks at the decoded form;
-      // unprotected routes are left exactly as they were.
-      let decodedPath: string | null;
-      try {
-        decodedPath = decodeURIComponent(rawPath);
-      } catch {
-        decodedPath = null;
-      }
+      // Whether a route is deliberately public is a question about the handler
+      // that will actually run, so it is asked of the routed path only.
+      const routed = routedPath(request.url);
+      if (routed !== null && EXCLUDED_PATHS.has(routed)) return;
 
-      // Every entry in EXCLUDED_PATHS is a literal with no percent sign, so a
-      // path that decodes to one of them is byte-identical to it, and testing
-      // the decoded form is the same as testing both.
-      if (decodedPath !== null && EXCLUDED_PATHS.has(decodedPath)) return;
-
-      const isProtected =
-        decodedPath === null || matchesProtected(rawPath) || matchesProtected(decodedPath);
+      const isProtected = candidates === null || candidates.some(matchesProtected);
       if (!isProtected) return;
 
       const auth = request.headers.authorization;
       if (!auth || !auth.startsWith("Bearer ")) {
-        return reply.status(401).send({ error: "Unauthorized" });
+        return reply.status(401).send(apiAuthError(API_TOKEN_REQUIRED));
       }
 
       // Hashed before comparison so timingSafeEqual gets two buffers of the
@@ -580,7 +624,7 @@ export class WebhookServer {
       // and the length itself would otherwise be an oracle.
       const providedHash = createHash("sha256").update(auth.slice(7)).digest();
       if (!timingSafeEqual(providedHash, tokenHash)) {
-        return reply.status(401).send({ error: "Unauthorized" });
+        return reply.status(401).send(apiAuthError(API_TOKEN_INVALID));
       }
     });
   }

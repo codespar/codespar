@@ -23,13 +23,23 @@
  *
  *   <CODESPAR_WORK_DIR or cwd>/.codespar   — the container's volume mount
  *   ~/.codespar                            — bare-metal installs
- *   <tmpdir>/codespar                      — last resort
  *
- * That chain exists so a read-only or wrongly-owned state directory degrades
- * into a different directory rather than into a dead runtime. It matters more
- * than it looks: it is what makes it safe to drop root in the Dockerfile,
- * because the failure mode of an unwritable /app becomes a warning and a
- * fallback rather than a crash loop.
+ * That chain exists so a read-only or wrongly-owned state directory costs the
+ * install its credential rather than its ability to boot.
+ *
+ * Scope, because an earlier version of this comment overstated it: the
+ * fallback covers THIS file only. FileStorage writes to the same directory
+ * and has nowhere else to go, so on a wrongly-owned directory it still throws
+ * and takes the process with it. Dropping root in the Dockerfile is therefore
+ * not made safe by this fallback alone; the entrypoint runs an explicit
+ * preflight (preflightStateDir in server/start.mjs) that catches the case up
+ * front and prints the chown that fixes it.
+ *
+ * A world-writable temp directory is deliberately not in that chain, in
+ * either direction; see stateDirCandidates for why. An existing file is only
+ * adopted when it is a regular file owned by this uid with no group or other
+ * permission bits, so a credential planted by another account is ignored
+ * rather than trusted.
  *
  * Nothing here ever logs the token itself, only where it lives.
  */
@@ -82,14 +92,82 @@ export function stateDirCandidates(env: NodeJS.ProcessEnv = process.env): string
   } catch {
     // homedir() throws on hosts with no resolvable home. Skip it.
   }
-  candidates.push(path.join(os.tmpdir(), "codespar"));
+
+  // os.tmpdir() is deliberately NOT a candidate, in either direction.
+  //
+  // On Linux it is /tmp, mode 1777. Any local user could create
+  // /tmp/codespar/api-token holding a value of their choosing before the
+  // runtime's first boot, and the runtime would adopt it: the read loop
+  // reached tmp before anything had been written anywhere. Knowing the
+  // credential gets you past this hook AND past the check in sessions.ts,
+  // which is the route that spawns a command, so an unprivileged local user
+  // ended up with code execution as the service account.
+  //
+  // It is dropped from writes too, not just reads. A directory the runtime
+  // writes to but never reads back would mint a fresh credential on every
+  // boot and hand every existing client a 401, which is the availability
+  // failure this whole design exists to avoid. If neither candidate above
+  // works, resolveApiToken falls through to the in-memory branch and says so
+  // loudly, which is honest rather than quietly broken.
 
   return [...new Set(candidates)];
 }
 
-/** Read a persisted token, or null when there is nothing usable there. */
+/** The parts of `fs.Stats` the adoption decision depends on. */
+export interface AdoptionStat {
+  isFile(): boolean;
+  uid: number;
+  mode: number;
+}
+
+/**
+ * Whether an existing `api-token` file may be trusted, or the reason not.
+ *
+ * Adopting a file means trusting whoever wrote it, so it has to look like
+ * something this process wrote: a regular file (the caller uses lstat, so a
+ * symlink is rejected rather than followed somewhere else), owned by this
+ * uid, and with no permission bits for group or other. A planted credential
+ * fails the ownership check even in a directory the attacker fully controls,
+ * and a credential other accounts can read is not a credential.
+ *
+ * Exported as a pure function on purpose: a file owned by another user cannot
+ * be created without privileges, so this is the only way to test that branch
+ * for real rather than by mocking the filesystem and asserting on the mock.
+ *
+ * `currentUid` is null on platforms without uids, where the check does not
+ * apply.
+ */
+export function adoptionRefusalReason(
+  st: AdoptionStat,
+  currentUid: number | null,
+): string | null {
+  if (!st.isFile()) return "not a regular file";
+  if (currentUid !== null && st.uid !== currentUid) {
+    return "owned by another user, so it was not written by this runtime";
+  }
+  if ((st.mode & 0o077) !== 0) {
+    return "readable or writable beyond its owner";
+  }
+  return null;
+}
+
+/** Read a persisted token, or null when there is nothing safe to adopt. */
 function readToken(file: string): string | null {
   try {
+    const st = fs.lstatSync(file);
+    const uid = typeof process.getuid === "function" ? process.getuid() : null;
+    const refusal = adoptionRefusalReason(st, uid);
+
+    if (refusal !== null) {
+      log.warn(
+        `Ignoring an existing api-token file: ${refusal}. It is not trusted, ` +
+          "and a new credential will be generated in its place. Set " +
+          "ENGINE_API_TOKEN to choose the credential explicitly.",
+        { path: file, mode: (st.mode & 0o777).toString(8) },
+      );
+      return null;
+    }
+
     const raw = fs.readFileSync(file, "utf8").trim();
     return raw.length > 0 ? raw : null;
   } catch {
