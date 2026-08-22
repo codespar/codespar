@@ -557,9 +557,15 @@ export class WebhookServer {
    *               which matched `/api/` only.
    *   /a2a      — inbound agent-to-agent tasks. Had no check of any kind.
    *
-   * Webhook routes are deliberately absent: they authenticate per provider
-   * signature (webhook-auth.ts), which is the only scheme GitHub, Vercel and
-   * Sentry can speak. `/health` and the OAuth install/callback pair stay
+   * Webhook routes are deliberately absent, because a bearer token is not a
+   * scheme GitHub, Vercel or Sentry can speak; they sign instead. Say the rest
+   * of it plainly, though: that signature is only VERIFIED once a secret is
+   * configured, and with none configured the default is to accept the payload
+   * unverified (webhook-auth.ts, WEBHOOK_STRICT_MODE, off by default). So
+   * these routes are not "authenticated by signature" today, they are
+   * authenticated by signature WHEN CONFIGURED. Tracked in #138, which also
+   * covers why turning strict mode on today breaks the webhook this runtime
+   * creates for itself. `/health` and the OAuth install/callback pair stay
    * open because the container healthcheck and a browser mid-OAuth-redirect
    * have no way to present a bearer token.
    *

@@ -204,6 +204,28 @@ function writeToken(dir: string, token: string): string | null {
 }
 
 /**
+ * What the file said after we wrote it.
+ *
+ *   "ours"       the value on disk is the one generated here.
+ *   "lost_race"  a different value is there, so another instance wrote first.
+ *   "unreadable" nothing adoptable came back.
+ *
+ * Pure and exported so the lost-race branch can be tested at all. Staging a
+ * real interleaving of two writers from inside one process is not possible
+ * here: resolveApiToken reads before it writes, so a second call in the same
+ * process finds the file and returns early, never reaching this decision. A
+ * test that drove it that way would look like it covered the race while
+ * exercising a different branch entirely.
+ */
+export function classifyWriteBack(
+  onDisk: string | null,
+  generated: string,
+): "ours" | "lost_race" | "unreadable" {
+  if (onDisk === null) return "unreadable";
+  return onDisk === generated ? "ours" : "lost_race";
+}
+
+/**
  * Resolve the credential for this process, materializing it if needed.
  *
  * Called once per WebhookServer construction rather than memoized at module
@@ -235,15 +257,61 @@ export function resolveApiToken(env: NodeJS.ProcessEnv = process.env): ResolvedA
   const token = randomBytes(TOKEN_BYTES).toString("hex");
   for (const dir of candidates) {
     const file = writeToken(dir, token);
-    if (file) {
+    if (!file) continue;
+
+    // Read back what is actually on disk before trusting the value in hand.
+    //
+    // Two replicas sharing a state directory and starting together both find
+    // no credential, both generate one, and both write. The rename is atomic,
+    // so one of them wins the file and the other is left holding a token that
+    // matches nothing. Without this read-back that replica serves 401 to every
+    // caller while logging that all is well: the failure is silent, and it is
+    // silent at three in the morning with no human watching, which is the
+    // scenario this whole design exists for.
+    //
+    // Whoever loses the race adopts the file. Both replicas converge on the
+    // same credential, which is the outcome the operator wanted anyway. The
+    // window is not closed by this — a write landing between the read-back and
+    // the next request would still diverge — so the log says plainly what to
+    // do about it, and ENGINE_API_TOKEN remains the supported way to run more
+    // than one replica.
+    const onDisk = readToken(file);
+    const outcome = classifyWriteBack(onDisk, token);
+
+    if (outcome === "lost_race") {
       log.warn(
-        "No ENGINE_API_TOKEN set — generated an API credential for this install. " +
-          "Read it from the file named below to call the API; set ENGINE_API_TOKEN " +
-          "to manage it yourself.",
+        "Another instance wrote this credential first, so its value is being " +
+          "used instead of the one generated here. That is expected when " +
+          "several replicas share a state directory and start together. Set " +
+          "ENGINE_API_TOKEN to give every replica the same credential " +
+          "explicitly, which removes the race.",
         { path: file },
       );
-      return { token, source: "generated", path: file };
+      return { token: onDisk as string, source: "file", path: file };
     }
+
+    if (outcome === "unreadable") {
+      // Written, then unreadable: a different owner, a stricter mode, or the
+      // file removed between the two operations. Not fatal, but the credential
+      // will not survive a restart, and nobody can read it back to call the
+      // API, so it must not pass as a normal boot.
+      log.error(
+        "Wrote an API credential but could not read it back, so it will not " +
+          "survive a restart and cannot be read by a local client. Set " +
+          "ENGINE_API_TOKEN, or check the ownership and permissions of the " +
+          "state directory.",
+        { path: file },
+      );
+      return { token, source: "generated", path: null };
+    }
+
+    log.warn(
+      "No ENGINE_API_TOKEN set — generated an API credential for this install. " +
+        "Read it from the file named below to call the API; set ENGINE_API_TOKEN " +
+        "to manage it yourself.",
+      { path: file },
+    );
+    return { token, source: "generated", path: file };
   }
 
   // Every candidate refused a write. The runtime still starts and is still

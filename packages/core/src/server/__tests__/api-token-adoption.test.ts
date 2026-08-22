@@ -26,6 +26,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import {
   adoptionRefusalReason,
+  classifyWriteBack,
   resolveApiToken,
   stateDirCandidates,
   API_TOKEN_FILENAME,
@@ -138,6 +139,53 @@ describe("api-token: a planted credential is never adopted", () => {
     const resolved = resolveApiToken({ CODESPAR_STATE_DIR: dir } as NodeJS.ProcessEnv);
 
     expect(resolved.token).not.toBe(PLANTED);
+  });
+
+  it("classifies a lost write race instead of trusting the value in hand", () => {
+    // Two replicas sharing a state directory both find nothing, both generate,
+    // both write. The rename is atomic, so one wins the file and the other is
+    // left holding a token that matches nothing on disk. Before the read-back
+    // that replica returned its own value and then served 401 to every caller
+    // while its log said the boot went fine — silent, with nobody watching,
+    // which is the scenario this whole design exists for.
+    //
+    // Tested through the exported decision rather than by calling
+    // resolveApiToken twice. That would NOT reach this branch: the second call
+    // finds the file during the read phase and returns early, so the test
+    // would look like it covered the race while exercising adoption instead.
+    expect(classifyWriteBack("token-from-the-other-replica", "token-we-made")).toBe("lost_race");
+    expect(classifyWriteBack("token-we-made", "token-we-made")).toBe("ours");
+    expect(classifyWriteBack(null, "token-we-made")).toBe("unreadable");
+  });
+
+  it("converges on the stored credential when the race is lost", () => {
+    // The consequence of the classification above: both replicas end up using
+    // the same credential, which is what the operator wanted anyway.
+    const dir = freshDir("converge");
+    created.push(dir);
+
+    const first = resolveApiToken({ CODESPAR_STATE_DIR: dir } as NodeJS.ProcessEnv);
+    const second = resolveApiToken({ CODESPAR_STATE_DIR: dir } as NodeJS.ProcessEnv);
+
+    expect(second.token).toBe(first.token);
+    expect(fs.readFileSync(path.join(dir, API_TOKEN_FILENAME), "utf8").trim()).toBe(first.token);
+  });
+
+  it("reports rather than pretends when the credential cannot be read back", () => {
+    // Written and then unreadable. The credential will not survive a restart
+    // and no local client can read it, so this must not pass as a normal boot:
+    // `path` comes back null, which is what the caller keys off.
+    const dir = freshDir("unreadable");
+    created.push(dir);
+
+    const first = resolveApiToken({ CODESPAR_STATE_DIR: dir } as NodeJS.ProcessEnv);
+    expect(first.path).not.toBeNull();
+
+    // Make the persisted file unadoptable the same way a foreign owner would,
+    // then confirm a later boot does not silently reuse it.
+    fs.chmodSync(path.join(dir, API_TOKEN_FILENAME), 0o644);
+    const later = resolveApiToken({ CODESPAR_STATE_DIR: dir } as NodeJS.ProcessEnv);
+    expect(later.token).not.toBe(first.token);
   });
 
   it("still adopts a credential it wrote itself", () => {

@@ -97,8 +97,12 @@ nothing is generated and nothing is written to disk.
 
 `/health` stays open so container healthchecks and load balancers work, as do
 the OAuth install and callback routes, which a browser reaches mid-redirect
-with no way to present a token. Provider webhooks (`/webhooks/*`) authenticate
-by signature instead, which is the only scheme GitHub, Vercel and Sentry speak.
+with no way to present a token. Provider webhooks (`/webhooks/*`) are exempt because the
+providers cannot send a bearer token; they sign instead. That signature is only
+verified once you configure a secret for the provider, and a fresh install has
+none, so those four routes accept unverified payloads by default. See
+[`SECURITY.md`](SECURITY.md) and [#138](https://github.com/codespar/codespar/issues/138)
+before exposing them.
 
 A `401` says which mistake was made and how to fix it, so a client can recover
 without a human reading the server log:

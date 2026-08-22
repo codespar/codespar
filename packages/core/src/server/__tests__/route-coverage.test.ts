@@ -61,16 +61,19 @@ const PUBLIC_ROUTES = new Map<string, string>([
   ["GET /api/github/callback", "OAuth callback from the provider"],
   ["GET /v1/api/github/callback", "same, /v1 mirror"],
 
-  // Provider webhooks authenticate by signature (webhook-auth.ts), which is
-  // the only scheme GitHub, Vercel and Sentry can speak. A bearer token here
-  // would mean handing the provider a credential it has nowhere to put.
-  ["POST /webhooks/github", "provider signature auth, not bearer"],
+  // Provider webhooks are exempt from the bearer credential because the
+  // providers cannot send one; they sign instead. That signature is only
+  // verified once a secret is configured, and the default install has none,
+  // so on a fresh install these four accept unverified payloads (#138). They
+  // are listed here as "not bearer-authenticated", which is what this test
+  // actually checks; do not read the entries below as "verified".
+  ["POST /webhooks/github", "provider signs; verified only when a secret is set (#138)"],
   ["POST /v1/webhooks/github", "same, /v1 mirror"],
-  ["POST /webhooks/vercel", "provider signature auth, not bearer"],
+  ["POST /webhooks/vercel", "provider signs; verified only when a secret is set (#138)"],
   ["POST /v1/webhooks/vercel", "same, /v1 mirror"],
-  ["POST /webhooks/sentry", "provider signature auth, not bearer"],
+  ["POST /webhooks/sentry", "provider signs; verified only when a secret is set (#138)"],
   ["POST /v1/webhooks/sentry", "same, /v1 mirror"],
-  ["POST /webhooks/deploy", "shared-secret signature auth, not bearer"],
+  ["POST /webhooks/deploy", "shared-secret signature; verified only when a secret is set (#138)"],
   ["POST /v1/webhooks/deploy", "same, /v1 mirror"],
 ]);
 
