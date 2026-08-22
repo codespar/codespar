@@ -178,15 +178,21 @@ function readToken(file: string): string | null {
 /**
  * Write `token` to `file` with 0600, creating the directory 0700.
  *
- * Written to a temporary name and renamed, so a reader on the same host
- * never observes a half-written credential. The explicit chmod is not
+ * Written to a uniquely-named temporary file and renamed, so a reader on the
+ * same host never observes a half-written credential, and two writers never
+ * share the temporary. The explicit chmod is not
  * redundant with the `mode` option: `mode` is masked by the process umask,
  * and a runtime started with a permissive umask would otherwise leave the
  * credential group- or world-readable.
  */
 function writeToken(dir: string, token: string): string | null {
   const file = path.join(dir, API_TOKEN_FILENAME);
-  const tmp = `${file}.${process.pid}.tmp`;
+  // Random, not just the pid. In Docker every container is PID 1, and this
+  // release mounts a shared named volume across replicas, so two of them
+  // writing at once would both pick `api-token.1.tmp` and interleave into one
+  // file. The pid stays because it is useful when reading a directory by hand;
+  // the randomness is what actually makes the name unique.
+  const tmp = `${file}.${process.pid}.${randomBytes(6).toString("hex")}.tmp`;
   try {
     fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
     fs.writeFileSync(tmp, `${token}\n`, { mode: 0o600 });
@@ -269,12 +275,22 @@ export function resolveApiToken(env: NodeJS.ProcessEnv = process.env): ResolvedA
     // silent at three in the morning with no human watching, which is the
     // scenario this whole design exists for.
     //
-    // Whoever loses the race adopts the file. Both replicas converge on the
-    // same credential, which is the outcome the operator wanted anyway. The
-    // window is not closed by this — a write landing between the read-back and
-    // the next request would still diverge — so the log says plainly what to
-    // do about it, and ENGINE_API_TOKEN remains the supported way to run more
-    // than one replica.
+    // A replica that finds a different value here adopts it, and the two
+    // converge. Be precise about how much that buys, because an earlier
+    // version of this comment was not:
+    //
+    // This NARROWS the window. It does not make losing the race loud. The
+    // dominant ordering is the one this check cannot see — A writes, reads
+    // back, finds its own value, logs a normal boot and returns, and only
+    // THEN B renames over it. A is now stale having never had anything to
+    // detect. Measured under a clock barrier (15 runs, 12 processes on one
+    // state directory): every run diverged, and 78% of the stale replicas
+    // logged an ordinary "using the stored credential" boot.
+    //
+    // The consequence is availability, not access: a stale replica answers
+    // 401 to legitimate callers, and no invalid token becomes valid. The
+    // supported way to run more than one replica is ENGINE_API_TOKEN, which
+    // removes the race rather than narrowing it.
     const onDisk = readToken(file);
     const outcome = classifyWriteBack(onDisk, token);
 

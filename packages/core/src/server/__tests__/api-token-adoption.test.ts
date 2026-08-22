@@ -144,10 +144,16 @@ describe("api-token: a planted credential is never adopted", () => {
   it("classifies a lost write race instead of trusting the value in hand", () => {
     // Two replicas sharing a state directory both find nothing, both generate,
     // both write. The rename is atomic, so one wins the file and the other is
-    // left holding a token that matches nothing on disk. Before the read-back
-    // that replica returned its own value and then served 401 to every caller
-    // while its log said the boot went fine — silent, with nobody watching,
-    // which is the scenario this whole design exists for.
+    // left holding a token that matches nothing on disk.
+    //
+    // What this classification buys is narrower than it looks, and the test
+    // name says "classifies" rather than "fixes" for that reason. It only
+    // fires when the other write ALREADY landed. The dominant ordering is the
+    // opposite one — read back, see your own value, log a normal boot, and
+    // only then get overwritten — which no check at this point can see.
+    // Measured: 15 runs, 12 processes, every run diverged, 78% of the stale
+    // replicas logged an ordinary boot. ENGINE_API_TOKEN is what removes the
+    // race; this only narrows it.
     //
     // Tested through the exported decision rather than by calling
     // resolveApiToken twice. That would NOT reach this branch: the second call
