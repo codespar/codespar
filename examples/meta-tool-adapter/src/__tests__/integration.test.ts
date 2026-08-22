@@ -29,6 +29,12 @@ import {
 import type { RouteFn, MetaToolHook } from "@codespar/core";
 import { registerExampleMetaTool, EXAMPLE_TOOL_NAME } from "../index.js";
 
+// The session routes verify the bearer token against the runtime's
+// credential (BLOCKER oss-sdk#5). This suite already sends `Bearer test`, so
+// declare that as the token instead of relying on the old behaviour where an
+// unset ENGINE_API_TOKEN made any non-empty value acceptable.
+process.env.ENGINE_API_TOKEN = "test";
+
 function createTestApp() {
   const app = Fastify({ logger: false });
   const route: RouteFn = (method, path, handler) => {

@@ -23,6 +23,13 @@ export type RouteFn = (method: "get" | "post" | "delete" | "patch", path: string
 
 /** Shared server context passed to all route modules */
 export interface ServerContext {
+  /**
+   * The bearer token protecting this runtime's control surfaces, resolved
+   * once at construction by server/api-token.ts. Route modules that verify
+   * credentials themselves must compare against this rather than reading
+   * ENGINE_API_TOKEN, which is only one of the sources it can come from.
+   */
+  apiToken: string;
   getOrgId(request: { headers: Record<string, string | string[] | undefined> }): string;
   /**
    * Resolve the active project id for a request. Order of precedence:

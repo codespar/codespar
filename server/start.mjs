@@ -15,19 +15,92 @@
  *   PROJECT_NAME      — Project identifier (default "default")
  */
 
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { join, resolve } from "node:path";
 import { MessageRouter, WebhookServer, FileStorage, createStorage, ApprovalManager, VectorStore, IdentityStore, analyzeDeployFailure, formatSmartAlert, parseIntent, broadcastEvent, DeployHealthMonitor, ChannelRouter, SentryClient, PagerDutyClient, LinearClient, findOrCreateSession, sendInboundMessage } from "@codespar/core";
 import { AgentSupervisor } from "@codespar/agent-supervisor";
 import { ProjectAgent } from "@codespar/agent-project";
 import { CoordinatorAgent } from "@codespar/agent-coordinator";
+
+// Read from package.json rather than hard-coded: the banner used to say
+// v0.1.0 forever, so an operator checking whether they had picked up a
+// security release was told the wrong thing by the one line they look at.
+const VERSION = JSON.parse(
+  readFileSync(new URL("../package.json", import.meta.url), "utf8"),
+).version;
 
 const port = parseInt(process.env.PORT || "3000", 10);
 const projectId = process.env.PROJECT_NAME || "default";
 const agentId = `agent-${projectId}`;
 
 console.log("");
-console.log("  code\x1b[34m<\x1b[0mspar\x1b[34m>\x1b[0m  v0.1.0 (server)");
+console.log(`  code\x1b[34m<\x1b[0mspar\x1b[34m>\x1b[0m  v${VERSION} (server)`);
 console.log("  ─────────────────────────────");
 console.log("");
+
+// ── State directory preflight ────────────────────────────────────────
+//
+// The container runs as `node` (see Dockerfile). If the state directory is
+// owned by someone else, FileStorage throws EACCES the first time an agent
+// writes memory, roughly a hundred lines into startup, and the process dies
+// with a stack trace that names neither the cause nor the fix. That happens
+// for real on an upgrade where a volume was left behind by a release that ran
+// as root.
+//
+// The credential in server/api-token.ts degrades on its own here, falling back
+// to another directory. FileStorage does not, so the failure is checked for
+// once, up front, and reported in terms the operator can act on.
+function preflightStateDir() {
+  const configured = process.env.CODESPAR_STATE_DIR?.trim();
+  const dir = configured
+    ? resolve(configured)
+    : resolve(process.env.CODESPAR_WORK_DIR?.trim() || process.cwd(), ".codespar");
+
+  try {
+    mkdirSync(dir, { recursive: true, mode: 0o700 });
+    const probe = join(dir, `.write-probe-${process.pid}`);
+    writeFileSync(probe, "");
+    rmSync(probe, { force: true });
+    return;
+  } catch (err) {
+    const usingPostgres = Boolean(process.env.DATABASE_URL);
+    const lines = [
+      "",
+      `[server] Cannot write to the state directory: ${dir}`,
+      // err.message already starts with the code, so it is not repeated here.
+      `[server] ${err.message}`,
+      "",
+      "[server] This usually means the directory was created by a different",
+      "[server] user than the one this process runs as. In Docker the process",
+      "[server] runs as `node` (uid 1000), and a volume written by an earlier",
+      "[server] release that ran as root stays owned by root across the upgrade.",
+      "",
+      "[server] Fix it by giving the volume to the runtime user, once:",
+      "[server]   docker compose run --rm --user root core chown -R node:node /app/.codespar",
+      "",
+      "[server] Or point the runtime somewhere it can write, with CODESPAR_STATE_DIR.",
+      "",
+    ];
+    for (const line of lines) console.error(line);
+
+    if (!usingPostgres) {
+      // FileStorage is the only store, and it lives in this directory. There
+      // is nothing to fall back to, so stop here rather than crash later with
+      // a stack trace that explains none of the above.
+      console.error("[server] DATABASE_URL is not set, so this directory IS the datastore. Stopping.");
+      console.error("");
+      process.exit(1);
+    }
+    // With Postgres the data has somewhere to go; only the generated
+    // credential is affected, and that falls back on its own.
+    console.error("[server] DATABASE_URL is set, so data is unaffected; continuing.");
+    console.error("[server] The API credential will fall back to another directory,");
+    console.error("[server] which means it changes when this container is recreated.");
+    console.error("");
+  }
+}
+
+preflightStateDir();
 
 // 1. Core services
 const storage = createStorage();

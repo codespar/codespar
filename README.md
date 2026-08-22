@@ -72,6 +72,61 @@ docker compose up          # Postgres + Redis + core
 docker compose -f docker-compose.yml -f docker-compose.whatsapp.yml up   # + WhatsApp
 ```
 
+### Calling the API
+
+`/api/*`, `/sessions/*` and `/a2a/*` require a bearer token. There is no
+unauthenticated mode: `/sessions` accepts a command and the runtime spawns
+it, so an unverified caller on that path is a remote shell.
+
+Nothing is asked of you to make that work. On first boot the runtime
+generates a token, stores it in its state directory with mode `0600`, and
+reuses it on every restart, so an unattended install keeps running. Read it
+back and use it:
+
+```bash
+export TOKEN=$(docker compose exec -T core cat /app/.codespar/api-token)
+# running outside a container:
+export TOKEN=$(cat .codespar/api-token)
+
+curl -H "Authorization: Bearer $TOKEN" http://localhost:3000/api/agents
+```
+
+To manage the credential yourself instead (rotation, a secret manager,
+several replicas sharing one token), set `ENGINE_API_TOKEN`. When it is set
+nothing is generated and nothing is written to disk.
+
+`/health` stays open so container healthchecks and load balancers work, as do
+the OAuth install and callback routes, which a browser reaches mid-redirect
+with no way to present a token. Provider webhooks (`/webhooks/*`) are exempt because the
+providers cannot send a bearer token; they sign instead. That signature is only
+verified once you configure a secret for the provider, and a fresh install has
+none, so those four routes accept unverified payloads by default. See
+[`SECURITY.md`](SECURITY.md) and [#138](https://github.com/codespar/codespar/issues/138)
+before exposing them.
+
+A `401` says which mistake was made and how to fix it, so a client can recover
+without a human reading the server log:
+
+```json
+{
+  "error": "Unauthorized",
+  "code": "api_token_required",
+  "remediation": "Send an Authorization header of the form 'Bearer <token>'. ..."
+}
+```
+
+`api_token_required` means no usable header was sent; `api_token_invalid`
+means the token does not match, and is the one to watch for after the state
+directory has been reset, since the credential is regenerated then.
+
+Two consequences worth knowing before you upgrade. `GET /api/events` is
+Server-Sent Events, and a browser `EventSource` cannot send headers, so a
+browser client needs a `fetch`-based reader or a proxy that adds the header —
+passing the token in the query string is not supported on purpose, because
+URLs end up in logs. And `POST /api/newsletter/subscribe` is behind the
+credential like everything else under `/api`, so a public signup form has to
+post to your own backend rather than straight at the runtime.
+
 Docs: [docs.codespar.dev](https://docs.codespar.dev). This repo does not ship a docs site of its own.
 
 ## MCP bridge

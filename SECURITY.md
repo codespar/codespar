@@ -21,10 +21,11 @@ As the project is in early development, all `0.x` releases receive security patc
 
 ## Security Model
 
-CodeSpar implements **10 defense layers** to protect your projects, credentials, and infrastructure:
+CodeSpar implements **11 defense layers** to protect your projects, credentials, and infrastructure:
 
 | Layer | Defense | Description |
 |-------|---------|-------------|
+| 0 | **API Authentication** | `/api/*`, `/sessions/*` and `/a2a/*` require a bearer token. There is no unauthenticated mode: the runtime generates and persists a credential on first boot when the operator supplies none, so requiring it costs an unattended install nothing. Exceptions are `/health`, the A2A card at `/.well-known/agent.json`, the OAuth install/callback routes, and the provider webhook routes — see the note below, which describes what webhooks do and do not verify. |
 | 1 | **Message Filter** | Only processes `@mention` commands and direct messages. All other messages are ignored. |
 | 2 | **Channel Config** | Agents ignore messages from unconfigured channels. No implicit trust. |
 | 3 | **Identity Resolution** | Maps channel-specific user IDs to a unified identity. Prevents impersonation across platforms. |
@@ -35,6 +36,33 @@ CodeSpar implements **10 defense layers** to protect your projects, credentials,
 | 8 | **Execution Sandbox** | Every coding task runs in an isolated Docker container with restricted filesystem and network access. |
 | 9 | **Output Validation** | All agent responses are scanned for leaked secrets, API keys, and credentials before being sent to channels. |
 | 10 | **Audit Trail** | Immutable hash-chained log of all actions. 1-year retention. Tamper-evident by design. |
+
+### Webhook routes: what is and is not verified
+
+Be precise about this one, because an earlier version of this document was not.
+
+`/webhooks/github`, `/webhooks/vercel`, `/webhooks/sentry` and
+`/webhooks/deploy` are **not** covered by the bearer credential. They are meant
+to be authenticated by the provider's HMAC signature, and they are — **but only
+once a secret is configured for that provider.**
+
+With no secret configured, which is the state of a fresh install, the default
+is to **accept the payload without verifying anything** and log a warning. An
+accepted payload is written to the audit log, broadcast to SSE clients, and
+dispatched to the registered event handlers, so an unauthenticated caller can
+inject fabricated CI and deploy events into a runtime that acts on them.
+
+`WEBHOOK_STRICT_MODE=true` changes that default to reject unsigned requests
+with `401`. It is **off** by default, and note that `WHATSAPP_WEBHOOK_STRICT_MODE`
+is a different variable governing a different route.
+
+There is a second half that is easy to miss: the webhook this runtime creates
+for you (`POST /api/projects`) is registered at GitHub **without a secret**, so
+GitHub sends it unsigned. Turning on strict mode today therefore rejects the
+integration the runtime set up for itself. Provisioning that secret is tracked
+in [#138](https://github.com/codespar/codespar/issues/138); until it lands,
+treat these four routes as unauthenticated input and restrict who can reach
+them at the network layer.
 
 ## Safety Guardrails
 
