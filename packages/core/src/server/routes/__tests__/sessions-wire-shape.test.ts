@@ -118,6 +118,57 @@ describe("GET /sessions/:id/connections — the connections body", () => {
     expect(Array.isArray(payload["tools"])).toBe(true);
   });
 
+  it("carries the registered meta-tools, not a fabricated empty list", async () => {
+    // O registry responde de forma SINCRONA e o handler de /execute no mesmo
+    // arquivo ja o le, entao uma lista vazia aqui afirmaria "esta sessao nao
+    // tem ferramenta nenhuma" enquanto o runtime segura definicoes que ele
+    // despacha. O que a lista NAO pode carregar e ferramenta MCP: essas vao
+    // por bridge e enumera-las exigiria um handshake que esta leitura nao faz.
+    //
+    // O registry nasce vazio no ambiente de teste, entao registrar um hook
+    // aqui e o que da poder de discriminacao ao caso: sem isso, a lista vazia
+    // do codigo antigo passaria igual.
+    const { pluginRegistry } = await import("../../../plugins/index.js");
+    const priv = pluginRegistry as unknown as {
+      metaTools: Map<string, unknown>;
+      sealed: boolean;
+    };
+    const antes = priv.metaTools;
+    const selado = priv.sealed;
+    priv.metaTools = new Map();
+    priv.sealed = false;
+    pluginRegistry.registerMetaTool({
+      id: "wire-shape-probe",
+      handles: ["probe_tool"],
+      definitions: () => [
+        {
+          name: "probe_tool",
+          description: "registered for the wire-shape probe",
+          input_schema: { type: "object", properties: {} },
+        },
+      ],
+      execute: async () => ({ server_id: "wire-shape-probe", output: {}, duration_ms: 0 }),
+    } as never);
+
+    try {
+      const body = await create({ servers: [], user_id: "u" });
+      const res = await app.inject({
+        method: "GET",
+        url: `/sessions/${body["id"]}/connections`,
+        headers: auth,
+      });
+      const tools = (res.json() as Record<string, unknown>)["tools"] as Array<
+        Record<string, unknown>
+      >;
+      const probe = tools.find((x) => x["name"] === "probe_tool");
+      expect(probe, "o meta-tool registrado nao apareceu em /connections").toBeTruthy();
+      expect(probe!["input_schema"]).toBeTruthy();
+    } finally {
+      priv.metaTools = antes;
+      priv.sealed = selado;
+    }
+  });
+
   it("gives every server the full ServerConnection shape", async () => {
     const body = await create({ servers: ["alpha"], user_id: "u" });
     const res = await app.inject({

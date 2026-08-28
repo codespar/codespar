@@ -606,14 +606,23 @@ export function registerSessionRoutes(route: RouteFn, ctx: ServerContext | null 
       connected: session.status === "active",
     }));
 
-    // `tools` is part of the contract even when it is empty: the SDK caches
-    // this array as the answer to `session.tools()`, and an absent key caches
-    // `undefined`, which is a cache that never fills rather than an empty
-    // catalogue. This runtime dispatches MCP tools by prefix and meta-tools by
-    // registration, and enumerating either would need a live bridge handshake
-    // this read does not do — so the honest value here is the empty list, and
-    // the key is present so the consumer can tell "none" from "not answered".
-    const tools: unknown[] = [];
+    // `tools` is part of the contract: the SDK caches this array as the answer
+    // to `session.tools()`, and an absent key caches `undefined`, which is a
+    // cache that never fills rather than an empty catalogue.
+    //
+    // The registered meta-tools ARE enumerable here, synchronously, and the
+    // same call is already made at the /execute handler above: the registry
+    // holds their definitions in process. MCP tools are the ones that are not:
+    // this runtime dispatches them by prefix through a bridge, and listing them
+    // would need a live handshake this read does not do. So the array carries
+    // the meta-tools and says nothing about MCP tools, which is narrower than
+    // "no tools" and is what the runtime can actually assert.
+    const tools = pluginRegistry.metaToolDefinitions().map((d) => ({
+      name: d.name,
+      description: d.description,
+      input_schema: d.input_schema,
+      server: "codespar",
+    }));
 
     return { servers, tools };
   });
