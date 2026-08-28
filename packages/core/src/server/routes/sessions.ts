@@ -58,7 +58,10 @@ import {
   checkMocksSize,
   validateMocksShape,
 } from "../../sessions/mocks-validation.js";
-import { tryMockedDispatch } from "../../sessions/mock-dispatch.js";
+import {
+  tryMockedDispatch,
+  tryMockedMetaToolDispatch,
+} from "../../sessions/mock-dispatch.js";
 import {
   isTestModeEnabled,
   MOCKS_NOT_PERMITTED_ENVELOPE,
@@ -311,7 +314,24 @@ export function registerSessionRoutes(route: RouteFn, ctx: ServerContext | null 
       ...(mocks !== undefined ? { mocks } : {}),
     });
 
-    return reply.status(201).send({ id: session.id, status: session.status });
+    // The managed runtime's 201 carries user_id, servers and created_at
+    // alongside id + status (enterprise routes/sessions.ts). @codespar/sdk
+    // builds its Session straight off this body, so omitting them was not a
+    // smaller response, it was three undefined fields on every session the SDK
+    // created — `createdAt: new Date(undefined)` being an Invalid Date rather
+    // than a throw is why nobody noticed. docs/test-mode.md promises the two
+    // wire shapes match; this is the half that did not.
+    //
+    // `org_id`/`project_id` stay out on purpose: they are the managed tenancy
+    // identifiers, the SDK reads neither, and this runtime's values for them
+    // are placeholders resolved from headers.
+    return reply.status(201).send({
+      id: session.id,
+      status: session.status,
+      user_id: session.channelUserId,
+      servers: mergedServers,
+      created_at: session.createdAt,
+    });
   });
 
   // POST /sessions/:id/execute — execute a registered tool
@@ -405,17 +425,48 @@ export function registerSessionRoutes(route: RouteFn, ctx: ServerContext | null 
     // as before the seam existed.
     const metaHook = pluginRegistry.getMetaTool(toolName);
     if (metaHook) {
+      const tool_call_id = `${id}-${randomUUID().slice(0, 8)}`;
+      const called_at = new Date().toISOString();
+
+      // MOCKS FIRST, exactly as the raw `server/tool` branch above does and as
+      // chat-loop/index.ts already does for this same registry — its comment
+      // says it "mirrors the /execute route's meta-tool branch", and the mirror
+      // was the only one of the two that had this. Without it, a meta-tool call
+      // in a test-mode deployment reached the REGISTERED HOOK: not a stale
+      // fixture, the real registrant, which for a payment meta-tool is the
+      // thing the flag exists to keep out of the loop. docs/test-mode.md states
+      // the invariant; this branch was the one place violating it.
+      //
+      // `null` means the seam is off (flag off, or a non-HTTP session) and the
+      // hook handles the call, which is byte-identical to the pre-seam path.
+      const metaMock = await tryMockedMetaToolDispatch(session, toolName, body?.input ?? {});
+      if (metaMock) {
+        if (
+          metaMock.outcome.kind === "tool_not_mocked" ||
+          metaMock.outcome.kind === "exhausted"
+        ) {
+          return reply.status(422).send(metaMock.result.data);
+        }
+        if (metaMock.outcome.kind === "mocks_engine_error") {
+          return reply.status(503).send(metaMock.result.data);
+        }
+        // consumed
+        return metaMock.result;
+      }
+
       const metaCtx: MetaToolExecutionContext = {
         orgId: session.orgId,
         projectId: session.projectId,
         sessionId: id,
-        environment: "live",
+        // A registrant that branches on `environment` is the reason the field
+        // exists, and a hardcoded "live" sent it down the live branch inside a
+        // test-mode deployment. Reachable whenever the seam above returns null
+        // under the flag, which a non-HTTP (channel-bridge) session does.
+        environment: isTestModeEnabled() ? "test" : "live",
         ...(request.raw?.signal instanceof AbortSignal
           ? { signal: request.raw.signal }
           : {}),
       };
-      const tool_call_id = `${id}-${randomUUID().slice(0, 8)}`;
-      const called_at = new Date().toISOString();
       try {
         const result = await metaHook.execute(toolName, body?.input ?? {}, metaCtx);
         return {
@@ -538,12 +589,33 @@ export function registerSessionRoutes(route: RouteFn, ctx: ServerContext | null 
       return reply.status(404).send({ error: "Session not found" });
     }
 
+    // The full `ServerConnection` shape (@codespar/types): the SDK types every
+    // entry as one, so `{ id, connected }` left name/category/country/auth_type
+    // undefined on the consumer side. The values are the SAME fallbacks the
+    // managed runtime uses for a server its catalog has no row for — this
+    // runtime has no catalog at all, so every server is that case.
+    //
+    // `id` is the session-scoped connection id this route has always minted,
+    // not the bare server id; the server id is what `name` carries.
     const servers = readServers(session).map((s, i) => ({
       id: `${id}-conn-${i}-${s}`,
+      name: s,
+      category: "unknown",
+      country: "BR",
+      auth_type: "api_key",
       connected: session.status === "active",
     }));
 
-    return { servers };
+    // `tools` is part of the contract even when it is empty: the SDK caches
+    // this array as the answer to `session.tools()`, and an absent key caches
+    // `undefined`, which is a cache that never fills rather than an empty
+    // catalogue. This runtime dispatches MCP tools by prefix and meta-tools by
+    // registration, and enumerating either would need a live bridge handshake
+    // this read does not do — so the honest value here is the empty list, and
+    // the key is present so the consumer can tell "none" from "not answered".
+    const tools: unknown[] = [];
+
+    return { servers, tools };
   });
 
   // DELETE /sessions/:id — close session and release resources.

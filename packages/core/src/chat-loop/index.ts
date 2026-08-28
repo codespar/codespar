@@ -35,6 +35,7 @@ import { createLogger } from "../observability/logger.js";
 import type { MetaToolExecutionContext } from "../plugins/index.js";
 import { pluginRegistry, type PluginRegistry } from "../plugins/registry.js";
 import { tryMockedDispatch, tryMockedMetaToolDispatch } from "../sessions/mock-dispatch.js";
+import { isTestModeEnabled } from "../sessions/test-mode-flag.js";
 import type { Session, StorageProvider } from "../storage/types.js";
 import { LATAM_COMMERCE_SYSTEM_PROMPT } from "./system-prompt.js";
 import {
@@ -315,7 +316,12 @@ async function runInternal(ctx: LoopRunContext): Promise<SendResult> {
               orgId: ctx.session.orgId,
               projectId: ctx.session.projectId,
               sessionId: ctx.session.id,
-              environment: "live",
+              // A registrant branches on this — a payment meta-tool decides
+              // sandbox vs production from it — so a hardcoded "live" sent a
+              // test-mode deployment down the production branch. Reached
+              // whenever the seam above returns null under the flag, which a
+              // non-HTTP (channel-bridge) session does.
+              environment: isTestModeEnabled() ? "test" : "live",
             };
             try {
               const result = await metaHook.execute(tu.name, input, metaCtx);
