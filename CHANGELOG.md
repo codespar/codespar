@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Security
+
+- **A route is now closed unless it is declared public.** The auth hook protected three path prefixes (`/api`, `/sessions`, `/a2a`), which made "is this route public" a question about the spelling of a path: a route registered anywhere else in the tree answered anonymous callers, and nothing made its author declare an access level. That is fail-open by default, and in a runtime that hands out its Fastify instance it applies to every route an embedder adds as well. The guard now refuses everything except the routes named in `PUBLIC_ROUTES` (`packages/core/src/server/api-auth.ts`), each with the reason it is open, and asks the router which route it matched rather than re-deriving the path. The routes that are public today are exactly the ones that were public before — `/health` and its `/v1` mirror, the A2A card, the OAuth install/callback pair, the four provider webhooks and their mirrors — so no call to a route this runtime registers changes its answer; `route-coverage.test.ts` drives every registered route without a credential and checks both directions of that. ([#137](https://github.com/codespar/codespar/issues/137))
+- Two visible consequences. A request that matches **no** route is now answered `401` instead of `404` when it carries no credential; with the credential the router answers `404` as before. And a route registered on the exposed Fastify instance by an embedder requires the credential from the moment it exists, which is the point, but it is a behaviour change for anyone who was relying on the old default: add it to `PUBLIC_ROUTES` if it is meant to be open.
+- Not closed by this change: `PUBLIC_ROUTES` is still a hand-kept list on one flat route table, so a wrong entry publishes a route just as effectively as the old prefix rule did. The structural fix is per-subtree encapsulated hooks, where a route cannot be registered outside a guard at all.
+
 ## [0.5.0] - 2026-08-21
 
 ### Security
