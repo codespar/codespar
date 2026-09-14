@@ -25,7 +25,7 @@ CodeSpar implements **11 defense layers** to protect your projects, credentials,
 
 | Layer | Defense | Description |
 |-------|---------|-------------|
-| 0 | **API Authentication** | `/api/*`, `/sessions/*` and `/a2a/*` require a bearer token. There is no unauthenticated mode: the runtime generates and persists a credential on first boot when the operator supplies none, so requiring it costs an unattended install nothing. Exceptions are `/health`, the A2A card at `/.well-known/agent.json`, the OAuth install/callback routes, and the provider webhook routes — see the note below, which describes what webhooks do and do not verify. |
+| 0 | **API Authentication** | Every route requires a bearer token unless it is named in `PUBLIC_ROUTES` (`packages/core/src/server/api-auth.ts`), so a route that nobody classified — a new one, or one an embedder registers on the Fastify instance — is closed rather than open. There is no unauthenticated mode: the runtime generates and persists a credential on first boot when the operator supplies none, so requiring it costs an unattended install nothing. The exceptions on that list are `/health`, the A2A card at `/.well-known/agent.json`, the OAuth install/callback routes, and the provider webhook routes — see the note below, which describes what webhooks do and do not verify. |
 | 1 | **Message Filter** | Only processes `@mention` commands and direct messages. All other messages are ignored. |
 | 2 | **Channel Config** | Agents ignore messages from unconfigured channels. No implicit trust. |
 | 3 | **Identity Resolution** | Maps channel-specific user IDs to a unified identity. Prevents impersonation across platforms. |

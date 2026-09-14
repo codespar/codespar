@@ -3,26 +3,39 @@
  * refuses an anonymous caller. No third option.
  *
  * Why this file exists, and why it is not the same test as
- * anonymous-access.test.ts: authentication here is prefix matching over a
- * flat route table. A route is protected because its path happens to start
- * with `/api`, `/sessions` or `/a2a`, not because anything made it declare an
- * access level. So the default for a route registered anywhere else is OPEN,
- * and every hand-written test of specific paths can pass while a newly added
- * route sits unguarded next to them. That is fail-open by default, and it is
- * how BLOCKER oss-sdk#5 went unnoticed for as long as it did.
+ * anonymous-access.test.ts: anonymous-access.test.ts names the paths it
+ * checks, so it can pass in full while a newly added route sits unguarded
+ * next to them. That is how BLOCKER oss-sdk#5 went unnoticed for as long as
+ * it did. This file enumerates what Fastify actually registered and drives
+ * every one of those routes with no credential.
  *
- * This test enumerates what Fastify actually registered and drives each route
- * with no credential. A new route is then either covered by a guarded prefix,
- * or it has to be added to PUBLIC_ROUTES below with a reason, which is a line
- * a reviewer sees. Nothing can be added silently.
+ * What it proves changed shape with oss#137. The guard used to protect three
+ * path prefixes, so an unclassified route was OPEN and this test was the only
+ * thing that turned that into a failing build — it was a net under a
+ * fail-open default. The default is now closed: PUBLIC_ROUTES in api-auth.ts
+ * is the single list the guard consults, an unlisted route needs the
+ * credential, and this file drives the wire to check that the list is wired
+ * to the behaviour and holds in both directions:
  *
- * It asserts behaviour, not the matcher: it sends real requests rather than
- * re-implementing the prefix logic, so a bug in the matcher fails this test
- * instead of being mirrored by it.
+ *   - nothing outside the list answers anonymously (the guard is actually
+ *     consulted, on every registered route, not just on the ones someone
+ *     remembered);
+ *   - everything inside it still answers (a healthcheck or an OAuth redirect
+ *     that started 401ing would be an outage, and an entry that lies is worse
+ *     than no entry);
+ *   - the list has no entry for a route that is not registered, which would
+ *     be a licence nobody is using and would hide the day that path comes
+ *     back for something else.
+ *
+ * It imports the list rather than restating it, because two copies of the
+ * same allowlist drift and the divergence is invisible until it is a hole. It
+ * still asserts behaviour, not the rule: it sends real requests instead of
+ * re-implementing the lookup, so a bug in the guard fails this test rather
+ * than being mirrored by it.
  *
  * The structural fix is per-subtree encapsulated hooks, where a route cannot
- * be registered outside a guard at all. That is a routing redesign and does
- * not belong in an emergency patch; this test holds the line until then.
+ * be registered outside a guard at all. That is a routing redesign; this file
+ * plus a closed default holds the line until then.
  */
 
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
@@ -30,54 +43,16 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { WebhookServer } from "../webhook-server.js";
+import { PUBLIC_ROUTES } from "../api-auth.js";
 
 /**
- * Routes that answer without a credential, on purpose.
- *
- * Each entry needs a reason that survives a reviewer asking "why is this one
- * open". The `/v1` mirrors are listed explicitly rather than derived, so that
- * adding a public route does not silently make its mirror public too.
+ * Not swept here. OPTIONS is answered by @fastify/cors before this guard
+ * runs, and HEAD is auto-registered by Fastify from each GET route, pointing
+ * at the same handler: sweeping it would test the same handler twice while
+ * hiding that its access class is inherited. That inheritance is the part
+ * worth pinning, so `HEAD /health` is asserted directly in
+ * route-default-closed.test.ts instead.
  */
-const PUBLIC_ROUTES = new Map<string, string>([
-  // Container healthchecks and load balancers cannot present a bearer token.
-  // docker-compose.yml probes this with a bare node http.get.
-  ["GET /health", "container healthcheck, no way to send a credential"],
-  ["GET /v1/health", "same, /v1 mirror"],
-
-  // A2A discovery. Peers fetch this before any credential exists between
-  // them; it advertises only this runtime's own name and address.
-  ["GET /.well-known/agent.json", "A2A discovery, pre-credential by design"],
-
-  // OAuth install/callback: a browser arrives here mid-redirect, and the
-  // provider calls back with a code. Neither can attach a bearer token.
-  ["GET /api/slack/install", "OAuth redirect, browser cannot send a token"],
-  ["GET /v1/api/slack/install", "same, /v1 mirror"],
-  ["GET /api/slack/callback", "OAuth callback from the provider"],
-  ["GET /v1/api/slack/callback", "same, /v1 mirror"],
-  ["GET /api/discord/install", "OAuth redirect, browser cannot send a token"],
-  ["GET /v1/api/discord/install", "same, /v1 mirror"],
-  ["GET /api/github/install", "OAuth redirect, browser cannot send a token"],
-  ["GET /v1/api/github/install", "same, /v1 mirror"],
-  ["GET /api/github/callback", "OAuth callback from the provider"],
-  ["GET /v1/api/github/callback", "same, /v1 mirror"],
-
-  // Provider webhooks are exempt from the bearer credential because the
-  // providers cannot send one; they sign instead. That signature is only
-  // verified once a secret is configured, and the default install has none,
-  // so on a fresh install these four accept unverified payloads (#138). They
-  // are listed here as "not bearer-authenticated", which is what this test
-  // actually checks; do not read the entries below as "verified".
-  ["POST /webhooks/github", "provider signs; verified only when a secret is set (#138)"],
-  ["POST /v1/webhooks/github", "same, /v1 mirror"],
-  ["POST /webhooks/vercel", "provider signs; verified only when a secret is set (#138)"],
-  ["POST /v1/webhooks/vercel", "same, /v1 mirror"],
-  ["POST /webhooks/sentry", "provider signs; verified only when a secret is set (#138)"],
-  ["POST /v1/webhooks/sentry", "same, /v1 mirror"],
-  ["POST /webhooks/deploy", "shared-secret signature; verified only when a secret is set (#138)"],
-  ["POST /v1/webhooks/deploy", "same, /v1 mirror"],
-]);
-
-/** Fastify never serves these itself; they are protocol plumbing. */
 const IGNORED_METHODS = new Set(["HEAD", "OPTIONS"]);
 
 /** Turn `/api/agents/:id` into something routable. */

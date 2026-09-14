@@ -74,9 +74,14 @@ docker compose -f docker-compose.yml -f docker-compose.whatsapp.yml up   # + Wha
 
 ### Calling the API
 
-`/api/*`, `/sessions/*` and `/a2a/*` require a bearer token. There is no
-unauthenticated mode: `/sessions` accepts a command and the runtime spawns
-it, so an unverified caller on that path is a remote shell.
+Every route requires a bearer token unless it is named in the runtime's own
+list of exceptions (`PUBLIC_ROUTES` in
+`packages/core/src/server/api-auth.ts`), which is the paragraph below and
+nothing else. Being open is a property of that list, not of where a path
+sits: a route added later, including one you register yourself when you
+embed the server, refuses anonymous callers on the day it is written. There
+is no unauthenticated mode either: `/sessions` accepts a command and the
+runtime spawns it, so an unverified caller on that path is a remote shell.
 
 Nothing is asked of you to make that work. On first boot the runtime
 generates a token, stores it in its state directory with mode `0600`, and

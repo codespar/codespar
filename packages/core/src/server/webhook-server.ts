@@ -29,7 +29,7 @@ import {
   API_TOKEN_REQUIRED,
   apiAuthError,
   candidatePaths,
-  routedPath,
+  isPublicRoute,
 } from "./api-auth.js";
 import { createLogger } from "../observability/logger.js";
 import { metrics } from "../observability/metrics.js";
@@ -547,62 +547,47 @@ export class WebhookServer {
    * credential comes from api-token.ts, which mints and persists one when
    * the operator supplied none, so requiring it costs the install nothing.
    *
-   * Three prefixes are protected, not one:
-   *   /api      — agents, projects, channels, approvals, metrics, SSE.
-   *   /sessions — creates sessions and executes tools. `server_specs` on
-   *               POST /sessions is an argv that reaches child_process.spawn
-   *               with this process's environment, so this is the surface
-   *               where a missing check is remote code execution rather than
-   *               information disclosure. It was never under the old hook,
-   *               which matched `/api/` only.
-   *   /a2a      — inbound agent-to-agent tasks. Had no check of any kind.
+   * EVERY route is protected. The exceptions are enumerated, not derived:
+   * PUBLIC_ROUTES in api-auth.ts names each one with the reason it is open,
+   * and a route that is not on that list needs the credential — including
+   * routes that do not exist yet, and routes an embedder registers on the
+   * Fastify instance this class hands out.
    *
-   * Webhook routes are deliberately absent, because a bearer token is not a
-   * scheme GitHub, Vercel or Sentry can speak; they sign instead. Say the rest
-   * of it plainly, though: that signature is only VERIFIED once a secret is
-   * configured, and with none configured the default is to accept the payload
-   * unverified (webhook-auth.ts, WEBHOOK_STRICT_MODE, off by default). So
-   * these routes are not "authenticated by signature" today, they are
-   * authenticated by signature WHEN CONFIGURED. Tracked in #138, which also
-   * covers why turning strict mode on today breaks the webhook this runtime
-   * creates for itself. `/health` and the OAuth install/callback pair stay
-   * open because the container healthcheck and a browser mid-OAuth-redirect
-   * have no way to present a bearer token.
+   * That inversion is the fix for oss#137. Until it, the hook protected the
+   * `/api`, `/sessions` and `/a2a` prefixes, which made "is this route
+   * public" a question about the spelling of its path rather than about the
+   * handler. Three consequences, all of them real:
+   *   - a route registered outside those prefixes was born anonymous, and
+   *     nothing but a reviewer noticing stood between that and production;
+   *   - the surfaces that mattered were guarded by coincidence. `/sessions`
+   *     had to be added to the list by hand after it was found open, and
+   *     `server_specs` on POST /sessions is an argv that reaches
+   *     child_process.spawn with this process's environment, so a missing
+   *     check there is remote code execution, not disclosure;
+   *   - the completeness test in route-coverage.test.ts could only report
+   *     the hole after someone wrote it, never prevent it.
+   * Now a new route is closed on the day it is written, and opening one is
+   * an edit to a list of reasons that a reviewer reads.
    *
-   * KNOWN SHAPE PROBLEM, tracked separately: this is prefix matching over a
-   * flat route table, so a route added under `/api` is protected only because
-   * its path happens to start with a guarded prefix. Nothing makes a new route
-   * declare its access level, which means the default for a route registered
-   * somewhere else in the tree is open. The completeness test in
-   * route-coverage.test.ts turns that into a failing build rather than a quiet
-   * hole, and the structural fix (per-subtree encapsulated hooks, so a route
-   * cannot be registered outside a guard) is the redesign this cannot safely
-   * do inside an emergency patch.
+   * Why the four webhook routes are on the public list: a bearer token is
+   * not a scheme GitHub, Vercel or Sentry can speak; they sign instead. Say
+   * the rest of it plainly, though: that signature is only VERIFIED once a
+   * secret is configured, and with none configured the default is to accept
+   * the payload unverified (webhook-auth.ts, WEBHOOK_STRICT_MODE, off by
+   * default). So these routes are not "authenticated by signature" today,
+   * they are authenticated by signature WHEN CONFIGURED. Tracked in #138.
+   * `/health` and the OAuth install/callback pair are on it because the
+   * container healthcheck and a browser mid-OAuth-redirect have no way to
+   * present a bearer token.
+   *
+   * What this still is not: per-subtree encapsulated hooks, where a route
+   * physically cannot be registered outside a guard. This is one hook over a
+   * flat table, so it depends on Fastify reporting the matched route. It now
+   * fails closed when Fastify does not (see below), which is the part that
+   * was backwards.
    */
   private registerApiAuth(): void {
     const tokenHash = createHash("sha256").update(this.apiToken).digest();
-
-    // Matched after stripping a leading `/v1`, because registerRoutes()
-    // publishes every path twice. Guarding only the unprefixed form would
-    // have left a complete second copy of the API open.
-    const PROTECTED_PREFIXES = ["/api", "/sessions", "/a2a"];
-
-    const EXCLUDED_PATHS = new Set([
-      "/health", "/v1/health",
-      "/.well-known/agent.json",
-      "/api/slack/install", "/v1/api/slack/install",
-      "/api/slack/callback", "/v1/api/slack/callback",
-      "/api/discord/install", "/v1/api/discord/install",
-      "/api/github/install", "/v1/api/github/install",
-      "/api/github/callback", "/v1/api/github/callback",
-    ]);
-
-    const matchesProtected = (path: string): boolean => {
-      const unversioned = path === "/v1" ? "/" : path.startsWith("/v1/") ? path.slice(3) : path;
-      return PROTECTED_PREFIXES.some(
-        (prefix) => unversioned === prefix || unversioned.startsWith(`${prefix}/`),
-      );
-    };
 
     this.app.addHook("onRequest", async (request, reply) => {
       // Ask the router which route it matched. Do not re-derive it.
@@ -625,26 +610,28 @@ export class WebhookServer {
       // because a second implementation of routing can always disagree with
       // the first. Asking the router ends that.
       //
-      // `routeOptions.url` is undefined when nothing matched. That is not a
-      // hole: no route means no handler, and Fastify answers 404 on its own.
-      // A malformed target never reaches this hook at all — find-my-way
-      // rejects it with 400 first.
+      // `routeOptions.url` is undefined when nothing matched. Under the old
+      // default that was harmless (no route, no handler, Fastify's own 404);
+      // under this one it is simply not public, so an unrouted target now
+      // gets the same 401 as any other unclassified one and the 404 is what a
+      // caller holding the credential sees. A malformed target never reaches
+      // this hook at all — find-my-way rejects it with 400 first.
       const matchedRoute = request.routeOptions?.url;
 
       // Whether a route is deliberately public is a question about the handler
-      // that will actually run, so it is asked of the matched route only.
-      if (matchedRoute !== undefined && EXCLUDED_PATHS.has(matchedRoute)) return;
-
-      // Belt and braces. The matched route is the real answer; the raw-target
-      // derivations stay as a second, independent condition so that if a
-      // future Fastify stops populating routeOptions, or a plugin clears it,
-      // the guard closes rather than opens. Protected if EITHER says so.
-      const candidates = candidatePaths(request.url);
-      const isProtected =
-        (matchedRoute !== undefined && matchesProtected(matchedRoute)) ||
-        candidates === null ||
-        candidates.some(matchesProtected);
-      if (!isProtected) return;
+      // that will actually run, so it is asked of the matched route only, and
+      // `undefined` — no route matched, or a future Fastify stopped populating
+      // this — is not an answer, so it is refused. Nothing else opens a route:
+      // there is no prefix here to be born on the right side of.
+      //
+      // Belt and braces, and the last thing left of the old derivations: a
+      // request-target this cannot parse or decode has an unknown routed path,
+      // so it is refused even if it did match something public. In practice
+      // find-my-way rejects those with 400 before the hook runs; the check
+      // costs one parse and does not depend on that staying true.
+      if (isPublicRoute(request.method, matchedRoute) && candidatePaths(request.url) !== null) {
+        return;
+      }
 
       const auth = request.headers.authorization;
       if (!auth || !auth.startsWith("Bearer ")) {
