@@ -24,8 +24,10 @@
  * SessionBase contract tests continue to pass without any headers.
  *
  * These routes are the OSS runtime's implementation of the session
- * contract defined in @codespar/types. The contract-oss.test.ts file
- * verifies conformance using runContractSuite from @codespar/types/testing.
+ * contract defined in @codespar/types. Conformance is verified by
+ * `server/__tests__/contract-oss.test.ts`, which runs the published
+ * `runContractSuite` from @codespar/types/testing against this server over
+ * a real socket.
  */
 
 import { randomUUID, createHash, timingSafeEqual } from "node:crypto";
