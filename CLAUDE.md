@@ -177,7 +177,7 @@ npm install
 npx turbo run build
 
 npx vitest run                # all packages
-npx vitest run packages/core/src/__tests__/contract-oss.test.ts  # OSS session-contract conformance
+npx vitest run packages/core/src/server/__tests__/contract-oss.test.ts  # OSS session-contract conformance
 
 npm start                     # CLI mode
 npm run start:server          # HTTP server (Fastify on :3000 by default)
